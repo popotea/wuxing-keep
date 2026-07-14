@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>連線層手動測試 - 五行守衛</title>
+  </head>
+  <body>
+    <h1>Phase 1+3 手動測試(佔位視覺化,非最終美術)</h1>
+    <p>開兩個瀏覽器分頁(或一個正常視窗 + 一個無痕視窗),一邊當房主、一邊當客戶端。</p>
+
+    <section>
+      <h2>ICE 設定(選填,測試 TURN fallback 才需要)</h2>
+      <label>Open Relay Username: <input id="turnUser" /></label>
+      <label>Open Relay Credential: <input id="turnCred" /></label>
+    </section>
+
+    <section>
+      <h2>建立房間</h2>
+      <label>暱稱: <input id="hostName" value="房主" /></label>
+      <button id="hostBtn">建立房間</button>
+      <div>房號: <span id="roomCode">(尚未建立)</span></div>
+      <div>
+        邀請連結:
+        <input id="inviteLink" readonly style="width: 320px;" />
+        <button id="copyLinkBtn" disabled>複製連結</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>加入房間</h2>
+      <label>暱稱: <input id="joinName" value="玩家2" /></label>
+      <label>房號: <input id="joinCode" placeholder="gld-XXXXX" /></label>
+      <button id="joinBtn">加入房間</button>
+    </section>
+
+    <section>
+      <h2>房間狀態</h2>
+      <ul id="roster"></ul>
+      <button id="startBtn" disabled>開始對局(房主專用)</button>
+    </section>
+
+    <section>
+      <h2>對局測試</h2>
+      <div>
+        塔屬性:
+        <label><input type="radio" name="element" value="metal" checked /> 金</label>
+        <label><input type="radio" name="element" value="wood" /> 木</label>
+        <label><input type="radio" name="element" value="water" /> 水</label>
+        <label><input type="radio" name="element" value="fire" /> 火</label>
+        <label><input type="radio" name="element" value="earth" /> 土</label>
+      </div>
+      <p>對局開始後,點擊地圖上的空地(非路徑格)蓋塔。相剋循環:金克木→木克土→土克水→水克火→火克金。</p>
+      <canvas
+        id="gameCanvas"
+        width="512"
+        height="320"
+        style="border: 1px solid #888; background: #1e1e1e; cursor: crosshair;"
+      ></canvas>
+      <div>金幣: <span id="gold">-</span> ｜ 生命: <span id="lives">-</span> ｜ 目前 tick: <span id="tick">-</span></div>
+      <div>Checksum: <span id="checksum">-</span>(兩邊分頁這個值要一直相同,不同就代表跑飛了)</div>
+      <div id="resultBanner" style="font-weight: bold;"></div>
+    </section>
+
+    <section>
+      <h2>Log</h2>
+      <pre id="log" style="white-space: pre-wrap; max-height: 300px; overflow-y: auto; border: 1px solid #888; padding: 8px;"></pre>
+    </section>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
