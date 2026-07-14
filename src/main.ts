@@ -74,6 +74,7 @@ const waveNumberEl = $<HTMLSpanElement>('waveNumber');
 const nextWaveElementEl = $<HTMLSpanElement>('nextWaveElement');
 const bonusWaveEl = $<HTMLDivElement>('bonusWave');
 const bestRecordEl = $<HTMLSpanElement>('bestRecord');
+const dailyBestEl = $<HTMLSpanElement>('dailyBest');
 const achievementsEl = $<HTMLDivElement>('achievements');
 const checksumEl = $<HTMLSpanElement>('checksum');
 const resultBannerEl = $<HTMLDivElement>('resultBanner');
@@ -391,6 +392,56 @@ function saveBestRecordIfBetter(candidate: BestRecord): void {
   renderBestRecord(candidate);
 }
 
+// 「今日最佳」——地圖/波次本來就是完全固定的(seed 目前只用來當 checksum 起點,不影響任何生怪/數值),
+// 所以不是真的「每天不同挑戰」,單純是每天重新歸零的個人紀錄,給每天想再挑戰一次的理由。
+interface DailyBest {
+  date: string;
+  wave: number;
+  cleared: boolean;
+}
+
+const DAILY_BEST_KEY = 'wuxing-keep:dailyBest';
+
+/** 用台北時區算「今天」是幾號,避免跨時區/跨日界線算錯天。 */
+function todayDateString(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
+}
+
+function loadDailyBest(): DailyBest | null {
+  try {
+    const raw = localStorage.getItem(DAILY_BEST_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    const o = parsed as Partial<DailyBest>;
+    if (typeof o.date === 'string' && typeof o.wave === 'number' && typeof o.cleared === 'boolean') {
+      return { date: o.date, wave: o.wave, cleared: o.cleared };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** 存的紀錄如果不是今天的,顯示上當作沒有紀錄(過期的舊紀錄留在 localStorage 裡沒關係,下次寫入會直接覆蓋)。 */
+function renderDailyBest(record: DailyBest | null): void {
+  const todays = record && record.date === todayDateString() ? record : null;
+  dailyBestEl.textContent = !todays ? '今天還沒紀錄' : todays.cleared ? `全破!(第 ${todays.wave} 波)` : `第 ${todays.wave} 波`;
+}
+
+function saveDailyBestIfBetter(candidate: { wave: number; cleared: boolean }): void {
+  const today = todayDateString();
+  const current = loadDailyBest();
+  const currentToday = current && current.date === today ? current : null;
+  const better =
+    !currentToday ||
+    (candidate.cleared && !currentToday.cleared) ||
+    (candidate.cleared === currentToday.cleared && candidate.wave > currentToday.wave);
+  if (!better) return;
+  const next: DailyBest = { date: today, wave: candidate.wave, cleared: candidate.cleared };
+  localStorage.setItem(DAILY_BEST_KEY, JSON.stringify(next));
+  renderDailyBest(next);
+}
+
 // 成就是「這台瀏覽器/這個人」的紀錄,單人/多人都算,一旦解鎖就不會再消失(只做 unlock,不做 lock 回去)。
 // 多人連線時只反映「我自己」這一局的行為(有沒有賣塔、選了幾種屬性),不追蹤隊友做了什麼。
 interface AchievementDef {
@@ -515,11 +566,13 @@ const lockstepHandlers: LockstepHandlers = {
     if (state.gameOver) {
       showResult('守備失敗(生命歸零)', 'defeat');
       saveBestRecordIfBetter({ wave: currentWaveNumber(state.tick), cleared: false });
+      saveDailyBestIfBetter({ wave: currentWaveNumber(state.tick), cleared: false });
       endLocalMatch();
       backToMenuBtn.style.display = 'inline-block';
     } else if (state.victory) {
       showResult('守備成功!全部波次清空', 'victory');
       saveBestRecordIfBetter({ wave: currentWaveNumber(state.tick), cleared: true });
+      saveDailyBestIfBetter({ wave: currentWaveNumber(state.tick), cleared: true });
       evaluateAchievements(state);
       endLocalMatch();
       backToMenuBtn.style.display = 'inline-block';
@@ -708,6 +761,7 @@ startBtn.addEventListener('click', () => {
 });
 
 renderBestRecord(loadBestRecord());
+renderDailyBest(loadDailyBest());
 renderAchievements(loadAchievements());
 renderRecentRooms(loadRecentRooms());
 log(`元素對照:${Object.entries(ELEMENT_NAMES).map(([k, v]) => `${k}=${v}`).join(' ')}`);
