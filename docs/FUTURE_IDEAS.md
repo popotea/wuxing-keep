@@ -4,14 +4,13 @@
 
 **目前視覺呈現狀態**:`src/game/GameScene.ts` 用 Phaser Graphics 畫了比較有辨識度的造型(塔是底座+尖塔+等級小點,怪物是圓身+眼睛+頭上血條),但仍然是幾何圖形佔位,不是真正的美術圖片/精靈。**✅ 產圖工具已就緒**:`npm run assets` 開啟 `tools/ai-hub/` 的 AI Hub,可以用 AI 生圖 API(含免金鑰的 Pollinations)產生五行塔/怪物/地形素材並存進 `public/assets/`,細節見 [`docs/ART_PIPELINE.md`](ART_PIPELINE.md)。工具已就緒不代表已經用它產過圖——`GameScene.ts` 目前還沒有任何程式碼會讀取 `public/assets/`,之後只要把 `drawTower`/`drawMonster` 內部畫法換成讀取圖片/Sprite 即可,外部呼叫介面不用改。
 
+**✅ 地圖裝飾物(樹/草叢/石頭/花/小動物)已完成(程序生成版)**:`GameScene.ts` 的 `drawDecorations()` 在非路徑格上用固定雜湊(`tileHash`,不是 `Math.random()`)決定要不要灑裝飾、灑哪一種,純視覺、跟 checksum/決定性無關,蓋在裝飾物上的塔一樣正常疊上去。**AI 生圖 10 張已全部產出、但還沒接進遊戲**:`scripts/generate-decor-assets.mjs` 直接呼叫 Pollinations API(跳過 `tools/ai-hub` 的瀏覽器互動+去背流程,使用者已同意這個取捨)產了 10 張(五行各配 1 種植物+1 種動物)存進 `public/assets/decor/`(`manifest.json` 記錄實際檔名)。**免金鑰匿名額度 `maxAllowed:1`,常態性回 429/500**,腳本內建重試+退避,實測跑一次要好幾分鐘、其中一張甚至要手動再單獨重試一次才成功,但最終 10 張都拿到了。目前 `GameScene.ts` 完全沒有讀取這些圖,畫面上看到的裝飾物是上面說的程序生成版——兩者是平行存在、還沒二選一,之後想真的換成 AI 圖,把 `drawDecorations()` 改成 `this.load.image()`(在 `preload()`)+ `this.add.image()` 取代對應的 `drawDecorXxx()` 呼叫即可,呼叫介面不用改。已生成的圖沒有透明背景(prompt 只能請它「站在草地上」讓方形背景大致融合,無法保證真的去背),真的要用可能還是需要去背處理。
+
 ## 鏡頭 / 地圖瀏覽
 
-**滑鼠滾輪縮放 + 拖曳/平移鏡頭**,讓玩家能巡視隊友在地圖上其他地方的建塔狀況(魔獸爭霸小地圖的概念,不是切到別人的獨立畫面——目前架構本來就是所有玩家共用同一份地圖/`SimulationState`)。
-
-- 現況:地圖已經放大到 22x14 格(880x560px,原本是 16x10),全景一次還看得完,目前還不需要平移。
-- 這個功能要有意義,前提是地圖之後做得比視窗大(全螢幕化 + 8 人 co-op 可能需要更大的地圖才有足夠空間讓大家蓋塔)。
-- 落點:純 Phaser 鏡頭功能(`camera.zoom`、滾輪/拖曳事件),不用動 `src/sim/`。
-- 依賴:Phase 4/5 決定地圖尺寸與是否全螢幕之後才好排進時程。
+**✅ 已完成**:地圖放大到 40x24 格(1600x960px,`src/sim/map.ts` 的 `GRID_WIDTH`/`GRID_HEIGHT`),可視視窗維持原本 22x14 格大小(`VIEWPORT_TILES_W`/`VIEWPORT_TILES_H`,880x560px 沒變),滑鼠移到畫布邊緣(`GameScene.ts` 的 `EDGE_PAN_MARGIN_PX`/`EDGE_PAN_SPEED_PX_PER_SEC`)會像世紀帝國一樣平移鏡頭(`Phaser.Cameras.Scene2D.Camera.setBounds`+每影格 `update()` 裡的滾動計算),滑鼠離開畫布(`gameout`/`gameover` 事件)會停止平移。路徑改成 2 條各自延伸過整張大地圖,重新設計後剛好還是 1 個交叉點(`(29,14)`,用暫存腳本驗證過邊界跟交叉點數量)。**✅ 小地圖也一併做了**:畫面右下角固定貼著(`scrollFactor(0)`)一張縮小版全圖,顯示路徑、塔、怪物的小點,以及一個白框標示目前鏡頭在看哪裡,點小地圖可以直接把鏡頭跳過去——這樣多人連線時才看得到隊友在地圖其他地方蓋了什麼,不用真的把鏡頭移過去。
+- 沒做滾輪縮放:使用者明確表示不想要滑鼠滾輪這種互動方式,所以只做了邊緣平移,沒有 `camera.zoom`。
+- 換路徑之後的怪物移動總距離、生怪節奏都還是舊的數值,只是跑在更大的地圖上,尚未針對新的路徑長度重新平衡(跟其他數值一樣,先求「能跑」的版本)。
 
 ## 塔 / 放置物升級與擴充
 
@@ -38,7 +37,7 @@
 
 ## 地圖與難度:交叉/多路徑地形
 
-**✅ 已完成**:`src/sim/map.ts` 的 `PATHS` 現在是路徑陣列(不再是單一 `PATH_WAYPOINTS`),地圖放大到 22x14 格,`PathPos` 加了 `pathId`,兩條路徑在 `(16,8)` 交叉。同一波怪物用 `j % PATH_COUNT` 輪流分配路徑,逼玩家同時顧兩條線。`src/sim/towers.ts` 的 `findTarget` 改用 `map.ts` 新增的 `remainingDistanceFp`(跨路徑通用的剩餘距離)取代原本只能同路徑比較的 `segmentIndex`。
+**✅ 已完成**:`src/sim/map.ts` 的 `PATHS` 現在是路徑陣列(不再是單一 `PATH_WAYPOINTS`),`PathPos` 加了 `pathId`,兩條路徑交叉一次(地圖放大到 40x24 格之後交叉點在 `(29,14)`,見上面「鏡頭/地圖瀏覽」)。同一波怪物用 `j % PATH_COUNT` 輪流分配路徑,逼玩家同時顧兩條線。`src/sim/towers.ts` 的 `findTarget` 改用 `map.ts` 新增的 `remainingDistanceFp`(跨路徑通用的剩餘距離)取代原本只能同路徑比較的 `segmentIndex`。
 
 目前只有 2 條路徑、1 個交叉點,路線本身沒有經過美術/關卡設計,純粹是「架構上先跑得動」的初版——路徑形狀、交叉點位置、要不要 3 條以上路徑,都還可以再調整。
 
@@ -52,6 +51,23 @@
 
 - **✅ 單人模式進度保存已完成**:用 localStorage(`wuxing-keep:bestRecord`)記錄最高波次/是否全破,HUD 上顯示,破紀錄才會覆蓋。
 - **✅ 難度選擇已完成(簡化版 New Game+),單人/多人都有**:開局前可選「普通/困難」,困難模式怪物 HP/速度 ×150%、獎勵金幣也 ×150%(`SimulationState.difficultyPercent`,`src/sim/simulation.ts` 的 `scaledSpawn`)。單人在選單直接選;多人由房主在「建立房間」表單選,經 `MatchConfig.difficultyPercent`/`StartMatchMsg.difficultyPercent` 傳給所有人。目前沒有「破關才解鎖困難」的門檻,一開始就能選。
-- **✅ 分工的第一版已完成:每人開局選固定的可蓋屬性集合**:`PlayerInfo.elements`(至少 1 個,可複選,單人也適用),`src/sim/simulation.ts` 的 `applyBuildTower` 會擋掉不在允許清單內的建塔指令。**金幣/生命仍然是全員共用一份**(單一 `SimulationState.gold`/`lives`),沒有各自獨立;塔升級也**不分「誰的塔」**,任何玩家都能升級任何人蓋的塔——這兩點還是 Phase 4 尚未定案的部分,要不要進一步做「各自獨立資源」是獨立的下一步決策。
+- **✅ 分工的第一版已完成:每人開局選固定的可蓋屬性集合**:`PlayerInfo.elements`(至少 1 個,可複選,單人也適用),`src/sim/simulation.ts` 的 `applyBuildTower` 會擋掉不在允許清單內的建塔指令。
+- **✅ 團隊經濟模型已定案並完成**:`SimulationState.gold` 改成 `Record<PlayerId, number>`,每人金幣各自獨立(各自 300 起始),**生命維持團隊共用一份**(`SimulationState.lives` 不變)。`Tower.ownerId` 記錄誰蓋的:**升級不分誰的塔,任何人都能幫忙升級,但花的是升級者自己的錢**;**賣塔限本人**(避免動到別人的投資,退款算自己的)。怪物死亡賞金/加碼波獎勵都是**每個現存玩家各自拿全額**(不追蹤是誰的塔打死的,多座塔常常一起打中同一隻,追蹤攻擊貢獻太複雜,選最簡單的規則)——代表人數越多,團隊總金幣量越大,還沒有針對這點做平衡(呼應下面「依人數縮放波次強度」還沒做)。`computeChecksum` 的金幣序列化有排序 key,避免不同機器 Record 插入順序不同誤判跑飛。
 - **✅ 多人房間流程已完成**:選單改成「單人模式/多人連線」頁籤,多人頁籤裡就有建房/加入/房間狀態(不用展開才看得到)。**新增「準備」機制**:每個人(含房主)要在房間狀態按過「✅ 準備」,房主的「開始對局」按鈕才會解鎖(`Room.setReady()`/`SET_READY`/`ROSTER_UPDATED` 訊息,`src/net/room.ts`)。
+- **✅ 浮動傷害數字已完成**:`src/sim/towers.ts` 的 `tryAttack` 改成回傳 `CombatEvent | null`(打中就回傳打了誰、扣多少血、在哪個座標),`simulation.ts` 每個 tick 收集進 `SimulationState.combatEvents`(純 UI 用的暫存資料,每 tick 開頭清空重算,不進 checksum)。`GameScene.ts` 收到後用 Phaser Text + tween 畫「-傷害值」往上飄淡出。**已知限制**:只有「非致命一擊」保證看得到——一擊斃命的怪物在同一個 tick 內就從 `state.monsters` 移除,但傷害數字本身是從 `tryAttack` 直接產生的事件(不是靠比較前後 tick 的血量差),所以其實**連斃命一擊也看得到數字**,這點比原本用血量差比對的做法更準。
 - **音效/BGM**:五行對應音效點綴,歸在 Phase 5 美術範疇,先記一筆避免遺漏。
+- **✅ 依人數縮放波次強度已完成**:`SimulationState.playerCountScalePercent`(`src/sim/simulation.ts` 的 `createInitialState`)依開局時的玩家數算出,每多一人 +20%,跟 `difficultyPercent`(New Game+ 倍率)相乘後套用在生怪的血量/速度上(`scaledSpawn`)。**賞金刻意不跟著這個加成**,只跟著 `difficultyPercent` 走——賞金已經因為「每個現存玩家各自拿全額」隨人數自動翻倍,人數加成再乘上去會雙重放大團隊經濟雪球。單人固定 `playerCount=1` → 100%,solo 平衡完全不受影響。這個倍率(每人 +20%)是先求「有在補償」的初版數字,還沒有實際多人測試調過手感。
+- **✅ 快捷鍵已完成**:對局畫面按數字鍵 1~5 切換建塔屬性(對應建塔列由左到右的順序)、Delete/Backspace 賣掉目前選中的塔(尊重原本「賣塔限本人」的限制,`towerSellBtn.disabled` 是 true 就不會動作)、Esc 取消選取。游標在任何文字輸入框(暱稱、房號等)裡時全部忽略,避免打字誤觸(`src/main.ts` 的 `keydown` 監聽,判斷 `document.activeElement`)。
+- **✅ 小地圖已完成**:見上面「鏡頭/地圖瀏覽」。
+
+## 這次盤點順手記下的新點子(尚未實作,優先度未定)
+
+沒有一個是拍板決定,單純腦力激盪順手記錄,避免想法飄走。跟其他 backlog 項目一樣「隨時可以繼續往裡面加東西」。
+
+- **房主斷線自動換房主 / 重連**:目前 MVP 決定「房主斷線 = 直接結束對局」(`CLAUDE.md` 已寫明是刻意取捨),但如果之後常常玩到一半斷線覺得很痛,這是最直接能救回來的方向。牽動 `src/net/room.ts` 的角色轉換邏輯跟 `lockstep.ts` 的 tick 權威轉移,工程量不小,建議真的常常遇到斷線問題再排。
+- **記住最近加入過的房號**:`joinCodeInput` 現在每次都要重打或靠邀請連結帶入,可以用 localStorage 記最近幾筆房號讓玩家快速重新加入,純前端小改動,風險很低。
+- **塔的集火策略選擇**:現在 `findTarget` 固定「打最前面(離出口最近)」,可以讓玩家在塔面板上選「最前面 / 血量最少 / 血量最多」幾種策略,豐富操作深度但不改變核心數值。
+- **精英怪/首領波**:目前每波都是單一屬性的普通小怪,可以在特定波次插入 1 隻血量厚、有特殊行為(例如免疫某種屬性克制)的首領,呼應「元素組合玩法延伸」那節提到的異常狀態構想,但範圍小很多,可以獨立先做。
+- **每日挑戰種子**:用日期算出一個固定 seed(例如 `hash(yyyy-mm-dd)`),當天所有人拿到同一組地圖/波次,單人模式下比較「今天大家走到第幾波」,不需要伺服器,靠 `localStorage` 記錄自己的每日成績就好,是輕量級但有趣的黏著度功能。
+- **成就/里程碑**:例如「不賣塔通關」「只用單一屬性通關」「全破且沒漏怪」,搭配現有的 `bestRecord` localStorage 機制擴充,UI 上一個小徽章列表。
+- **行動裝置觸控支援**:目前操作(邊緣平移、點擊蓋塔/選塔)都是滑鼠事件,手機瀏覽器點得到但體驗生硬(尤其邊緣平移完全沒有觸控等價操作),要支援的話至少要補雙指縮放/拖曳平移的觸控手勢,還有按鈕尺寸/版面要重新檢視是否夠大好點。

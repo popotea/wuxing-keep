@@ -3,6 +3,7 @@
 import { applyElementalDamage, type Element } from './elements';
 import { FP_SCALE, remainingDistanceFp, worldPositionFp } from './map';
 import type { Monster } from './monsters';
+import type { PlayerId } from '../net/protocol';
 
 export interface TowerDef {
   element: Element;
@@ -30,6 +31,8 @@ export interface Tower {
   y: number;
   level: number;
   ticksSinceLastAttack: number;
+  /** 誰蓋的這座塔——團隊模式金幣各自獨立,賣塔只有本人能賣,但升級任何人都能幫忙出錢。 */
+  ownerId: PlayerId;
 }
 
 /** 升級花費:每一級都用原始建造價當漲幅單位,越高級越貴。已滿級回傳 null。 */
@@ -94,13 +97,26 @@ function findTarget(monsters: readonly Monster[], tower: Tower, def: TowerDef): 
   return best;
 }
 
-/** 讓一座塔嘗試攻擊一次。有打中就直接扣目標血量(呼叫端傳進來的 monster 物件會被修改)。 */
-export function tryAttack(tower: Tower, monsters: readonly Monster[]): void {
+export interface CombatEvent {
+  monsterId: number;
+  xFp: number;
+  yFp: number;
+  damage: number;
+}
+
+/**
+ * 讓一座塔嘗試攻擊一次。有打中就直接扣目標血量(呼叫端傳進來的 monster 物件會被修改),
+ * 並回傳這次攻擊的事件給 UI 顯示飄動傷害數字用;沒打中回傳 null。
+ */
+export function tryAttack(tower: Tower, monsters: readonly Monster[]): CombatEvent | null {
   const def = TOWER_DEFS[tower.element];
   tower.ticksSinceLastAttack += 1;
-  if (tower.ticksSinceLastAttack < def.cooldownTicks) return;
+  if (tower.ticksSinceLastAttack < def.cooldownTicks) return null;
   const target = findTarget(monsters, tower, def);
-  if (!target) return;
+  if (!target) return null;
   tower.ticksSinceLastAttack = 0;
-  target.hp -= applyElementalDamage(effectiveDamage(tower), tower.element, target.element);
+  const damage = applyElementalDamage(effectiveDamage(tower), tower.element, target.element);
+  target.hp -= damage;
+  const { xFp, yFp } = worldPositionFp(target.pos);
+  return { monsterId: target.id, xFp, yFp, damage };
 }

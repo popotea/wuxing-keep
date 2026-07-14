@@ -3,11 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#12151a" />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%2312151a' stroke='%232c323d'/%3E%3Ccircle cx='16' cy='7' r='3.2' fill='%23d4af37'/%3E%3Ccircle cx='24.6' cy='13.2' r='3.2' fill='%233a9d3a'/%3E%3Ccircle cx='21.3' cy='23.3' r='3.2' fill='%23a67c3d'/%3E%3Ccircle cx='10.7' cy='23.3' r='3.2' fill='%233a7bd5'/%3E%3Ccircle cx='7.4' cy='13.2' r='3.2' fill='%23e05a2b'/%3E%3C/svg%3E"
+    />
     <title>五行守衛</title>
     <style>
       :root {
-        --bg: #12151a;
+        --bg-deep: #05070a;
         --panel: #1b1f27;
+        --panel-2: #232833;
         --border: #2c323d;
         --text: #e8ecf2;
         --muted: #8b93a1;
@@ -17,12 +24,17 @@
         --water: #3a7bd5;
         --fire: #e05a2b;
         --earth: #a67c3d;
+        --shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.45);
+        --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.04);
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
         min-height: 100vh;
-        background: var(--bg);
+        background:
+          radial-gradient(ellipse 900px 500px at 50% -10%, #232b3a 0%, transparent 60%),
+          radial-gradient(ellipse 1200px 800px at 50% 100%, #161c26 0%, transparent 70%),
+          var(--bg-deep);
         color: var(--text);
         font-family: "Microsoft JhengHei", "Segoe UI", system-ui, sans-serif;
         display: flex;
@@ -30,18 +42,46 @@
         align-items: center;
         padding: 16px;
       }
-      h1 { margin: 8px 0 16px; letter-spacing: 4px; }
-      h1 span { color: var(--accent); }
+      h1 {
+        margin: 12px 0 4px;
+        letter-spacing: 6px;
+        font-size: 32px;
+        text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+      }
+      h1 span { color: var(--accent); text-shadow: 0 0 18px rgba(212, 175, 55, 0.55); }
+      .element-strip { display: flex; gap: 8px; margin-bottom: 20px; }
+      .element-strip span { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 8px 1px currentColor; }
       h3 { margin: 16px 0 6px; font-size: 14px; color: var(--muted); text-align: left; }
+      .icon { width: 1em; height: 1em; display: inline-block; vertical-align: -0.15em; flex-shrink: 0; }
+
+      /* ---- 邊角裝飾框(WC3 式面板感,取代單純的漸層色塊) ---- */
+      .panel-frame {
+        position: relative;
+        background-image:
+          repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.015) 0px, rgba(255, 255, 255, 0.015) 1px, transparent 1px, transparent 7px),
+          linear-gradient(160deg, #20252f 0%, #161a22 100%);
+      }
+      .panel-frame::before, .panel-frame::after {
+        content: "";
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--accent);
+        opacity: 0.65;
+        pointer-events: none;
+      }
+      .panel-frame::before { top: -2px; left: -2px; border-right: none; border-bottom: none; }
+      .panel-frame::after { bottom: -2px; right: -2px; border-left: none; border-top: none; }
 
       /* ---- 選單畫面 ---- */
       .menu-card {
-        background: var(--panel);
         border: 1px solid var(--border);
-        border-radius: 12px;
+        border-radius: 14px;
         padding: 28px 32px;
         text-align: center;
         min-width: 360px;
+        box-shadow: var(--shadow-soft), var(--shadow-inset);
+        animation: fade-in-up 0.35s ease-out;
       }
       .menu-card h2 { margin-top: 0; }
       .choice-row { display: flex; justify-content: center; gap: 10px; margin: 6px 0 14px; flex-wrap: wrap; }
@@ -51,13 +91,16 @@
         border-radius: 8px;
         padding: 8px 14px;
         cursor: pointer;
-        background: #232833;
+        background: var(--panel-2);
         font-weight: bold;
-        transition: background 0.15s, border-color 0.15s;
+        transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.15s;
       }
+      .choice-row label:hover { border-color: var(--muted); transform: translateY(-1px); }
       .choice-row input:checked + label {
-        border-color: var(--accent);
-        background: #33301f;
+        border-color: currentColor;
+        background: linear-gradient(160deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02));
+        box-shadow: 0 0 14px -3px currentColor;
+        transform: translateY(-1px);
       }
       label.element-metal { color: var(--metal); }
       label.element-wood { color: var(--wood); }
@@ -70,12 +113,20 @@
         margin-top: 8px;
         border: none;
         border-radius: 8px;
-        background: var(--accent);
-        color: #1a1a1a;
+        background: linear-gradient(160deg, #e8c65a, var(--accent));
+        color: #1a1408;
         font-weight: bold;
         cursor: pointer;
+        box-shadow: 0 4px 14px -2px rgba(212, 175, 55, 0.5);
+        transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
       }
-      .primary-btn:disabled { opacity: 0.5; cursor: default; }
+      .primary-btn:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px -4px rgba(212, 175, 55, 0.6);
+        filter: brightness(1.05);
+      }
+      .primary-btn:active:not(:disabled) { transform: translateY(0); }
+      .primary-btn:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
       .best-record { color: var(--muted); margin-top: 14px; font-size: 14px; }
 
       /* ---- 模式頁籤 ---- */
@@ -90,51 +141,151 @@
         font-size: 15px;
         font-weight: bold;
         cursor: pointer;
+        transition: background 0.15s, border-color 0.15s, color 0.15s;
       }
-      .mode-tab.active { color: var(--text); border-color: var(--accent); background: #232833; }
+      .mode-tab:hover { color: var(--text); }
+      .mode-tab.active {
+        color: var(--text);
+        border-color: var(--accent);
+        background: var(--panel-2);
+        box-shadow: 0 0 12px -4px rgba(212, 175, 55, 0.5);
+      }
 
       /* ---- 多人連線區塊 ---- */
       .multi-section { text-align: left; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
       .multi-section label { display: block; margin: 6px 0; font-size: 14px; }
       .multi-section input[type="text"], .multi-section input:not([type]) {
-        background: #232833; border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 5px 8px;
+        background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 5px 8px;
       }
+      .btn {
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--panel-2);
+        color: var(--text);
+        padding: 6px 14px;
+        cursor: pointer;
+        font-weight: bold;
+        transition: border-color 0.15s, transform 0.15s;
+      }
+      .btn:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-1px); }
+      .btn:disabled { opacity: 0.45; cursor: default; transform: none; }
       #roster { list-style: none; padding: 0; margin: 8px 0; }
-      #roster li { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }
+      #roster li {
+        display: flex;
+        justify-content: space-between;
+        padding: 6px 10px;
+        font-size: 14px;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 6px;
+        margin-bottom: 4px;
+      }
       #roster .ready-yes { color: var(--wood); }
       #roster .ready-no { color: var(--muted); }
-      #readyBtn { margin-top: 6px; }
+
+      /* ---- 房間 Lobby(建立/加入房間後取代設定表單,不再兩者一起顯示) ---- */
+      .lobby-code-box {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px 12px;
+        background: rgba(212, 175, 55, 0.08);
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin-bottom: 14px;
+      }
+      .lobby-code-label { color: var(--muted); font-size: 13px; }
+      .lobby-code-value { font-size: 20px; font-weight: bold; letter-spacing: 3px; color: var(--accent); }
+      .lobby-code-box input {
+        flex: 1;
+        min-width: 120px;
+        background: transparent;
+        border: none;
+        color: var(--muted);
+        font-size: 12px;
+        font-family: monospace;
+      }
+      .lobby-code-box input:focus { outline: none; }
+      .lobby-actions { display: flex; gap: 8px; margin-top: 10px; }
+      .lobby-actions button { flex: 1; padding: 10px 16px; font-size: 15px; margin-top: 0; }
+      .lobby-hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; text-align: center; }
+      #leaveRoomBtn {
+        margin-top: 14px;
+        width: 100%;
+        background: transparent;
+        border-color: var(--border);
+        color: var(--muted);
+      }
+      #leaveRoomBtn:hover:not(:disabled) { border-color: var(--fire); color: var(--fire); }
 
       /* ---- 遊戲畫面 ---- */
-      #gameScreen { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+      #gameScreen { display: flex; flex-direction: column; align-items: center; gap: 10px; animation: fade-in-up 0.3s ease-out; }
       #hud {
         display: flex;
-        gap: 24px;
-        background: var(--panel);
+        gap: 10px;
         border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 10px 18px;
+        border-radius: 10px;
+        padding: 8px 14px;
         font-size: 15px;
+        box-shadow: var(--shadow-soft);
       }
-      .hud-stat { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+      .hud-stat {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        padding: 5px 12px;
+      }
       .lives-bar-outer { width: 140px; height: 12px; background: #333; border-radius: 6px; overflow: hidden; }
       #livesBar { height: 100%; width: 100%; background: var(--wood); transition: width 0.2s, background 0.2s; }
-      #bonusWave { font-weight: bold; color: var(--accent); min-height: 1.2em; }
-      #gameCanvas { border: 2px solid var(--border); border-radius: 4px; overflow: hidden; line-height: 0; }
-      #resultBanner { font-size: 20px; font-weight: bold; min-height: 1.4em; }
-      #backToMenuBtn { display: none; padding: 8px 18px; border-radius: 8px; border: 1px solid var(--border); background: #232833; color: var(--text); cursor: pointer; }
+      .lives-bar-outer.lives-critical { animation: pulse-danger 1s ease-in-out infinite; }
+      #bonusWave { font-weight: bold; color: var(--accent); min-height: 1.2em; text-shadow: 0 0 10px rgba(212, 175, 55, 0.4); }
+      #gameCanvas {
+        border: 2px solid var(--border);
+        border-radius: 6px;
+        overflow: hidden;
+        line-height: 0;
+        box-shadow: var(--shadow-soft);
+      }
+      #resultBanner { font-size: 22px; font-weight: bold; min-height: 1.4em; }
+      #resultBanner.result-victory {
+        color: var(--accent);
+        text-shadow: 0 0 16px rgba(212, 175, 55, 0.6);
+        animation: pop-in 0.4s ease-out;
+      }
+      #resultBanner.result-defeat {
+        color: var(--fire);
+        text-shadow: 0 0 16px rgba(224, 90, 43, 0.5);
+        animation: pop-in 0.4s ease-out;
+      }
+      #backToMenuBtn {
+        display: none;
+        padding: 8px 18px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--panel-2);
+        color: var(--text);
+        cursor: pointer;
+        transition: border-color 0.15s, transform 0.15s;
+      }
+      #backToMenuBtn:hover { border-color: var(--accent); transform: translateY(-1px); }
 
       /* ---- 塔選取面板(魔獸爭霸式,選塔才顯示,不是點下去就直接動作) ---- */
       .tower-panel {
         width: 100%;
         max-width: 460px;
-        background: var(--panel);
         border: 2px solid var(--accent);
         border-radius: 10px;
         padding: 10px 16px;
+        box-shadow: var(--shadow-soft), 0 0 20px -8px rgba(212, 175, 55, 0.4);
+        animation: fade-in-up 0.2s ease-out;
       }
       .tower-panel-header { display: flex; justify-content: space-between; align-items: center; font-size: 17px; font-weight: bold; margin-bottom: 6px; }
       .tower-panel-level { color: var(--muted); font-weight: normal; font-size: 14px; }
+      .tower-panel-owner { color: var(--muted); font-weight: normal; font-size: 13px; margin-left: 4px; }
       .tower-panel-stats { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-bottom: 10px; flex-wrap: wrap; }
       .tower-panel-actions { display: flex; gap: 8px; }
       .tower-panel-actions button {
@@ -142,12 +293,16 @@
         padding: 8px;
         border-radius: 6px;
         border: 1px solid var(--border);
-        background: #232833;
+        background: var(--panel-2);
         color: var(--text);
         cursor: pointer;
         font-weight: bold;
+        transition: filter 0.15s, transform 0.15s;
       }
-      .tower-panel-actions button:disabled { opacity: 0.4; cursor: default; }
+      .tower-panel-actions button:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.1); }
+      .tower-panel-actions button:disabled { opacity: 0.4; cursor: default; transform: none; }
+      #towerUpgradeBtn { background: linear-gradient(160deg, #3a9d3a, #256b25); border-color: #256b25; }
+      #towerSellBtn { background: linear-gradient(160deg, #b9924a, #7a5f2a); border-color: #7a5f2a; }
       #towerDeselectBtn { flex: 0 0 auto; padding: 8px 12px; }
 
       /* ---- 進階/除錯(收合,不佔主畫面) ---- */
@@ -161,12 +316,157 @@
       #advancedPanel summary { cursor: pointer; padding: 6px 0; }
       #advancedPanel section { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
       #advancedPanel h2 { font-size: 14px; margin: 0 0 8px; color: var(--text); }
-      #advancedPanel input { background: #232833; border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 4px 6px; }
-      #log { white-space: pre-wrap; max-height: 200px; overflow-y: auto; border: 1px solid var(--border); padding: 8px; background: #0f1216; }
+      #advancedPanel input { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 4px 6px; }
+      #log {
+        white-space: pre-wrap;
+        max-height: 200px;
+        overflow-y: auto;
+        border: 1px solid var(--border);
+        padding: 8px;
+        background: #0f1216;
+        border-radius: 6px;
+      }
+      #log::-webkit-scrollbar { width: 8px; }
+      #log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+      @keyframes fade-in-up {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes pop-in {
+        from { opacity: 0; transform: scale(0.92); }
+        to { opacity: 1; transform: scale(1); }
+      }
+      @keyframes pulse-danger {
+        0%, 100% { box-shadow: 0 0 0 rgba(224, 90, 43, 0); }
+        50% { box-shadow: 0 0 10px 2px rgba(224, 90, 43, 0.7); }
+      }
     </style>
   </head>
   <body>
     <h1>五行<span>守衛</span></h1>
+    <div class="element-strip" aria-hidden="true">
+      <span style="color: #d4af37"></span>
+      <span style="color: #3a9d3a"></span>
+      <span style="color: #a67c3d"></span>
+      <span style="color: #3a7bd5"></span>
+      <span style="color: #e05a2b"></span>
+    </div>
+
+    <svg style="display: none" aria-hidden="true">
+      <symbol id="icon-coin" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" fill="currentColor" />
+        <circle cx="9" cy="9" r="2" fill="#fff" opacity="0.35" />
+      </symbol>
+      <symbol id="icon-heart" viewBox="0 0 24 24">
+        <path
+          d="M12 21s-6.5-4.35-9.2-8.28C1 10.5 1.2 7.6 3.4 5.9 5.4 4.4 8 4.8 9.6 6.8L12 9.6l2.4-2.8c1.6-2 4.2-2.4 6.2-.9 2.2 1.7 2.4 4.6.6 6.82C18.5 16.65 12 21 12 21z"
+          fill="currentColor"
+        />
+      </symbol>
+      <symbol id="icon-sword" viewBox="0 0 24 24">
+        <line x1="12" y1="2" x2="12" y2="16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+        <line x1="8" y1="6" x2="16" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+        <rect x="10.5" y="16" width="3" height="5" rx="1" fill="currentColor" />
+      </symbol>
+      <symbol id="icon-target" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
+        <circle cx="12" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="2" />
+        <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+      </symbol>
+      <symbol id="icon-clock" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
+        <path
+          d="M12 7v5l3.5 2"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24">
+        <path
+          d="M4 12.5l5 5L20 6.5"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </symbol>
+      <symbol id="icon-pending" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3" />
+      </symbol>
+      <symbol id="icon-star" viewBox="0 0 24 24">
+        <path
+          d="M12 2l2.9 6.26L21.5 9l-5 4.87L17.8 21 12 17.77 6.2 21l1.3-7.13L2.5 9l6.6-.74L12 2z"
+          fill="currentColor"
+        />
+      </symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24">
+        <line x1="5" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+        <line x1="19" y1="5" x2="5" y2="19" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+      </symbol>
+      <symbol id="icon-up" viewBox="0 0 24 24">
+        <path
+          d="M12 19V5M6 11l6-6 6 6"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </symbol>
+      <symbol id="icon-copy" viewBox="0 0 24 24">
+        <rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2" />
+        <path
+          d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        />
+      </symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+      </symbol>
+      <symbol id="icon-enter" viewBox="0 0 24 24">
+        <path
+          d="M15 4h3a2 2 0 012 2v12a2 2 0 01-2 2h-3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+        <path
+          d="M4 12h11M10 8l4 4-4 4"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </symbol>
+      <symbol id="icon-exit" viewBox="0 0 24 24">
+        <path
+          d="M9 4H6a2 2 0 00-2 2v12a2 2 0 002 2h3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+        <path
+          d="M16 16l4-4-4-4M20 12H9"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </symbol>
+    </svg>
 
     <section id="menuScreen">
       <div class="mode-tabs">
@@ -174,7 +474,7 @@
         <button id="tabMulti" class="mode-tab">多人連線</button>
       </div>
 
-      <div id="soloPanel" class="menu-card">
+      <div id="soloPanel" class="menu-card panel-frame">
         <h2>單人模式</h2>
         <h3>難度</h3>
         <div class="choice-row" id="soloDifficulty">
@@ -200,61 +500,76 @@
         <p class="best-record">最佳紀錄: <span id="bestRecord">尚無紀錄</span></p>
       </div>
 
-      <div id="multiPanel" class="menu-card" hidden>
+      <div id="multiPanel" class="menu-card panel-frame" hidden>
         <h2>多人連線</h2>
-        <h3>選擇你的屬性(至少 1 種,可複選)</h3>
-        <div class="choice-row multi-elements">
-          <input type="checkbox" id="multi-el-metal" value="metal" checked />
-          <label for="multi-el-metal" class="element-metal">金</label>
-          <input type="checkbox" id="multi-el-wood" value="wood" />
-          <label for="multi-el-wood" class="element-wood">木</label>
-          <input type="checkbox" id="multi-el-water" value="water" />
-          <label for="multi-el-water" class="element-water">水</label>
-          <input type="checkbox" id="multi-el-fire" value="fire" />
-          <label for="multi-el-fire" class="element-fire">火</label>
-          <input type="checkbox" id="multi-el-earth" value="earth" />
-          <label for="multi-el-earth" class="element-earth">土</label>
-        </div>
 
-        <div class="multi-section">
-          <h3>建立房間</h3>
-          <label>暱稱: <input id="hostName" value="房主" /></label>
-          <label>難度:
-            <select id="hostDifficulty">
-              <option value="100" selected>普通</option>
-              <option value="150">困難</option>
-            </select>
-          </label>
-          <button id="hostBtn">建立房間</button>
-          <div>房號: <span id="roomCode">(尚未建立)</span></div>
-          <div>
-            邀請連結:
-            <input id="inviteLink" readonly style="width: 240px;" />
-            <button id="copyLinkBtn" disabled>複製連結</button>
+        <div id="multiSetup">
+          <h3>選擇你的屬性(至少 1 種,可複選)</h3>
+          <div class="choice-row multi-elements">
+            <input type="checkbox" id="multi-el-metal" value="metal" checked />
+            <label for="multi-el-metal" class="element-metal">金</label>
+            <input type="checkbox" id="multi-el-wood" value="wood" />
+            <label for="multi-el-wood" class="element-wood">木</label>
+            <input type="checkbox" id="multi-el-water" value="water" />
+            <label for="multi-el-water" class="element-water">水</label>
+            <input type="checkbox" id="multi-el-fire" value="fire" />
+            <label for="multi-el-fire" class="element-fire">火</label>
+            <input type="checkbox" id="multi-el-earth" value="earth" />
+            <label for="multi-el-earth" class="element-earth">土</label>
+          </div>
+
+          <div class="multi-section">
+            <h3>建立房間</h3>
+            <label>暱稱: <input id="hostName" value="房主" /></label>
+            <label>難度:
+              <select id="hostDifficulty">
+                <option value="100" selected>普通</option>
+                <option value="150">困難</option>
+              </select>
+            </label>
+            <button id="hostBtn" class="btn"><svg class="icon"><use href="#icon-plus" /></svg> 建立房間</button>
+          </div>
+
+          <div class="multi-section">
+            <h3>加入房間</h3>
+            <label>暱稱: <input id="joinName" value="玩家2" /></label>
+            <label>房號: <input id="joinCode" placeholder="gld-XXXXX" /></label>
+            <button id="joinBtn" class="btn"><svg class="icon"><use href="#icon-enter" /></svg> 加入房間</button>
           </div>
         </div>
 
-        <div class="multi-section">
-          <h3>加入房間</h3>
-          <label>暱稱: <input id="joinName" value="玩家2" /></label>
-          <label>房號: <input id="joinCode" placeholder="gld-XXXXX" /></label>
-          <button id="joinBtn">加入房間</button>
-        </div>
+        <div id="multiLobby" hidden>
+          <div class="lobby-code-box">
+            <span class="lobby-code-label">房號</span>
+            <span id="roomCode" class="lobby-code-value">-</span>
+            <input id="inviteLink" readonly />
+            <button id="copyLinkBtn" class="btn" disabled>
+              <svg class="icon"><use href="#icon-copy" /></svg> 複製邀請連結
+            </button>
+          </div>
 
-        <div class="multi-section">
-          <h3>房間狀態</h3>
+          <h3>房間狀態(<span id="rosterCount">0</span>/8)</h3>
           <ul id="roster"></ul>
-          <button id="readyBtn" disabled>✅ 準備</button>
-          <button id="startBtn" disabled>開始對局(房主專用,所有人都準備才能按)</button>
+
+          <div class="lobby-actions">
+            <button id="readyBtn" class="btn" disabled><svg class="icon"><use href="#icon-check" /></svg> 準備</button>
+            <button id="startBtn" class="primary-btn" disabled>開始對局</button>
+          </div>
+          <p id="startHint" class="lobby-hint"></p>
+
+          <button id="leaveRoomBtn" class="btn"><svg class="icon"><use href="#icon-exit" /></svg> 離開房間</button>
         </div>
       </div>
     </section>
 
     <section id="gameScreen" hidden>
-      <div id="hud">
-        <div class="hud-stat">💰 <span id="gold">-</span></div>
+      <div id="hud" class="panel-frame">
         <div class="hud-stat">
-          ❤ <div class="lives-bar-outer"><div id="livesBar"></div></div> <span id="lives">-</span>
+          <svg class="icon" style="color: var(--accent)"><use href="#icon-coin" /></svg> <span id="gold">-</span>
+        </div>
+        <div class="hud-stat">
+          <svg class="icon" style="color: var(--fire)"><use href="#icon-heart" /></svg>
+          <div class="lives-bar-outer"><div id="livesBar"></div></div> <span id="lives">-</span>
         </div>
         <div class="hud-stat">
           第 <span id="waveNumber">-</span> 波 ｜ 下一波 <span id="nextWaveElement">-</span> · <span id="nextWave">-</span>
@@ -264,20 +579,25 @@
       <div id="gameCanvas"></div>
       <div class="choice-row" id="buildBar"></div>
 
-      <div id="towerPanel" class="tower-panel" hidden>
+      <div id="towerPanel" class="tower-panel panel-frame" hidden>
         <div class="tower-panel-header">
           <span id="towerPanelElement"></span>
+          <span class="tower-panel-owner">(<span id="towerPanelOwner">-</span>)</span>
           <span class="tower-panel-level">Lv. <span id="towerPanelLevel">-</span></span>
         </div>
         <div class="tower-panel-stats">
-          <div>⚔ 攻擊力 <span id="towerPanelDamage">-</span></div>
-          <div>🎯 範圍 <span id="towerPanelRange">-</span> 格</div>
-          <div>⏱ 攻速 <span id="towerPanelCooldown">-</span>s</div>
+          <div><svg class="icon"><use href="#icon-sword" /></svg> 攻擊力 <span id="towerPanelDamage">-</span></div>
+          <div><svg class="icon"><use href="#icon-target" /></svg> 範圍 <span id="towerPanelRange">-</span> 格</div>
+          <div><svg class="icon"><use href="#icon-clock" /></svg> 攻速 <span id="towerPanelCooldown">-</span>s</div>
         </div>
         <div class="tower-panel-actions">
-          <button id="towerUpgradeBtn">⬆ 升級(<span id="towerUpgradeCost">-</span>)</button>
-          <button id="towerSellBtn">💰 賣出(+<span id="towerSellValue">-</span>)</button>
-          <button id="towerDeselectBtn">✕</button>
+          <button id="towerUpgradeBtn">
+            <svg class="icon"><use href="#icon-up" /></svg> 升級(<span id="towerUpgradeCost">-</span>)
+          </button>
+          <button id="towerSellBtn">
+            <svg class="icon"><use href="#icon-coin" /></svg> 賣出(+<span id="towerSellValue">-</span>)
+          </button>
+          <button id="towerDeselectBtn"><svg class="icon"><use href="#icon-close" /></svg></button>
         </div>
       </div>
 

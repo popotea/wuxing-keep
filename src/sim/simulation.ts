@@ -17,11 +17,13 @@ import {
   type Monster,
   type SpawnEvent,
 } from './monsters';
-import { sellValue, TOWER_DEFS, tryAttack, upgradeCost, type Tower } from './towers';
+import { sellValue, TOWER_DEFS, tryAttack, upgradeCost, type CombatEvent, type Tower } from './towers';
 
 export interface SimulationState {
   tick: number;
-  gold: number;
+  /** 團隊模式:每個玩家自己一份、彼此獨立的金幣。塔可以互相幫忙升級,但花的是升級者自己的錢。 */
+  gold: Record<PlayerId, number>;
+  /** 生命是團隊共用一份,不分誰漏的怪。 */
   lives: number;
   towers: Tower[];
   monsters: Monster[];
@@ -33,8 +35,17 @@ export interface SimulationState {
   bonusAwarded: boolean[];
   /** New Game+ 風味的難度倍率(百分比,100=普通)。開局後固定不變,只影響生怪時的數值縮放。 */
   difficultyPercent: number;
+  /**
+   * 依房間人數算出的怪物強度加成(百分比,100=沒有加成、單人固定是這個值)。
+   * 人數越多,團隊防守火力(塔的數量)通常也越強,用這個補一點怪物血量/速度回來,
+   * 賞金刻意不跟著這個加成(賞金是每人各自領全額,人數多本來就已經加倍團隊總金幣,
+   * 賞金再乘這個加成會雙重放大,滾雪球滾更大)。開局後固定不變。
+   */
+  playerCountScalePercent: number;
   /** 每個玩家開局前選好、整局固定的可蓋屬性集合;沒有對應項目代表不限制(單人用預設值時走這條)。 */
   playerElements: Record<PlayerId, Element[]>;
+  /** 這個 tick 發生的攻擊事件,只給 UI 顯示飄動傷害數字用,每個 tick 開始都會清空重算,不是累積狀態。 */
+  combatEvents: CombatEvent[];
   /** 除錯用:多台機器互相比對,一旦不一致就代表跑飛了 */
   checksum: string;
 }
@@ -47,9 +58,16 @@ export function createInitialState(
   difficultyPercent = 100,
   playerElements: Record<PlayerId, Element[]> = {},
 ): SimulationState {
+  const gold: Record<PlayerId, number> = {};
+  for (const playerId of Object.keys(playerElements)) gold[playerId] = STARTING_GOLD;
+
+  const playerCount = Math.max(1, Object.keys(playerElements).length);
+  // 每多一個玩家 +20% 血量/速度,單人(playerCount=1)固定是 100%,不影響既有單人平衡。
+  const playerCountScalePercent = 100 + (playerCount - 1) * 20;
+
   return {
     tick: 0,
-    gold: STARTING_GOLD,
+    gold,
     lives: STARTING_LIVES,
     towers: [],
     monsters: [],
@@ -59,18 +77,20 @@ export function createInitialState(
     victory: false,
     bonusAwarded: WAVES.map(() => false),
     difficultyPercent,
+    playerCountScalePercent,
     playerElements,
+    combatEvents: [],
     checksum: seed.toString(16),
   };
 }
 
-/** 依難度倍率縮放怪物數值,整數運算(floor),維持決定性。 */
-function scaledSpawn(spawn: SpawnEvent, difficultyPercent: number): SpawnEvent {
-  if (difficultyPercent === 100) return spawn;
+/** 依難度倍率+人數加成縮放怪物數值,整數運算(floor),維持決定性。賞金只跟著難度倍率,不跟人數加成。 */
+function scaledSpawn(spawn: SpawnEvent, difficultyPercent: number, playerCountScalePercent: number): SpawnEvent {
+  const combatPercent = Math.floor((difficultyPercent * playerCountScalePercent) / 100);
   return {
     ...spawn,
-    hp: Math.floor((spawn.hp * difficultyPercent) / 100),
-    speedFp: Math.floor((spawn.speedFp * difficultyPercent) / 100),
+    hp: Math.floor((spawn.hp * combatPercent) / 100),
+    speedFp: Math.floor((spawn.speedFp * combatPercent) / 100),
     bounty: Math.floor((spawn.bounty * difficultyPercent) / 100),
   };
 }
@@ -80,9 +100,17 @@ function asFiniteInt(v: unknown): number | null {
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
+/** 每個現存玩家的金幣都各加 amount——擊殺賞金/加碼波獎勵都是「全員各自拿全額」,不用追蹤是誰打的。 */
+function grantGoldToAllPlayers(state: SimulationState, amount: number): void {
+  for (const playerId of Object.keys(state.gold)) {
+    state.gold[playerId] += amount;
+  }
+}
+
 function cloneState(state: SimulationState): SimulationState {
   return {
     ...state,
+    gold: { ...state.gold },
     towers: state.towers.map((t) => ({ ...t })),
     monsters: state.monsters.map((m) => ({ ...m, pos: { ...m.pos } })),
     bonusAwarded: [...state.bonusAwarded],
@@ -101,8 +129,9 @@ function applyBuildTower(state: SimulationState, playerId: PlayerId, action: Act
   const allowed = state.playerElements[playerId];
   if (allowed && !allowed.includes(element)) return; // 不是這個玩家選好的屬性,安全忽略
   const def = TOWER_DEFS[element as Element];
-  if (state.gold < def.cost) return;
-  state.gold -= def.cost;
+  const gold = state.gold[playerId] ?? 0;
+  if (gold < def.cost) return;
+  state.gold[playerId] = gold - def.cost;
   state.towers.push({
     id: state.nextTowerId++,
     element: element as Element,
@@ -110,33 +139,39 @@ function applyBuildTower(state: SimulationState, playerId: PlayerId, action: Act
     y,
     level: 1,
     ticksSinceLastAttack: 0,
+    ownerId: playerId,
   });
 }
 
-function applySellTower(state: SimulationState, action: Action): void {
+/** 賣塔只有蓋的本人能賣(避免動到別人的投資),退回的錢算他自己的。 */
+function applySellTower(state: SimulationState, playerId: PlayerId, action: Action): void {
   const towerId = asFiniteInt(action.params.towerId);
   if (towerId === null) return;
   const idx = state.towers.findIndex((t) => t.id === towerId);
   if (idx === -1) return;
-  state.gold += sellValue(state.towers[idx]);
+  const tower = state.towers[idx];
+  if (tower.ownerId !== playerId) return;
+  state.gold[playerId] = (state.gold[playerId] ?? 0) + sellValue(tower);
   state.towers.splice(idx, 1);
 }
 
-function applyUpgradeTower(state: SimulationState, action: Action): void {
+/** 升級不分誰的塔,誰都能幫忙出錢升級,但花的是出手升級這個人自己的錢。 */
+function applyUpgradeTower(state: SimulationState, playerId: PlayerId, action: Action): void {
   const towerId = asFiniteInt(action.params.towerId);
   if (towerId === null) return;
   const tower = state.towers.find((t) => t.id === towerId);
   if (!tower) return;
   const cost = upgradeCost(tower);
-  if (cost === null || state.gold < cost) return;
-  state.gold -= cost;
+  const gold = state.gold[playerId] ?? 0;
+  if (cost === null || gold < cost) return;
+  state.gold[playerId] = gold - cost;
   tower.level += 1;
 }
 
 function applyCommand(state: SimulationState, playerId: PlayerId, action: Action): void {
   if (action.kind === 'build_tower') applyBuildTower(state, playerId, action);
-  else if (action.kind === 'sell_tower') applySellTower(state, action);
-  else if (action.kind === 'upgrade_tower') applyUpgradeTower(state, action);
+  else if (action.kind === 'sell_tower') applySellTower(state, playerId, action);
+  else if (action.kind === 'upgrade_tower') applyUpgradeTower(state, playerId, action);
   // 其他/未知 kind 一律安全忽略
 }
 
@@ -149,12 +184,17 @@ function simpleHash(input: string): string {
 }
 
 function computeChecksum(state: SimulationState): string {
+  // 排序 key 避免不同機器上 Record 的 key 插入順序不同導致 checksum 誤判跑飛。
+  const goldPart = Object.keys(state.gold)
+    .sort()
+    .map((id) => `${id}:${state.gold[id]}`)
+    .join(',');
   const towerPart = state.towers.map((t) => `${t.id}:${t.x}:${t.y}:${t.element}:${t.level}`).join(';');
   const monsterPart = state.monsters
     .map((m) => `${m.id}:${m.hp}:${m.pos.pathId}:${m.pos.segmentIndex}:${m.pos.distanceIntoSegmentFp}`)
     .join(';');
   const bonusPart = state.bonusAwarded.map((b) => (b ? '1' : '0')).join('');
-  return simpleHash(`${state.tick}|${state.gold}|${state.lives}|${towerPart}|${monsterPart}|${bonusPart}`);
+  return simpleHash(`${state.tick}|${goldPart}|${state.lives}|${towerPart}|${monsterPart}|${bonusPart}`);
 }
 
 /** 加碼波判定:限時內把整波怪物清光,發放額外金幣;不管有沒有趕上時限,都只判定一次。 */
@@ -176,7 +216,7 @@ function applyBonusWaveRewards(state: SimulationState, tick: number): void {
 
     const stillAlive = state.monsters.some((m) => m.waveIndex === i);
     if (!stillAlive) {
-      state.gold += wave.bonusGold;
+      grantGoldToAllPlayers(state, wave.bonusGold);
       state.bonusAwarded[i] = true;
     }
   }
@@ -184,11 +224,12 @@ function applyBonusWaveRewards(state: SimulationState, tick: number): void {
 
 export function step(state: SimulationState, tick: number, commands: TimedCommand[]): SimulationState {
   if (state.gameOver || state.victory) {
-    return { ...state, tick };
+    return { ...state, tick, combatEvents: [] };
   }
 
   const next = cloneState(state);
   next.tick = tick;
+  next.combatEvents = [];
 
   // 依 playerId 排序,確保指令套用順序在所有機器上完全一致
   const sorted = [...commands].sort((a, b) => a.playerId.localeCompare(b.playerId));
@@ -197,7 +238,8 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   }
 
   for (const spawn of getSpawnEventsForTick(tick)) {
-    next.monsters.push(createMonster(next.nextMonsterId++, scaledSpawn(spawn, next.difficultyPercent)));
+    const scaled = scaledSpawn(spawn, next.difficultyPercent, next.playerCountScalePercent);
+    next.monsters.push(createMonster(next.nextMonsterId++, scaled));
   }
 
   // 怪物移動,漏怪扣生命
@@ -214,11 +256,13 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   next.monsters = survivors;
 
   for (const tower of next.towers) {
-    tryAttack(tower, next.monsters);
+    const event = tryAttack(tower, next.monsters);
+    if (event) next.combatEvents.push(event);
   }
 
   const dead = next.monsters.filter((m) => m.hp <= 0);
-  for (const m of dead) next.gold += m.bounty;
+  // 擊殺賞金:不追蹤是誰的塔打死的(多座塔常常一起打中同一隻),每個現存玩家都各自拿全額。
+  for (const m of dead) grantGoldToAllPlayers(next, m.bounty);
   next.monsters = next.monsters.filter((m) => m.hp > 0);
 
   applyBonusWaveRewards(next, tick);

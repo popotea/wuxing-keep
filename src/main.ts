@@ -7,7 +7,7 @@ import { Room, type RoomHandlers } from './net/room';
 import type { Action, PlayerInfo } from './net/protocol';
 import { createGameRenderer } from './game/PhaserGame';
 import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
-import { LocalEngine } from './sim/localEngine';
+import { LOCAL_PLAYER_ID, LocalEngine } from './sim/localEngine';
 import { FP_SCALE } from './sim/map';
 import { activeBonusWaveInfo, currentWaveNumber, ticksUntilNextWave, upcomingWaveDef } from './sim/monsters';
 import { STARTING_LIVES, type SimulationState } from './sim/simulation';
@@ -30,6 +30,8 @@ const tabSoloEl = $<HTMLButtonElement>('tabSolo');
 const tabMultiEl = $<HTMLButtonElement>('tabMulti');
 const soloPanelEl = $<HTMLElement>('soloPanel');
 const multiPanelEl = $<HTMLElement>('multiPanel');
+const multiSetupEl = $<HTMLElement>('multiSetup');
+const multiLobbyEl = $<HTMLElement>('multiLobby');
 const soloBtn = $<HTMLButtonElement>('soloBtn');
 const turnUserInput = $<HTMLInputElement>('turnUser');
 const turnCredInput = $<HTMLInputElement>('turnCred');
@@ -43,11 +45,15 @@ const joinBtn = $<HTMLButtonElement>('joinBtn');
 const inviteLinkInput = $<HTMLInputElement>('inviteLink');
 const copyLinkBtn = $<HTMLButtonElement>('copyLinkBtn');
 const rosterEl = $<HTMLUListElement>('roster');
+const rosterCountEl = $<HTMLSpanElement>('rosterCount');
 const readyBtn = $<HTMLButtonElement>('readyBtn');
 const startBtn = $<HTMLButtonElement>('startBtn');
+const startHintEl = $<HTMLParagraphElement>('startHint');
+const leaveRoomBtn = $<HTMLButtonElement>('leaveRoomBtn');
 const buildBarEl = $<HTMLDivElement>('buildBar');
 const towerPanelEl = $<HTMLDivElement>('towerPanel');
 const towerPanelElementEl = $<HTMLSpanElement>('towerPanelElement');
+const towerPanelOwnerEl = $<HTMLSpanElement>('towerPanelOwner');
 const towerPanelLevelEl = $<HTMLSpanElement>('towerPanelLevel');
 const towerPanelDamageEl = $<HTMLSpanElement>('towerPanelDamage');
 const towerPanelRangeEl = $<HTMLSpanElement>('towerPanelRange');
@@ -85,6 +91,16 @@ function submitAction(action: Action): void {
   else clientEngine?.submitLocalCommand(action);
 }
 
+/** 單人模式固定是 LOCAL_PLAYER_ID,連線模式是 room 給的 playerId。 */
+function myPlayerId(): string {
+  return room ? room.getMyPlayerId() : LOCAL_PLAYER_ID;
+}
+
+function displayNameFor(playerId: string): string {
+  if (playerId === myPlayerId()) return '你';
+  return room?.getRoster().find((p) => p.playerId === playerId)?.name ?? playerId;
+}
+
 const gameRenderer = createGameRenderer(
   'gameCanvas',
   (x, y) => {
@@ -105,21 +121,25 @@ function renderTowerPanel(): void {
   if (!tower) return;
 
   const stats = describeTower(tower);
-  towerPanelElementEl.textContent = ELEMENT_NAMES[tower.element];
+  const myGold = latestState?.gold[myPlayerId()] ?? 0;
+  towerPanelElementEl.textContent = `${ELEMENT_NAMES[tower.element]}塔`;
   towerPanelElementEl.className = `element-${tower.element}`;
+  towerPanelOwnerEl.textContent = displayNameFor(tower.ownerId);
   towerPanelLevelEl.textContent = String(tower.level);
   towerPanelDamageEl.textContent = String(stats.damage);
   towerPanelRangeEl.textContent = (stats.rangeFp / FP_SCALE).toFixed(1);
   towerPanelCooldownEl.textContent = ((stats.cooldownTicks * currentTickRateMs) / 1000).toFixed(2);
   towerSellValueEl.textContent = String(stats.sellValue);
 
+  // 升級不分誰的塔,誰都能幫忙出錢升級;賣塔限本人,避免動到別人的投資。
   if (stats.upgradeCost === null) {
     towerUpgradeCostEl.textContent = '已滿級';
     towerUpgradeBtn.disabled = true;
   } else {
     towerUpgradeCostEl.textContent = String(stats.upgradeCost);
-    towerUpgradeBtn.disabled = (latestState?.gold ?? 0) < stats.upgradeCost;
+    towerUpgradeBtn.disabled = myGold < stats.upgradeCost;
   }
+  towerSellBtn.disabled = tower.ownerId !== myPlayerId();
 }
 
 towerUpgradeBtn.addEventListener('click', () => {
@@ -135,6 +155,30 @@ towerSellBtn.addEventListener('click', () => {
 
 towerDeselectBtn.addEventListener('click', () => {
   gameRenderer.setSelectedTower(null);
+});
+
+// 快捷鍵:1~5 切建塔屬性、Delete/Backspace 賣掉選中的塔、Esc 取消選取。只在對局畫面生效,
+// 且游標在任何輸入框裡(暱稱/房號等)時整個忽略,不然打字會被誤判成快捷鍵。
+window.addEventListener('keydown', (ev) => {
+  if (gameScreenEl.hidden) return;
+  const activeTag = document.activeElement?.tagName;
+  if (activeTag === 'INPUT' || activeTag === 'SELECT' || activeTag === 'TEXTAREA') return;
+
+  if (ev.key === 'Escape') {
+    gameRenderer.setSelectedTower(null);
+    return;
+  }
+  if ((ev.key === 'Delete' || ev.key === 'Backspace') && selectedTowerId !== null && !towerSellBtn.disabled) {
+    submitAction({ kind: 'sell_tower', params: { towerId: selectedTowerId } });
+    gameRenderer.setSelectedTower(null);
+    return;
+  }
+  const slot = Number(ev.key);
+  if (Number.isInteger(slot) && slot >= 1 && slot <= 5) {
+    const radios = buildBarEl.querySelectorAll<HTMLInputElement>('input[name="element"]');
+    const radio = radios[slot - 1];
+    if (radio) radio.checked = true;
+  }
 });
 
 function log(msg: string): void {
@@ -155,10 +199,11 @@ function buildInviteLink(roomCode: string): string {
   return url.toString();
 }
 
-// 網址帶 ?room=xxx 的話直接幫忙填進「加入房間」欄位——朋友點連結就不用手動輸入房號
+// 網址帶 ?room=xxx 的話直接幫忙填進「加入房間」欄位、切到多人頁籤——朋友點連結就不用手動輸入房號或選頁籤
 const roomCodeFromUrl = new URLSearchParams(window.location.search).get('room');
 if (roomCodeFromUrl) {
   joinCodeInput.value = roomCodeFromUrl;
+  setMode('multi');
 }
 
 function showGameScreen(show: boolean): void {
@@ -177,18 +222,63 @@ function setMode(mode: 'solo' | 'multi'): void {
 tabSoloEl.addEventListener('click', () => setMode('solo'));
 tabMultiEl.addEventListener('click', () => setMode('multi'));
 
+/** 建立/加入房間成功後,把設定表單換成房間 Lobby(不再兩者一起顯示)。 */
+function showLobby(show: boolean): void {
+  multiSetupEl.hidden = show;
+  multiLobbyEl.hidden = !show;
+}
+
+/** 離開房間/房間結束(尚未開打前)時,回到多人連線的設定表單,清掉房間殘留狀態。 */
+function resetToMultiSetup(): void {
+  matchActive = false;
+  room = null;
+  hostEngine?.stop();
+  hostEngine = null;
+  clientEngine = null;
+  showLobby(false);
+  roomCodeEl.textContent = '-';
+  inviteLinkInput.value = '';
+  copyLinkBtn.disabled = true;
+  rosterEl.innerHTML = '';
+  rosterCountEl.textContent = '0';
+  readyBtn.disabled = true;
+  startBtn.disabled = true;
+  startHintEl.textContent = '';
+  soloBtn.disabled = false;
+  hostBtn.disabled = false;
+  joinBtn.disabled = false;
+}
+
+/** roster 裡的暱稱是別人打的(P2P 廣播過來),塞進 innerHTML 前一定要跳脫,不然可以注入任意標籤。 */
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (ch) => ESCAPE_MAP[ch]);
+}
+
+const ESCAPE_MAP: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
 function renderRoster(roster: PlayerInfo[]): void {
   const myId = room?.getMyPlayerId();
+  rosterCountEl.textContent = String(roster.length);
   rosterEl.innerHTML = roster
     .map((p) => {
       const you = p.playerId === myId ? '(你)' : '';
-      const readyMark = p.ready ? '<span class="ready-yes">✅ 已準備</span>' : '<span class="ready-no">⏳ 未準備</span>';
+      const readyMark = p.ready
+        ? '<span class="ready-yes"><svg class="icon"><use href="#icon-check" /></svg> 已準備</span>'
+        : '<span class="ready-no"><svg class="icon"><use href="#icon-pending" /></svg> 未準備</span>';
       const elementNames = p.elements.map((e) => ELEMENT_NAMES[e]).join('');
-      return `<li>slot ${p.slot}: ${p.name}${you} [${elementNames}] ${readyMark}</li>`;
+      return `<li>slot ${p.slot}: ${escapeHtml(p.name)}${you} [${elementNames}] ${readyMark}</li>`;
     })
     .join('');
   const me = roster.find((p) => p.playerId === myId);
-  readyBtn.textContent = me?.ready ? '❌ 取消準備' : '✅ 準備';
+  readyBtn.innerHTML = me?.ready
+    ? '<svg class="icon"><use href="#icon-close" /></svg> 取消準備'
+    : '<svg class="icon"><use href="#icon-check" /></svg> 準備';
 }
 
 /** 目前用哪一個元素選擇區塊的 checkbox 群組(solo 選單 vs 多人選單),回傳玩家勾選的屬性(至少 1 個)。 */
@@ -265,6 +355,19 @@ function renderLivesBar(lives: number): void {
   const ratio = Math.max(0, Math.min(1, lives / STARTING_LIVES));
   livesBarEl.style.width = `${ratio * 100}%`;
   livesBarEl.style.background = ratio > 0.5 ? '#3a9d3a' : ratio > 0.25 ? '#d4af37' : '#e05a2b';
+  livesBarEl.parentElement?.classList.toggle('lives-critical', ratio <= 0.25);
+}
+
+/** 對局開始/回選單時清掉上一場的勝敗橫幅跟樣式,不然舊的發光顏色會殘留。 */
+function resetResultBanner(): void {
+  resultBannerEl.textContent = '';
+  resultBannerEl.classList.remove('result-victory', 'result-defeat');
+}
+
+function showResult(text: string, variant: 'victory' | 'defeat'): void {
+  resultBannerEl.textContent = text;
+  resultBannerEl.classList.remove('result-victory', 'result-defeat');
+  resultBannerEl.classList.add(`result-${variant}`);
 }
 
 function renderWaveHud(tick: number): void {
@@ -276,8 +379,8 @@ function renderWaveHud(tick: number): void {
   nextWaveElementEl.textContent = upcoming ? ELEMENT_NAMES[upcoming.element] : '—';
 
   const bonus = activeBonusWaveInfo(tick);
-  bonusWaveEl.textContent = bonus
-    ? `⭐ 加碼波!剩 ${Math.ceil((bonus.ticksLeft * currentTickRateMs) / 1000)}s 內清光可得 ${bonus.bonusGold} 金幣`
+  bonusWaveEl.innerHTML = bonus
+    ? `<svg class="icon"><use href="#icon-star" /></svg> 加碼波!剩 ${Math.ceil((bonus.ticksLeft * currentTickRateMs) / 1000)}s 內清光可得 ${bonus.bonusGold} 金幣`
     : '';
 }
 
@@ -295,19 +398,19 @@ const lockstepHandlers: LockstepHandlers = {
     latestState = state;
     tickEl.textContent = String(state.tick);
     checksumEl.textContent = state.checksum;
-    goldEl.textContent = String(state.gold);
+    goldEl.textContent = String(state.gold[myPlayerId()] ?? 0);
     livesEl.textContent = String(state.lives);
     renderLivesBar(state.lives);
     renderWaveHud(state.tick);
     gameRenderer.renderState(state);
     renderTowerPanel();
     if (state.gameOver) {
-      resultBannerEl.textContent = '守備失敗(生命歸零)';
+      showResult('守備失敗(生命歸零)', 'defeat');
       saveBestRecordIfBetter({ wave: currentWaveNumber(state.tick), cleared: false });
       endLocalMatch();
       backToMenuBtn.style.display = 'inline-block';
     } else if (state.victory) {
-      resultBannerEl.textContent = '守備成功!全部波次清空';
+      showResult('守備成功!全部波次清空', 'victory');
       saveBestRecordIfBetter({ wave: currentWaveNumber(state.tick), cleared: true });
       endLocalMatch();
       backToMenuBtn.style.display = 'inline-block';
@@ -322,15 +425,19 @@ const roomHandlers: RoomHandlers = {
   onRosterChanged: (roster) => {
     renderRoster(roster);
     readyBtn.disabled = false;
-    startBtn.disabled = room?.getRole() !== 'host' || roster.length === 0 || !roster.every((p) => p.ready);
+    const isHost = room?.getRole() === 'host';
+    const allReady = roster.length > 0 && roster.every((p) => p.ready);
+    startBtn.disabled = !isHost || !allReady;
+    startHintEl.textContent = isHost ? (allReady ? '所有人已準備,可以開始!' : '等待所有人準備...') : '等待房主開始對局...';
   },
   onMatchStarted: (payload) => {
     log(`對局開始,seed=${payload.seed}`);
     matchActive = true;
     currentTickRateMs = payload.tickRateMs;
-    resultBannerEl.textContent = '';
+    resetResultBanner();
     showGameScreen(true);
     gameRenderer.setSelectedTower(null);
+    gameRenderer.resetCamera();
     if (!room) return;
     const me = payload.roster.find((p) => p.playerId === room?.getMyPlayerId());
     populateBuildBar(me?.elements ?? ['metal']);
@@ -354,13 +461,19 @@ const roomHandlers: RoomHandlers = {
   onRejected: (reason) => log(`加入被拒絕:${reason}`),
   onRoomEnded: (reasonText) => {
     log(`房間結束:${reasonText}`);
-    matchActive = false;
-    hostEngine?.stop();
-    hostEngine = null;
-    clientEngine = null;
-    readyBtn.disabled = true;
-    startBtn.disabled = true;
-    backToMenuBtn.style.display = 'inline-block';
+    if (matchActive) {
+      // 對局進行中房主斷線:MVP 決定直接結束對局,遊戲畫面留著讓玩家按「回到選單」自己收尾
+      matchActive = false;
+      hostEngine?.stop();
+      hostEngine = null;
+      clientEngine = null;
+      readyBtn.disabled = true;
+      startBtn.disabled = true;
+      backToMenuBtn.style.display = 'inline-block';
+    } else {
+      // 還在 Lobby 階段就斷線(例如房主關掉分頁):直接退回設定表單重新來過
+      resetToMultiSetup();
+    }
   },
   onCommand: (cmd) => hostEngine?.enqueueRemoteCommand(cmd),
   onTick: (tick) => clientEngine?.receiveTick(tick),
@@ -377,9 +490,10 @@ soloBtn.addEventListener('click', () => {
   joinBtn.disabled = true;
   matchActive = true;
   currentTickRateMs = BASE_MATCH_CONFIG.tickRateMs;
-  resultBannerEl.textContent = '';
+  resetResultBanner();
   showGameScreen(true);
   gameRenderer.setSelectedTower(null);
+  gameRenderer.resetCamera();
   populateBuildBar(elements);
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   localEngine = new LocalEngine(
@@ -395,8 +509,12 @@ soloBtn.addEventListener('click', () => {
 
 backToMenuBtn.addEventListener('click', () => {
   showGameScreen(false);
-  resultBannerEl.textContent = '';
+  resetResultBanner();
   gameRenderer.setSelectedTower(null);
+  if (room) {
+    room.destroy();
+    resetToMultiSetup();
+  }
 });
 
 hostBtn.addEventListener('click', () => {
@@ -413,6 +531,7 @@ hostBtn.addEventListener('click', () => {
       roomCodeEl.textContent = roomCode;
       inviteLinkInput.value = buildInviteLink(roomCode);
       copyLinkBtn.disabled = false;
+      showLobby(true);
       log(`房間已建立:${roomCode}`);
     })
     .catch((err: unknown) => {
@@ -434,6 +553,10 @@ joinBtn.addEventListener('click', () => {
   void Room.join(code, joinNameInput.value || '玩家', elements, iceConfigFromForm(), roomHandlers)
     .then((r) => {
       room = r;
+      roomCodeEl.textContent = code;
+      inviteLinkInput.value = buildInviteLink(code);
+      copyLinkBtn.disabled = false;
+      showLobby(true);
       log(`已加入房間:${code}`);
     })
     .catch((err: unknown) => {
@@ -447,6 +570,12 @@ readyBtn.addEventListener('click', () => {
   if (!room) return;
   const me = room.getRoster().find((p) => p.playerId === room?.getMyPlayerId());
   room.setReady(!me?.ready);
+});
+
+leaveRoomBtn.addEventListener('click', () => {
+  room?.destroy();
+  resetToMultiSetup();
+  log('已離開房間');
 });
 
 copyLinkBtn.addEventListener('click', () => {

@@ -7,7 +7,7 @@ import type { Element } from './elements';
 import { createInitialState, step, type SimulationState } from './simulation';
 import type { Action, PlayerId, TimedCommand } from '../net/protocol';
 
-const LOCAL_PLAYER_ID: PlayerId = 'local';
+export const LOCAL_PLAYER_ID: PlayerId = 'local';
 
 export interface LocalEngineHandlers {
   onStateUpdated?: (state: SimulationState) => void;
