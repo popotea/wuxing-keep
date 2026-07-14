@@ -5,9 +5,9 @@ import type { IceConfig } from './net/net';
 import { HostLockstepEngine, ClientLockstepEngine, type LockstepHandlers } from './net/lockstep';
 import { Room, type MatchConfig, type RoomHandlers } from './net/room';
 import type { PlayerInfo } from './net/protocol';
+import { createGameRenderer } from './game/PhaserGame';
 import { ELEMENT_NAMES, type Element } from './sim/elements';
-import { FP_SCALE, GRID_HEIGHT, GRID_WIDTH, PATH_WAYPOINTS, worldPositionFp } from './sim/map';
-import type { SimulationState } from './sim/simulation';
+import { LocalEngine } from './sim/localEngine';
 
 const DEFAULT_MATCH_CONFIG: MatchConfig = {
   tickRateMs: 50,
@@ -15,20 +15,11 @@ const DEFAULT_MATCH_CONFIG: MatchConfig = {
   countdownMs: 3000,
 };
 
-const TILE_PX = 32;
-
-const ELEMENT_COLORS: Record<Element, string> = {
-  metal: '#d4af37',
-  wood: '#3a9d3a',
-  water: '#3a7bd5',
-  fire: '#e05a2b',
-  earth: '#a67c3d',
-};
-
 function $<T extends HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
 }
 
+const soloBtn = $<HTMLButtonElement>('soloBtn');
 const turnUserInput = $<HTMLInputElement>('turnUser');
 const turnCredInput = $<HTMLInputElement>('turnCred');
 const hostNameInput = $<HTMLInputElement>('hostName');
@@ -47,15 +38,20 @@ const tickEl = $<HTMLSpanElement>('tick');
 const checksumEl = $<HTMLSpanElement>('checksum');
 const resultBannerEl = $<HTMLDivElement>('resultBanner');
 const logEl = $<HTMLPreElement>('log');
-const gameCanvas = $<HTMLCanvasElement>('gameCanvas');
-const canvasCtx = gameCanvas.getContext('2d');
-if (!canvasCtx) throw new Error('無法取得 2D canvas context');
-const ctx = canvasCtx;
 
 let room: Room | null = null;
 let hostEngine: HostLockstepEngine | null = null;
 let clientEngine: ClientLockstepEngine | null = null;
+let localEngine: LocalEngine | null = null;
 let matchActive = false;
+
+const gameRenderer = createGameRenderer('gameCanvas', (x, y) => {
+  if (!matchActive || (!room && !localEngine)) return;
+  const action = { kind: 'build_tower', params: { x, y, element: selectedElement() } };
+  if (localEngine) localEngine.submitCommand(action);
+  else if (room?.getRole() === 'host') hostEngine?.submitLocalCommand(action);
+  else clientEngine?.submitLocalCommand(action);
+});
 
 function log(msg: string): void {
   logEl.textContent = `${new Date().toLocaleTimeString()} ${msg}\n${logEl.textContent ?? ''}`;
@@ -92,53 +88,13 @@ function selectedElement(): Element {
   return (checked?.value as Element | undefined) ?? 'metal';
 }
 
-function renderGame(state: SimulationState): void {
-  ctx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
-
-  // 網格
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = 1;
-  for (let x = 0; x <= GRID_WIDTH; x++) {
-    ctx.beginPath();
-    ctx.moveTo(x * TILE_PX, 0);
-    ctx.lineTo(x * TILE_PX, GRID_HEIGHT * TILE_PX);
-    ctx.stroke();
-  }
-  for (let y = 0; y <= GRID_HEIGHT; y++) {
-    ctx.beginPath();
-    ctx.moveTo(0, y * TILE_PX);
-    ctx.lineTo(GRID_WIDTH * TILE_PX, y * TILE_PX);
-    ctx.stroke();
-  }
-
-  // 路徑
-  ctx.strokeStyle = '#555';
-  ctx.lineWidth = TILE_PX * 0.6;
-  ctx.beginPath();
-  PATH_WAYPOINTS.forEach(([x, y], i) => {
-    const px = x * TILE_PX + TILE_PX / 2;
-    const py = y * TILE_PX + TILE_PX / 2;
-    if (i === 0) ctx.moveTo(px, py);
-    else ctx.lineTo(px, py);
-  });
-  ctx.stroke();
-
-  // 塔
-  for (const t of state.towers) {
-    ctx.fillStyle = ELEMENT_COLORS[t.element];
-    ctx.beginPath();
-    ctx.arc(t.x * TILE_PX + TILE_PX / 2, t.y * TILE_PX + TILE_PX / 2, TILE_PX * 0.35, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // 怪物
-  for (const m of state.monsters) {
-    const { xFp, yFp } = worldPositionFp(m.pos);
-    const px = (xFp / FP_SCALE) * TILE_PX;
-    const py = (yFp / FP_SCALE) * TILE_PX;
-    ctx.fillStyle = ELEMENT_COLORS[m.element];
-    ctx.fillRect(px - 4, py - 4, 8, 8);
-  }
+function endLocalMatch(): void {
+  if (!localEngine) return;
+  localEngine.stop();
+  localEngine = null;
+  soloBtn.disabled = false;
+  hostBtn.disabled = false;
+  joinBtn.disabled = false;
 }
 
 const lockstepHandlers: LockstepHandlers = {
@@ -147,9 +103,14 @@ const lockstepHandlers: LockstepHandlers = {
     checksumEl.textContent = state.checksum;
     goldEl.textContent = String(state.gold);
     livesEl.textContent = String(state.lives);
-    renderGame(state);
-    if (state.gameOver) resultBannerEl.textContent = '守備失敗(生命歸零)';
-    else if (state.victory) resultBannerEl.textContent = '守備成功!全部波次清空';
+    gameRenderer.renderState(state);
+    if (state.gameOver) {
+      resultBannerEl.textContent = '守備失敗(生命歸零)';
+      endLocalMatch();
+    } else if (state.victory) {
+      resultBannerEl.textContent = '守備成功!全部波次清空';
+      endLocalMatch();
+    }
   },
   onWaitingForTick: () => {
     // MVP 測試頁先不特別顯示等待狀態,tick 數字停住不動就代表在等
@@ -194,8 +155,21 @@ const roomHandlers: RoomHandlers = {
   onTick: (tick) => clientEngine?.receiveTick(tick),
 };
 
+soloBtn.addEventListener('click', () => {
+  soloBtn.disabled = true;
+  hostBtn.disabled = true;
+  joinBtn.disabled = true;
+  matchActive = true;
+  resultBannerEl.textContent = '';
+  const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+  localEngine = new LocalEngine(seed, DEFAULT_MATCH_CONFIG.tickRateMs, lockstepHandlers);
+  localEngine.start();
+  log(`單人模式開始,seed=${seed}`);
+});
+
 hostBtn.addEventListener('click', () => {
   hostBtn.disabled = true;
+  soloBtn.disabled = true;
   void Room.host(hostNameInput.value || '房主', iceConfigFromForm(), roomHandlers)
     .then(({ room: r, roomCode }) => {
       room = r;
@@ -207,11 +181,13 @@ hostBtn.addEventListener('click', () => {
     .catch((err: unknown) => {
       log(`建立房間失敗:${String(err)}`);
       hostBtn.disabled = false;
+      soloBtn.disabled = false;
     });
 });
 
 joinBtn.addEventListener('click', () => {
   joinBtn.disabled = true;
+  soloBtn.disabled = true;
   const code = joinCodeInput.value.trim();
   void Room.join(code, joinNameInput.value || '玩家', iceConfigFromForm(), roomHandlers)
     .then((r) => {
@@ -221,6 +197,7 @@ joinBtn.addEventListener('click', () => {
     .catch((err: unknown) => {
       log(`加入房間失敗:${String(err)}`);
       joinBtn.disabled = false;
+      soloBtn.disabled = false;
     });
 });
 
@@ -236,16 +213,6 @@ copyLinkBtn.addEventListener('click', () => {
 
 startBtn.addEventListener('click', () => {
   room?.startMatch(DEFAULT_MATCH_CONFIG);
-});
-
-gameCanvas.addEventListener('click', (ev) => {
-  if (!matchActive || !room) return;
-  const rect = gameCanvas.getBoundingClientRect();
-  const x = Math.floor(((ev.clientX - rect.left) / rect.width) * GRID_WIDTH);
-  const y = Math.floor(((ev.clientY - rect.top) / rect.height) * GRID_HEIGHT);
-  const action = { kind: 'build_tower', params: { x, y, element: selectedElement() } };
-  if (room.getRole() === 'host') hostEngine?.submitLocalCommand(action);
-  else clientEngine?.submitLocalCommand(action);
 });
 
 log(`元素對照:${Object.entries(ELEMENT_NAMES).map(([k, v]) => `${k}=${v}`).join(' ')}`);
