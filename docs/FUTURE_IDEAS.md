@@ -8,7 +8,7 @@
 
 **滑鼠滾輪縮放 + 拖曳/平移鏡頭**,讓玩家能巡視隊友在地圖上其他地方的建塔狀況(魔獸爭霸小地圖的概念,不是切到別人的獨立畫面——目前架構本來就是所有玩家共用同一份地圖/`SimulationState`)。
 
-- 現況:地圖固定 16x10 格(512x320px),全景一次就看完,目前不需要平移。
+- 現況:地圖已經放大到 22x14 格(880x560px,原本是 16x10),全景一次還看得完,目前還不需要平移。
 - 這個功能要有意義,前提是地圖之後做得比視窗大(全螢幕化 + 8 人 co-op 可能需要更大的地圖才有足夠空間讓大家蓋塔)。
 - 落點:純 Phaser 鏡頭功能(`camera.zoom`、滾輪/拖曳事件),不用動 `src/sim/`。
 - 依賴:Phase 4/5 決定地圖尺寸與是否全螢幕之後才好排進時程。
@@ -17,7 +17,9 @@
 
 新增可放置物件種類(非攻擊型,例如減速陷阱、資源建築),加上既有塔的升級系統(花金幣把已蓋好的塔升級,提升傷害/範圍/冷卻)。
 
-**✅ 塔升級初版已完成**(`src/sim/towers.ts` 的 `Tower.level`/`upgradeCost`/`MAX_TOWER_LEVEL`,`src/sim/simulation.ts` 的 `upgrade_tower` action):點擊空地蓋塔、點擊已有塔的格子花錢升級,目前只有傷害隨等級線性增加(`TOWER_DEFS[element].damage * level`),範圍/冷卻不受影響,漲價曲線是 `cost * level`,封頂 5 級。這是刻意先求「能玩」的簡化版,之後平衡調整可以再改成非線性曲線,或讓範圍/冷卻也一起變化。
+**✅ 塔升級初版已完成**(`src/sim/towers.ts` 的 `Tower.level`/`upgradeCost`/`MAX_TOWER_LEVEL`,`src/sim/simulation.ts` 的 `upgrade_tower` action):目前只有傷害隨等級線性增加(`TOWER_DEFS[element].damage * level`),範圍/冷卻不受影響,漲價曲線是 `cost * level`,封頂 5 級。這是刻意先求「能玩」的簡化版,之後平衡調整可以再改成非線性曲線,或讓範圍/冷卻也一起變化。
+
+**✅ WC3 式選取面板已完成**:點空地蓋塔;點已經有塔的格子是**選取**(不是直接升級),`src/game/GameScene.ts` 用白色框線標示選到誰,畫面下方 `#towerPanel` 顯示即時屬性(攻擊力/範圍/攻速)跟「升級/賣出/取消選取」三顆按鈕,升級/賣出才是真的送出指令。`src/sim/towers.ts` 的 `describeTower()` 統一算這些顯示用數值,`sellValue()` 跟 `simulation.ts` 的 `applySellTower` 共用同一個公式避免兩邊算法各改各的漂掉。
 
 非攻擊型放置物(陷阱、資源建築)還沒做,維持原本規劃:可以抽一個更廣義的「放置物」介面,`Tower` 只是其中一種實作。
 
@@ -30,12 +32,13 @@
 - 雙屬性塔(同時具備兩種元素的判定)
 - 鄰近塔屬性共鳴加成(例如兩座水塔相鄰有小幅加成)
 - 屬性組合異常狀態(例如水+冰凍、火+灼燒 DOT)
+- **特殊技能/狀況觸發隨機走路方向**:例如怪物中了「冰凍」異常狀態後,可能不會乖乖照原路徑走,會亂走/走錯方向。**重要決定性限制**:模擬層(`src/sim/`)絕對不能用 `Math.random()`(每台機器算出的亂數不一樣,連線會直接跑飛),真的要做「隨機」效果,必須用跟 tick/種子綁定、每台機器都能算出同一個結果的偽隨機(例如用 `tick`、`monster.id`、`seed` 幾個值做雜湊,而不是呼叫 `Math.random()`)。目前的路徑系統(`PathPos.pathId` + `segmentIndex`)要支援「中途換路徑/開倒車」需要額外設計,不是現有結構直接就能長出來的功能。
 
 優先度排在其他項目之後,因為玩法設計本身還沒定案,牽動的範圍也最大。
 
 ## 地圖與難度:交叉/多路徑地形
 
-**✅ 已完成**:`src/sim/map.ts` 的 `PATHS` 現在是路徑陣列(不再是單一 `PATH_WAYPOINTS`),`PathPos` 加了 `pathId`,兩條路徑在 `(9,3)` 交叉。同一波怪物用 `j % PATH_COUNT` 輪流分配路徑,逼玩家同時顧兩條線。`src/sim/towers.ts` 的 `findTarget` 改用 `map.ts` 新增的 `remainingDistanceFp`(跨路徑通用的剩餘距離)取代原本只能同路徑比較的 `segmentIndex`。
+**✅ 已完成**:`src/sim/map.ts` 的 `PATHS` 現在是路徑陣列(不再是單一 `PATH_WAYPOINTS`),地圖放大到 22x14 格,`PathPos` 加了 `pathId`,兩條路徑在 `(16,8)` 交叉。同一波怪物用 `j % PATH_COUNT` 輪流分配路徑,逼玩家同時顧兩條線。`src/sim/towers.ts` 的 `findTarget` 改用 `map.ts` 新增的 `remainingDistanceFp`(跨路徑通用的剩餘距離)取代原本只能同路徑比較的 `segmentIndex`。
 
 目前只有 2 條路徑、1 個交叉點,路線本身沒有經過美術/關卡設計,純粹是「架構上先跑得動」的初版——路徑形狀、交叉點位置、要不要 3 條以上路徑,都還可以再調整。
 
@@ -47,7 +50,8 @@
 
 ## 其他一併記錄的延伸構想
 
-- **單人模式進度保存**:用 localStorage 記錄最高波次/最佳成績。
-- **難度/New Game+ 模式**:通關後可以選更高難度重玩,換取更好的獎勵(比起單純「升級怪物」,這是比較合理的落地方式)。
-- **合作模式資源模型未定案**:現況是全員共用一份金幣/生命(單一 `SimulationState`);要不要改成各自獨立、需要「分工」機制,是 Phase 4 的關鍵未定決策,也會反過來影響「塔升級」要不要區分「誰的塔誰能升級」。
+- **✅ 單人模式進度保存已完成**:用 localStorage(`wuxing-keep:bestRecord`)記錄最高波次/是否全破,HUD 上顯示,破紀錄才會覆蓋。
+- **✅ 難度選擇已完成(簡化版 New Game+),單人/多人都有**:開局前可選「普通/困難」,困難模式怪物 HP/速度 ×150%、獎勵金幣也 ×150%(`SimulationState.difficultyPercent`,`src/sim/simulation.ts` 的 `scaledSpawn`)。單人在選單直接選;多人由房主在「建立房間」表單選,經 `MatchConfig.difficultyPercent`/`StartMatchMsg.difficultyPercent` 傳給所有人。目前沒有「破關才解鎖困難」的門檻,一開始就能選。
+- **✅ 分工的第一版已完成:每人開局選固定的可蓋屬性集合**:`PlayerInfo.elements`(至少 1 個,可複選,單人也適用),`src/sim/simulation.ts` 的 `applyBuildTower` 會擋掉不在允許清單內的建塔指令。**金幣/生命仍然是全員共用一份**(單一 `SimulationState.gold`/`lives`),沒有各自獨立;塔升級也**不分「誰的塔」**,任何玩家都能升級任何人蓋的塔——這兩點還是 Phase 4 尚未定案的部分,要不要進一步做「各自獨立資源」是獨立的下一步決策。
+- **✅ 多人房間流程已完成**:選單改成「單人模式/多人連線」頁籤,多人頁籤裡就有建房/加入/房間狀態(不用展開才看得到)。**新增「準備」機制**:每個人(含房主)要在房間狀態按過「✅ 準備」,房主的「開始對局」按鈕才會解鎖(`Room.setReady()`/`SET_READY`/`ROSTER_UPDATED` 訊息,`src/net/room.ts`)。
 - **音效/BGM**:五行對應音效點綴,歸在 Phase 5 美術範疇,先記一筆避免遺漏。

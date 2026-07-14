@@ -38,9 +38,34 @@ export function upgradeCost(tower: Tower): number | null {
   return TOWER_DEFS[tower.element].cost * tower.level;
 }
 
+/** 賣出可以拿回的金幣;跟 simulation.ts 的 applySellTower 共用同一個公式,避免兩邊算法各改各的漂掉。 */
+export function sellValue(tower: Tower): number {
+  return Math.floor(TOWER_DEFS[tower.element].cost / 2);
+}
+
 /** 初版先只讓等級影響傷害(線性倍增),範圍/冷卻留給之後平衡調整。 */
 function effectiveDamage(tower: Tower): number {
   return TOWER_DEFS[tower.element].damage * tower.level;
+}
+
+export interface TowerStats {
+  damage: number;
+  rangeFp: number;
+  cooldownTicks: number;
+  upgradeCost: number | null;
+  sellValue: number;
+}
+
+/** 給 UI 顯示用(WC3 式選取面板):這座塔目前的實際數值(已套用等級加成)+ 升級/賣出的花費。 */
+export function describeTower(tower: Tower): TowerStats {
+  const def = TOWER_DEFS[tower.element];
+  return {
+    damage: effectiveDamage(tower),
+    rangeFp: def.rangeFp,
+    cooldownTicks: def.cooldownTicks,
+    upgradeCost: upgradeCost(tower),
+    sellValue: sellValue(tower),
+  };
 }
 
 // 現在地圖有多條路徑,segmentIndex/distanceIntoSegmentFp 只在同一條路徑內才有可比性,

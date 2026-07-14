@@ -3,6 +3,7 @@
 // 這一層只認識「房間」的概念;實際怎麼連線是 net.ts 的事,tick 怎麼跑是 lockstep.ts 的事。
 
 import type { DataConnection } from 'peerjs';
+import type { Element } from '../sim/elements';
 import { NetPeer, type IceConfig, type NetError } from './net';
 import {
   PROTOCOL_VERSION,
@@ -44,6 +45,7 @@ export interface MatchConfig {
   tickRateMs: number;
   inputDelayTicks: number;
   countdownMs: number;
+  difficultyPercent: number;
 }
 
 export interface RoomHandlers {
@@ -89,6 +91,7 @@ export class Room {
   /** 房主開房。房號被佔用(unavailable-id)會自動換碼重試,其他錯誤直接拋出。 */
   static async host(
     hostName: string,
+    elements: Element[],
     iceConfig: IceConfig,
     handlers: RoomHandlers,
   ): Promise<{ room: Room; roomCode: string }> {
@@ -99,7 +102,7 @@ export class Room {
       try {
         const peerId = await room.net.open(code);
         room.myPlayerId = peerId;
-        room.roster = [{ playerId: peerId, slot: 0, name: hostName }];
+        room.roster = [{ playerId: peerId, slot: 0, name: hostName, elements, ready: false }];
         room.nextSlot = 1;
         handlers.onRosterChanged?.(room.roster);
         return { room, roomCode: code };
@@ -117,13 +120,14 @@ export class Room {
   static async join(
     roomCode: string,
     myName: string,
+    elements: Element[],
     iceConfig: IceConfig,
     handlers: RoomHandlers,
   ): Promise<Room> {
     const room = new Room(handlers, iceConfig, 'client');
     const conn = await room.net.join(randomClientPeerId(), roomCode);
     room.hostConn = conn;
-    room.net.send(conn, { type: 'HELLO', protocolVersion: PROTOCOL_VERSION, name: myName });
+    room.net.send(conn, { type: 'HELLO', protocolVersion: PROTOCOL_VERSION, name: myName, elements });
     return room;
   }
 
@@ -139,10 +143,23 @@ export class Room {
     return this.role;
   }
 
-  /** 房主專用:鎖房、產生種子、廣播 START_MATCH。 */
+  /** 切換「我」的準備狀態。房主直接改本地 roster 後廣播;客戶端送給房主裁決。 */
+  setReady(ready: boolean): void {
+    if (this.role === 'host') {
+      this.roster = this.roster.map((p) => (p.playerId === this.myPlayerId ? { ...p, ready } : p));
+      this.net.broadcast({ type: 'ROSTER_UPDATED', roster: this.roster });
+      this.handlers.onRosterChanged?.(this.roster);
+    } else {
+      if (!this.hostConn) throw new Error('尚未連上房主');
+      this.net.send(this.hostConn, { type: 'SET_READY', ready });
+    }
+  }
+
+  /** 房主專用:鎖房、產生種子、廣播 START_MATCH。所有人都準備好之前不會真的開始。 */
   startMatch(config: MatchConfig): void {
     if (this.role !== 'host') throw new Error('只有房主可以開始對局');
     if (this.matchStarted) return;
+    if (!this.roster.every((p) => p.ready)) return; // 還有人沒準備好,安全忽略
     this.matchStarted = true;
     const seed = crypto.getRandomValues(new Uint32Array(1))[0];
     const payload: StartMatchMsg = {
@@ -152,6 +169,7 @@ export class Room {
       tickRateMs: config.tickRateMs,
       inputDelayTicks: config.inputDelayTicks,
       countdownMs: config.countdownMs,
+      difficultyPercent: config.difficultyPercent,
     };
     this.net.broadcast(payload);
     this.handlers.onMatchStarted?.(payload);
@@ -206,10 +224,24 @@ export class Room {
           this.net.closeConnection(conn.peer);
           return;
         }
-        const player: PlayerInfo = { playerId: conn.peer, slot: this.nextSlot++, name: msg.name };
+        const player: PlayerInfo = {
+          playerId: conn.peer,
+          slot: this.nextSlot++,
+          name: msg.name,
+          elements: msg.elements,
+          ready: false,
+        };
         this.roster = [...this.roster, player];
         this.net.send(conn, { type: 'WELCOME', youAre: conn.peer, roster: this.roster });
         this.net.broadcast({ type: 'PLAYER_JOINED', player }, conn.peer);
+        this.handlers.onRosterChanged?.(this.roster);
+        return;
+      }
+      case 'SET_READY': {
+        const idx = this.roster.findIndex((p) => p.playerId === conn.peer);
+        if (idx === -1) return;
+        this.roster = this.roster.map((p, i) => (i === idx ? { ...p, ready: msg.ready } : p));
+        this.net.broadcast({ type: 'ROSTER_UPDATED', roster: this.roster });
         this.handlers.onRosterChanged?.(this.roster);
         return;
       }
@@ -234,6 +266,10 @@ export class Room {
         return;
       case 'PLAYER_LEFT':
         this.roster = this.roster.filter((p) => p.playerId !== msg.playerId);
+        this.handlers.onRosterChanged?.(this.roster);
+        return;
+      case 'ROSTER_UPDATED':
+        this.roster = msg.roster;
         this.handlers.onRosterChanged?.(this.roster);
         return;
       case 'REJECT':

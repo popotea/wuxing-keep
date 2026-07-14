@@ -3,6 +3,7 @@
 // 保留跟 HostLockstepEngine 相同的「收指令 -> 下一 tick 套用」節奏,
 // 純粹是少了廣播/收指令的網路往返。
 
+import type { Element } from './elements';
 import { createInitialState, step, type SimulationState } from './simulation';
 import type { Action, PlayerId, TimedCommand } from '../net/protocol';
 
@@ -22,8 +23,10 @@ export class LocalEngine {
     seed: number,
     private tickRateMs: number,
     private handlers: LocalEngineHandlers,
+    difficultyPercent = 100,
+    allowedElements: Element[] = ['metal', 'wood', 'water', 'fire', 'earth'],
   ) {
-    this.state = createInitialState(seed);
+    this.state = createInitialState(seed, difficultyPercent, { [LOCAL_PLAYER_ID]: allowedElements });
   }
 
   start(): void {

@@ -1,14 +1,20 @@
 // Tick 引擎:房主端固定間隔跑 tick、收齊指令、排序、廣播、餵給本地模擬;
 // 客戶端依 tick 編號緩衝,嚴格依序把 TICK 餵給本地模擬,漏收就暫停等待,不跳號。
 
+import type { Element } from '../sim/elements';
 import { createInitialState, step, type SimulationState } from '../sim/simulation';
 import type { MatchConfig, Room } from './room';
-import type { Action, CmdMsg, PlayerId, TickMsg, TimedCommand } from './protocol';
+import type { Action, CmdMsg, PlayerId, PlayerInfo, TickMsg, TimedCommand } from './protocol';
 
 export interface LockstepHandlers {
   onStateUpdated?: (state: SimulationState) => void;
   /** 客戶端專用:目前這個 tick 還沒收到確認,模擬正在暫停等待房主 */
   onWaitingForTick?: (tick: number) => void;
+}
+
+/** roster 裡每個玩家開局前選好的屬性集合,轉成 step() 看得懂的 playerId -> elements 對照表。 */
+function playerElementsFromRoster(roster: PlayerInfo[]): Record<PlayerId, Element[]> {
+  return Object.fromEntries(roster.map((p) => [p.playerId, p.elements]));
 }
 
 /** 房主端:固定間隔跑 tick,收齊指令、排序、廣播,並用同一條路徑餵給自己的本地模擬。 */
@@ -24,7 +30,7 @@ export class HostLockstepEngine {
     seed: number,
     private handlers: LockstepHandlers,
   ) {
-    this.state = createInitialState(seed);
+    this.state = createInitialState(seed, config.difficultyPercent, playerElementsFromRoster(room.getRoster()));
   }
 
   start(): void {
@@ -75,9 +81,10 @@ export class ClientLockstepEngine {
   constructor(
     private room: Room,
     seed: number,
+    difficultyPercent: number,
     private handlers: LockstepHandlers,
   ) {
-    this.state = createInitialState(seed);
+    this.state = createInitialState(seed, difficultyPercent, playerElementsFromRoster(room.getRoster()));
   }
 
   /** 收到房主 TICK 訊息時呼叫(外部把 Room 的 onTick 接到這裡)。 */

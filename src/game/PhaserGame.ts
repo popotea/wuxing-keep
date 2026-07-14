@@ -8,15 +8,18 @@ import { GameScene, TILE_PX } from './GameScene';
 
 export interface GameRenderer {
   renderState(state: SimulationState): void;
+  setSelectedTower(towerId: number | null): void;
   destroy(): void;
 }
 
 export function createGameRenderer(
   parentId: string,
   onTilePlaced: (x: number, y: number) => void,
+  onTowerSelected: (towerId: number | null) => void,
 ): GameRenderer {
   const scene = new GameScene();
   scene.onTilePlaced = onTilePlaced;
+  scene.onTowerSelected = onTowerSelected;
 
   const game = new Phaser.Game({
     type: Phaser.AUTO,
@@ -29,6 +32,7 @@ export function createGameRenderer(
 
   return {
     renderState: (state) => scene.renderState(state),
+    setSelectedTower: (towerId) => scene.setSelectedTower(towerId),
     destroy: () => game.destroy(true),
   };
 }

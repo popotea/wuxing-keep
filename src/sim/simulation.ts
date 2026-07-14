@@ -15,8 +15,9 @@ import {
   WAVE_INTERVAL_TICKS,
   WAVES,
   type Monster,
+  type SpawnEvent,
 } from './monsters';
-import { TOWER_DEFS, tryAttack, upgradeCost, type Tower } from './towers';
+import { sellValue, TOWER_DEFS, tryAttack, upgradeCost, type Tower } from './towers';
 
 export interface SimulationState {
   tick: number;
@@ -30,6 +31,10 @@ export interface SimulationState {
   victory: boolean;
   /** 第 i 波的加碼獎勵是否已經判定過(不管有沒有趕上時限),避免重複發放 */
   bonusAwarded: boolean[];
+  /** New Game+ 風味的難度倍率(百分比,100=普通)。開局後固定不變,只影響生怪時的數值縮放。 */
+  difficultyPercent: number;
+  /** 每個玩家開局前選好、整局固定的可蓋屬性集合;沒有對應項目代表不限制(單人用預設值時走這條)。 */
+  playerElements: Record<PlayerId, Element[]>;
   /** 除錯用:多台機器互相比對,一旦不一致就代表跑飛了 */
   checksum: string;
 }
@@ -37,7 +42,11 @@ export interface SimulationState {
 const STARTING_GOLD = 300;
 export const STARTING_LIVES = 20;
 
-export function createInitialState(seed: number): SimulationState {
+export function createInitialState(
+  seed: number,
+  difficultyPercent = 100,
+  playerElements: Record<PlayerId, Element[]> = {},
+): SimulationState {
   return {
     tick: 0,
     gold: STARTING_GOLD,
@@ -49,7 +58,20 @@ export function createInitialState(seed: number): SimulationState {
     gameOver: false,
     victory: false,
     bonusAwarded: WAVES.map(() => false),
+    difficultyPercent,
+    playerElements,
     checksum: seed.toString(16),
+  };
+}
+
+/** 依難度倍率縮放怪物數值,整數運算(floor),維持決定性。 */
+function scaledSpawn(spawn: SpawnEvent, difficultyPercent: number): SpawnEvent {
+  if (difficultyPercent === 100) return spawn;
+  return {
+    ...spawn,
+    hp: Math.floor((spawn.hp * difficultyPercent) / 100),
+    speedFp: Math.floor((spawn.speedFp * difficultyPercent) / 100),
+    bounty: Math.floor((spawn.bounty * difficultyPercent) / 100),
   };
 }
 
@@ -69,13 +91,15 @@ function cloneState(state: SimulationState): SimulationState {
 
 // 朋友間連線,採信任制:不合法的操作(格子被佔用、錢不夠、id 不存在)一律安全地當no-op,
 // 不做防作弊驗證——這在所有機器上都是相同的 no-op,不影響決定性。
-function applyBuildTower(state: SimulationState, action: Action): void {
+function applyBuildTower(state: SimulationState, playerId: PlayerId, action: Action): void {
   const x = asFiniteInt(action.params.x);
   const y = asFiniteInt(action.params.y);
   const element = action.params.element;
   if (x === null || y === null || !isElement(element)) return;
   if (!inBounds(x, y) || isOnPath(x, y)) return;
   if (state.towers.some((t) => t.x === x && t.y === y)) return;
+  const allowed = state.playerElements[playerId];
+  if (allowed && !allowed.includes(element)) return; // 不是這個玩家選好的屬性,安全忽略
   const def = TOWER_DEFS[element as Element];
   if (state.gold < def.cost) return;
   state.gold -= def.cost;
@@ -94,8 +118,7 @@ function applySellTower(state: SimulationState, action: Action): void {
   if (towerId === null) return;
   const idx = state.towers.findIndex((t) => t.id === towerId);
   if (idx === -1) return;
-  const def = TOWER_DEFS[state.towers[idx].element];
-  state.gold += Math.floor(def.cost / 2);
+  state.gold += sellValue(state.towers[idx]);
   state.towers.splice(idx, 1);
 }
 
@@ -110,8 +133,8 @@ function applyUpgradeTower(state: SimulationState, action: Action): void {
   tower.level += 1;
 }
 
-function applyCommand(state: SimulationState, _playerId: PlayerId, action: Action): void {
-  if (action.kind === 'build_tower') applyBuildTower(state, action);
+function applyCommand(state: SimulationState, playerId: PlayerId, action: Action): void {
+  if (action.kind === 'build_tower') applyBuildTower(state, playerId, action);
   else if (action.kind === 'sell_tower') applySellTower(state, action);
   else if (action.kind === 'upgrade_tower') applyUpgradeTower(state, action);
   // 其他/未知 kind 一律安全忽略
@@ -174,7 +197,7 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   }
 
   for (const spawn of getSpawnEventsForTick(tick)) {
-    next.monsters.push(createMonster(next.nextMonsterId++, spawn));
+    next.monsters.push(createMonster(next.nextMonsterId++, scaledSpawn(spawn, next.difficultyPercent)));
   }
 
   // 怪物移動,漏怪扣生命

@@ -3,89 +3,308 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>連線層手動測試 - 五行守衛</title>
+    <title>五行守衛</title>
+    <style>
+      :root {
+        --bg: #12151a;
+        --panel: #1b1f27;
+        --border: #2c323d;
+        --text: #e8ecf2;
+        --muted: #8b93a1;
+        --accent: #d4af37;
+        --metal: #d4af37;
+        --wood: #3a9d3a;
+        --water: #3a7bd5;
+        --fire: #e05a2b;
+        --earth: #a67c3d;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Microsoft JhengHei", "Segoe UI", system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 16px;
+      }
+      h1 { margin: 8px 0 16px; letter-spacing: 4px; }
+      h1 span { color: var(--accent); }
+      h3 { margin: 16px 0 6px; font-size: 14px; color: var(--muted); text-align: left; }
+
+      /* ---- 選單畫面 ---- */
+      .menu-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 28px 32px;
+        text-align: center;
+        min-width: 360px;
+      }
+      .menu-card h2 { margin-top: 0; }
+      .choice-row { display: flex; justify-content: center; gap: 10px; margin: 6px 0 14px; flex-wrap: wrap; }
+      .choice-row input { position: absolute; opacity: 0; width: 0; height: 0; }
+      .choice-row label {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 14px;
+        cursor: pointer;
+        background: #232833;
+        font-weight: bold;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .choice-row input:checked + label {
+        border-color: var(--accent);
+        background: #33301f;
+      }
+      label.element-metal { color: var(--metal); }
+      label.element-wood { color: var(--wood); }
+      label.element-water { color: var(--water); }
+      label.element-fire { color: var(--fire); }
+      label.element-earth { color: var(--earth); }
+      .primary-btn {
+        font-size: 18px;
+        padding: 12px 28px;
+        margin-top: 8px;
+        border: none;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #1a1a1a;
+        font-weight: bold;
+        cursor: pointer;
+      }
+      .primary-btn:disabled { opacity: 0.5; cursor: default; }
+      .best-record { color: var(--muted); margin-top: 14px; font-size: 14px; }
+
+      /* ---- 模式頁籤 ---- */
+      .mode-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+      .mode-tab {
+        flex: 1;
+        padding: 10px 18px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--muted);
+        font-size: 15px;
+        font-weight: bold;
+        cursor: pointer;
+      }
+      .mode-tab.active { color: var(--text); border-color: var(--accent); background: #232833; }
+
+      /* ---- 多人連線區塊 ---- */
+      .multi-section { text-align: left; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+      .multi-section label { display: block; margin: 6px 0; font-size: 14px; }
+      .multi-section input[type="text"], .multi-section input:not([type]) {
+        background: #232833; border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 5px 8px;
+      }
+      #roster { list-style: none; padding: 0; margin: 8px 0; }
+      #roster li { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }
+      #roster .ready-yes { color: var(--wood); }
+      #roster .ready-no { color: var(--muted); }
+      #readyBtn { margin-top: 6px; }
+
+      /* ---- 遊戲畫面 ---- */
+      #gameScreen { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+      #hud {
+        display: flex;
+        gap: 24px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 18px;
+        font-size: 15px;
+      }
+      .hud-stat { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+      .lives-bar-outer { width: 140px; height: 12px; background: #333; border-radius: 6px; overflow: hidden; }
+      #livesBar { height: 100%; width: 100%; background: var(--wood); transition: width 0.2s, background 0.2s; }
+      #bonusWave { font-weight: bold; color: var(--accent); min-height: 1.2em; }
+      #gameCanvas { border: 2px solid var(--border); border-radius: 4px; overflow: hidden; line-height: 0; }
+      #resultBanner { font-size: 20px; font-weight: bold; min-height: 1.4em; }
+      #backToMenuBtn { display: none; padding: 8px 18px; border-radius: 8px; border: 1px solid var(--border); background: #232833; color: var(--text); cursor: pointer; }
+
+      /* ---- 塔選取面板(魔獸爭霸式,選塔才顯示,不是點下去就直接動作) ---- */
+      .tower-panel {
+        width: 100%;
+        max-width: 460px;
+        background: var(--panel);
+        border: 2px solid var(--accent);
+        border-radius: 10px;
+        padding: 10px 16px;
+      }
+      .tower-panel-header { display: flex; justify-content: space-between; align-items: center; font-size: 17px; font-weight: bold; margin-bottom: 6px; }
+      .tower-panel-level { color: var(--muted); font-weight: normal; font-size: 14px; }
+      .tower-panel-stats { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-bottom: 10px; flex-wrap: wrap; }
+      .tower-panel-actions { display: flex; gap: 8px; }
+      .tower-panel-actions button {
+        flex: 1;
+        padding: 8px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: #232833;
+        color: var(--text);
+        cursor: pointer;
+        font-weight: bold;
+      }
+      .tower-panel-actions button:disabled { opacity: 0.4; cursor: default; }
+      #towerDeselectBtn { flex: 0 0 auto; padding: 8px 12px; }
+
+      /* ---- 進階/除錯(收合,不佔主畫面) ---- */
+      #advancedPanel {
+        width: 100%;
+        max-width: 640px;
+        margin-top: 28px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      #advancedPanel summary { cursor: pointer; padding: 6px 0; }
+      #advancedPanel section { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
+      #advancedPanel h2 { font-size: 14px; margin: 0 0 8px; color: var(--text); }
+      #advancedPanel input { background: #232833; border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 4px 6px; }
+      #log { white-space: pre-wrap; max-height: 200px; overflow-y: auto; border: 1px solid var(--border); padding: 8px; background: #0f1216; }
+    </style>
   </head>
   <body>
-    <h1>Phase 1+3 手動測試(佔位視覺化,非最終美術)</h1>
+    <h1>五行<span>守衛</span></h1>
 
-    <section>
-      <h2>單人模式</h2>
-      <p>不需要建房、不用連線,直接在本機跑模擬,測試地圖/塔/怪物/波次平衡用。</p>
-      <button id="soloBtn">開始單人模式</button>
-    </section>
-
-    <hr />
-    <p>以下是多人連線測試(Phase 3):開兩個瀏覽器分頁(或一個正常視窗 + 一個無痕視窗),一邊當房主、一邊當客戶端。</p>
-
-    <section>
-      <h2>ICE 設定(選填,測試 TURN fallback 才需要)</h2>
-      <label>Open Relay Username: <input id="turnUser" /></label>
-      <label>Open Relay Credential: <input id="turnCred" /></label>
-    </section>
-
-    <section>
-      <h2>建立房間</h2>
-      <label>暱稱: <input id="hostName" value="房主" /></label>
-      <button id="hostBtn">建立房間</button>
-      <div>房號: <span id="roomCode">(尚未建立)</span></div>
-      <div>
-        邀請連結:
-        <input id="inviteLink" readonly style="width: 320px;" />
-        <button id="copyLinkBtn" disabled>複製連結</button>
+    <section id="menuScreen">
+      <div class="mode-tabs">
+        <button id="tabSolo" class="mode-tab active">單人模式</button>
+        <button id="tabMulti" class="mode-tab">多人連線</button>
       </div>
-    </section>
 
-    <section>
-      <h2>加入房間</h2>
-      <label>暱稱: <input id="joinName" value="玩家2" /></label>
-      <label>房號: <input id="joinCode" placeholder="gld-XXXXX" /></label>
-      <button id="joinBtn">加入房間</button>
-    </section>
-
-    <section>
-      <h2>房間狀態</h2>
-      <ul id="roster"></ul>
-      <button id="startBtn" disabled>開始對局(房主專用)</button>
-    </section>
-
-    <section>
-      <h2>對局測試</h2>
-      <div>
-        塔屬性:
-        <label><input type="radio" name="element" value="metal" checked /> 金</label>
-        <label><input type="radio" name="element" value="wood" /> 木</label>
-        <label><input type="radio" name="element" value="water" /> 水</label>
-        <label><input type="radio" name="element" value="fire" /> 火</label>
-        <label><input type="radio" name="element" value="earth" /> 土</label>
+      <div id="soloPanel" class="menu-card">
+        <h2>單人模式</h2>
+        <h3>難度</h3>
+        <div class="choice-row" id="soloDifficulty">
+          <input type="radio" id="diff-normal" name="difficulty" value="100" checked />
+          <label for="diff-normal">普通</label>
+          <input type="radio" id="diff-hard" name="difficulty" value="150" />
+          <label for="diff-hard">困難(怪物更強,獎勵更多)</label>
+        </div>
+        <h3>選擇你的屬性(至少 1 種,可複選)</h3>
+        <div class="choice-row solo-elements">
+          <input type="checkbox" id="solo-el-metal" value="metal" checked />
+          <label for="solo-el-metal" class="element-metal">金</label>
+          <input type="checkbox" id="solo-el-wood" value="wood" />
+          <label for="solo-el-wood" class="element-wood">木</label>
+          <input type="checkbox" id="solo-el-water" value="water" />
+          <label for="solo-el-water" class="element-water">水</label>
+          <input type="checkbox" id="solo-el-fire" value="fire" />
+          <label for="solo-el-fire" class="element-fire">火</label>
+          <input type="checkbox" id="solo-el-earth" value="earth" />
+          <label for="solo-el-earth" class="element-earth">土</label>
+        </div>
+        <button id="soloBtn" class="primary-btn">開始遊戲</button>
+        <p class="best-record">最佳紀錄: <span id="bestRecord">尚無紀錄</span></p>
       </div>
-      <p>
-        對局開始後,點擊地圖上的空地(非路徑格)蓋塔;點擊已經有塔的格子則花錢升級那座塔。
-        相剋循環:金克木→木克土→土克水→水克火→火克金。
-      </p>
-      <div
-        id="gameCanvas"
-        style="width: 512px; height: 320px; border: 1px solid #888; cursor: crosshair;"
-      ></div>
-      <div>
-        金幣: <span id="gold">-</span> ｜ 目前 tick: <span id="tick">-</span> ｜
-        下一波倒數: <span id="nextWave">-</span>(第 <span id="waveNumber">-</span> 波,下一波屬性:
-        <span id="nextWaveElement">-</span>)
-      </div>
-      <div id="bonusWave" style="font-weight: bold; color: #d4af37;"></div>
-      <div style="display: flex; align-items: center; gap: 8px; margin: 4px 0;">
-        <span>生命: <span id="lives">-</span></span>
-        <div style="width: 200px; height: 14px; background: #333; border: 1px solid #666;">
-          <div id="livesBar" style="height: 100%; width: 100%; background: #3a9d3a;"></div>
+
+      <div id="multiPanel" class="menu-card" hidden>
+        <h2>多人連線</h2>
+        <h3>選擇你的屬性(至少 1 種,可複選)</h3>
+        <div class="choice-row multi-elements">
+          <input type="checkbox" id="multi-el-metal" value="metal" checked />
+          <label for="multi-el-metal" class="element-metal">金</label>
+          <input type="checkbox" id="multi-el-wood" value="wood" />
+          <label for="multi-el-wood" class="element-wood">木</label>
+          <input type="checkbox" id="multi-el-water" value="water" />
+          <label for="multi-el-water" class="element-water">水</label>
+          <input type="checkbox" id="multi-el-fire" value="fire" />
+          <label for="multi-el-fire" class="element-fire">火</label>
+          <input type="checkbox" id="multi-el-earth" value="earth" />
+          <label for="multi-el-earth" class="element-earth">土</label>
+        </div>
+
+        <div class="multi-section">
+          <h3>建立房間</h3>
+          <label>暱稱: <input id="hostName" value="房主" /></label>
+          <label>難度:
+            <select id="hostDifficulty">
+              <option value="100" selected>普通</option>
+              <option value="150">困難</option>
+            </select>
+          </label>
+          <button id="hostBtn">建立房間</button>
+          <div>房號: <span id="roomCode">(尚未建立)</span></div>
+          <div>
+            邀請連結:
+            <input id="inviteLink" readonly style="width: 240px;" />
+            <button id="copyLinkBtn" disabled>複製連結</button>
+          </div>
+        </div>
+
+        <div class="multi-section">
+          <h3>加入房間</h3>
+          <label>暱稱: <input id="joinName" value="玩家2" /></label>
+          <label>房號: <input id="joinCode" placeholder="gld-XXXXX" /></label>
+          <button id="joinBtn">加入房間</button>
+        </div>
+
+        <div class="multi-section">
+          <h3>房間狀態</h3>
+          <ul id="roster"></ul>
+          <button id="readyBtn" disabled>✅ 準備</button>
+          <button id="startBtn" disabled>開始對局(房主專用,所有人都準備才能按)</button>
         </div>
       </div>
-      <div>Checksum: <span id="checksum">-</span>(兩邊分頁這個值要一直相同,不同就代表跑飛了)</div>
-      <div id="resultBanner" style="font-weight: bold;"></div>
     </section>
 
-    <section>
-      <h2>Log</h2>
-      <pre id="log" style="white-space: pre-wrap; max-height: 300px; overflow-y: auto; border: 1px solid #888; padding: 8px;"></pre>
+    <section id="gameScreen" hidden>
+      <div id="hud">
+        <div class="hud-stat">💰 <span id="gold">-</span></div>
+        <div class="hud-stat">
+          ❤ <div class="lives-bar-outer"><div id="livesBar"></div></div> <span id="lives">-</span>
+        </div>
+        <div class="hud-stat">
+          第 <span id="waveNumber">-</span> 波 ｜ 下一波 <span id="nextWaveElement">-</span> · <span id="nextWave">-</span>
+        </div>
+      </div>
+      <div id="bonusWave"></div>
+      <div id="gameCanvas"></div>
+      <div class="choice-row" id="buildBar"></div>
+
+      <div id="towerPanel" class="tower-panel" hidden>
+        <div class="tower-panel-header">
+          <span id="towerPanelElement"></span>
+          <span class="tower-panel-level">Lv. <span id="towerPanelLevel">-</span></span>
+        </div>
+        <div class="tower-panel-stats">
+          <div>⚔ 攻擊力 <span id="towerPanelDamage">-</span></div>
+          <div>🎯 範圍 <span id="towerPanelRange">-</span> 格</div>
+          <div>⏱ 攻速 <span id="towerPanelCooldown">-</span>s</div>
+        </div>
+        <div class="tower-panel-actions">
+          <button id="towerUpgradeBtn">⬆ 升級(<span id="towerUpgradeCost">-</span>)</button>
+          <button id="towerSellBtn">💰 賣出(+<span id="towerSellValue">-</span>)</button>
+          <button id="towerDeselectBtn">✕</button>
+        </div>
+      </div>
+
+      <div id="resultBanner"></div>
+      <button id="backToMenuBtn">回到選單</button>
     </section>
+
+    <details id="advancedPanel">
+      <summary>進階:除錯資訊</summary>
+
+      <section>
+        <h2>ICE 設定(選填,測試 TURN fallback 才需要)</h2>
+        <label>Open Relay Username: <input id="turnUser" /></label>
+        <label>Open Relay Credential: <input id="turnCred" /></label>
+      </section>
+
+      <section>
+        <h2>除錯數值</h2>
+        <div>目前 tick: <span id="tick">-</span></div>
+        <div>Checksum: <span id="checksum">-</span>(兩邊分頁這個值要一直相同,不同就代表跑飛了)</div>
+      </section>
+
+      <section>
+        <h2>Log</h2>
+        <pre id="log"></pre>
+      </section>
+    </details>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

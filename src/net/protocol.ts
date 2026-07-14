@@ -1,6 +1,8 @@
 // Phase 3 連線協定的純資料定義。這個檔案不碰 PeerJS、不碰模擬邏輯,
 // 只負責「線路上會出現哪些訊息長什麼樣子」以及「怎麼安全地解析外來資料」。
 
+import { isElement, type Element } from '../sim/elements';
+
 export const PROTOCOL_VERSION = 1;
 
 export type PlayerId = string;
@@ -9,6 +11,10 @@ export interface PlayerInfo {
   playerId: PlayerId;
   slot: number;
   name: string;
+  /** 這個玩家開局前選好、之後整局只能蓋這些屬性的塔(至少 1 個)。 */
+  elements: Element[];
+  /** 房主要等所有人都準備好才能開始對局。 */
+  ready: boolean;
 }
 
 export interface Action {
@@ -27,6 +33,7 @@ export interface HelloMsg {
   type: 'HELLO';
   protocolVersion: number;
   name: string;
+  elements: Element[];
 }
 
 export interface RejectMsg {
@@ -57,6 +64,17 @@ export interface StartMatchMsg {
   tickRateMs: number;
   inputDelayTicks: number;
   countdownMs: number;
+  difficultyPercent: number;
+}
+
+export interface SetReadyMsg {
+  type: 'SET_READY';
+  ready: boolean;
+}
+
+export interface RosterUpdatedMsg {
+  type: 'ROSTER_UPDATED';
+  roster: PlayerInfo[];
 }
 
 export interface CmdMsg {
@@ -96,6 +114,8 @@ export type NetMessage =
   | PlayerJoinedMsg
   | PlayerLeftMsg
   | StartMatchMsg
+  | SetReadyMsg
+  | RosterUpdatedMsg
   | CmdMsg
   | TickMsg
   | PingMsg
@@ -106,13 +126,19 @@ export function encode(msg: NetMessage): string {
   return JSON.stringify(msg);
 }
 
+function isElementArray(v: unknown): v is Element[] {
+  return Array.isArray(v) && v.length > 0 && v.every(isElement);
+}
+
 function isPlayerInfo(v: unknown): v is PlayerInfo {
   if (typeof v !== 'object' || v === null) return false;
   const o = v as Record<string, unknown>;
   return (
     typeof o.playerId === 'string' &&
     typeof o.slot === 'number' &&
-    typeof o.name === 'string'
+    typeof o.name === 'string' &&
+    isElementArray(o.elements) &&
+    typeof o.ready === 'boolean'
   );
 }
 
@@ -154,8 +180,8 @@ export function parse(raw: unknown): NetMessage | null {
 
   switch (o.type) {
     case 'HELLO':
-      if (typeof o.protocolVersion === 'number' && typeof o.name === 'string') {
-        return { type: 'HELLO', protocolVersion: o.protocolVersion, name: o.name };
+      if (typeof o.protocolVersion === 'number' && typeof o.name === 'string' && isElementArray(o.elements)) {
+        return { type: 'HELLO', protocolVersion: o.protocolVersion, name: o.name, elements: o.elements };
       }
       return null;
 
@@ -193,7 +219,8 @@ export function parse(raw: unknown): NetMessage | null {
         isPlayerInfoArray(o.roster) &&
         typeof o.tickRateMs === 'number' &&
         typeof o.inputDelayTicks === 'number' &&
-        typeof o.countdownMs === 'number'
+        typeof o.countdownMs === 'number' &&
+        typeof o.difficultyPercent === 'number'
       ) {
         return {
           type: 'START_MATCH',
@@ -202,7 +229,20 @@ export function parse(raw: unknown): NetMessage | null {
           tickRateMs: o.tickRateMs,
           inputDelayTicks: o.inputDelayTicks,
           countdownMs: o.countdownMs,
+          difficultyPercent: o.difficultyPercent,
         };
+      }
+      return null;
+
+    case 'SET_READY':
+      if (typeof o.ready === 'boolean') {
+        return { type: 'SET_READY', ready: o.ready };
+      }
+      return null;
+
+    case 'ROSTER_UPDATED':
+      if (isPlayerInfoArray(o.roster)) {
+        return { type: 'ROSTER_UPDATED', roster: o.roster };
       }
       return null;
 
