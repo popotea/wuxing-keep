@@ -287,6 +287,15 @@
       .tower-panel-level { color: var(--muted); font-weight: normal; font-size: 14px; }
       .tower-panel-owner { color: var(--muted); font-weight: normal; font-size: 13px; margin-left: 4px; }
       .tower-panel-stats { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-bottom: 10px; flex-wrap: wrap; }
+      .tower-panel-strategy { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+      .tower-panel-strategy select {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 4px;
+        padding: 4px 6px;
+        font-size: 13px;
+      }
       .tower-panel-actions { display: flex; gap: 8px; }
       .tower-panel-actions button {
         flex: 1;
@@ -466,6 +475,9 @@
           stroke-linejoin="round"
         />
       </symbol>
+      <symbol id="icon-crown" viewBox="0 0 24 24">
+        <path d="M4 18h16l-1.5-9-4 4-2.5-6-2.5 6-4-4L4 18z" fill="currentColor" />
+      </symbol>
     </svg>
 
     <section id="menuScreen">
@@ -533,7 +545,8 @@
           <div class="multi-section">
             <h3>加入房間</h3>
             <label>暱稱: <input id="joinName" value="玩家2" /></label>
-            <label>房號: <input id="joinCode" placeholder="gld-XXXXX" /></label>
+            <label>房號: <input id="joinCode" placeholder="gld-XXXXX" list="recentRoomsList" /></label>
+            <datalist id="recentRoomsList"></datalist>
             <button id="joinBtn" class="btn"><svg class="icon"><use href="#icon-enter" /></svg> 加入房間</button>
           </div>
         </div>
@@ -590,6 +603,14 @@
           <div><svg class="icon"><use href="#icon-target" /></svg> 範圍 <span id="towerPanelRange">-</span> 格</div>
           <div><svg class="icon"><use href="#icon-clock" /></svg> 攻速 <span id="towerPanelCooldown">-</span>s</div>
         </div>
+        <label class="tower-panel-strategy">
+          集火:
+          <select id="towerPanelStrategy">
+            <option value="first">最前面</option>
+            <option value="lowest_hp">血量最少</option>
+            <option value="highest_hp">血量最多</option>
+          </select>
+        </label>
         <div class="tower-panel-actions">
           <button id="towerUpgradeBtn">
             <svg class="icon"><use href="#icon-up" /></svg> 升級(<span id="towerUpgradeCost">-</span>)

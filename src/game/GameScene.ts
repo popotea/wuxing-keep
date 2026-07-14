@@ -31,6 +31,22 @@ const ELEMENT_COLORS: Record<Element, number> = {
 // 純視覺、不影響能不能蓋塔,蓋在裝飾物上的塔一樣會正常疊在上面。
 const DECOR_DENSITY_PERCENT = 6;
 
+// scripts/generate-decor-assets.mjs 產出的 AI 圖(見 public/assets/decor/manifest.json),
+// 載入成功就優先用這些圖,任何一張缺檔/載入失敗都會自動退回下面的程序生成造型,不會整格空白。
+const DECOR_IMAGE_FILES: Record<string, string> = {
+  'metal-crystal': 'metal-crystal.jpg',
+  'metal-fox': 'metal-fox.jpg',
+  'wood-bush': 'wood-bush.jpg',
+  'wood-deer': 'wood-deer.jpg',
+  'water-lily': 'water-lily.jpg',
+  'water-frog': 'water-frog.jpg',
+  'fire-cactus': 'fire-cactus.jpg',
+  'fire-salamander': 'fire-salamander.jpg',
+  'earth-boulder': 'earth-boulder.jpg',
+  'earth-tortoise': 'earth-tortoise.jpg',
+};
+const DECOR_IMAGE_KEYS = Object.keys(DECOR_IMAGE_FILES);
+
 /** 純視覺用的簡單雜湊(不是密碼學等級),只用來決定哪幾格灑裝飾物、灑哪一種,裝飾物不是模擬狀態不用管跨機器一不一致。 */
 function tileHash(x: number, y: number): number {
   let h = (x * 374761393 + y * 668265263) ^ 0x9e3779b9;
@@ -56,6 +72,12 @@ export class GameScene extends Phaser.Scene {
 
   constructor() {
     super('game');
+  }
+
+  preload(): void {
+    for (const key of DECOR_IMAGE_KEYS) {
+      this.load.image(key, `/assets/decor/${DECOR_IMAGE_FILES[key]}`);
+    }
   }
 
   create(): void {
@@ -151,8 +173,12 @@ export class GameScene extends Phaser.Scene {
       }
       for (const m of this.pendingState.monsters) {
         const { xFp, yFp } = worldPositionFp(m.pos);
-        g.fillStyle(0xe0433a, 1);
-        g.fillCircle(ox + (xFp / FP_SCALE) * TILE_PX * MINIMAP_SCALE, oy + (yFp / FP_SCALE) * TILE_PX * MINIMAP_SCALE, 1.5);
+        g.fillStyle(m.isBoss ? 0xffe98a : 0xe0433a, 1);
+        g.fillCircle(
+          ox + (xFp / FP_SCALE) * TILE_PX * MINIMAP_SCALE,
+          oy + (yFp / FP_SCALE) * TILE_PX * MINIMAP_SCALE,
+          m.isBoss ? 3 : 1.5,
+        );
       }
     }
 
@@ -347,7 +373,7 @@ export class GameScene extends Phaser.Scene {
   /** 非路徑格灑一點樹/草叢/石頭/花/小動物,地圖比較大之後大片空草地才不會太單調。畫一次不用每 tick 重畫。 */
   private drawDecorations(): void {
     const g = this.add.graphics();
-    const drawers: Array<(cx: number, cy: number, seed: number) => void> = [
+    const proceduralDrawers: Array<(cx: number, cy: number, seed: number) => void> = [
       (cx, cy) => this.drawDecorTree(g, cx, cy),
       (cx, cy) => this.drawDecorBush(g, cx, cy),
       (cx, cy) => this.drawDecorRock(g, cx, cy),
@@ -359,10 +385,25 @@ export class GameScene extends Phaser.Scene {
         if (isOnPath(x, y)) continue;
         const h = tileHash(x, y);
         if (h % 100 >= DECOR_DENSITY_PERCENT) continue;
-        const drawer = drawers[Math.floor(h / 100) % drawers.length];
-        drawer(x * TILE_PX + TILE_PX / 2, y * TILE_PX + TILE_PX / 2, h);
+        const cx = x * TILE_PX + TILE_PX / 2;
+        const cy = y * TILE_PX + TILE_PX / 2;
+        const imageKey = DECOR_IMAGE_KEYS[Math.floor(h / 100) % DECOR_IMAGE_KEYS.length];
+        if (this.textures.exists(imageKey)) {
+          this.placeDecorImage(imageKey, cx, cy);
+        } else {
+          const drawer = proceduralDrawers[Math.floor(h / 100) % proceduralDrawers.length];
+          drawer(cx, cy, h);
+        }
       }
     }
+  }
+
+  /** AI 生圖沒有去背(方形草地背景),用圓形遮罩裁掉方角,看起來比較像貼在地上的裝飾物而不是一張照片。 */
+  private placeDecorImage(key: string, cx: number, cy: number): void {
+    const size = TILE_PX * 0.72;
+    const image = this.add.image(cx, cy, key).setDisplaySize(size, size);
+    const maskShape = this.make.graphics({}).fillStyle(0xffffff, 1).fillCircle(cx, cy, size / 2);
+    image.setMask(maskShape.createGeometryMask());
   }
 
   private drawDecorTree(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
@@ -482,7 +523,7 @@ export class GameScene extends Phaser.Scene {
       const { xFp, yFp } = worldPositionFp(m.pos);
       const px = (xFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
       const py = (yFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
-      this.drawMonster(g, px, py, m.element, m.hp / m.maxHp);
+      this.drawMonster(g, px, py, m.element, m.hp / m.maxHp, m.isBoss);
     }
   }
 
@@ -521,33 +562,46 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** 圓身 + 小眼睛 + 頭上血條,取代原本的純色方塊。 */
-  private drawMonster(g: Phaser.GameObjects.Graphics, px: number, py: number, element: Element, hpRatio: number): void {
+  /** 圓身 + 小眼睛 + 頭上血條,取代原本的純色方塊。首領怪(isBoss)整隻放大 1.8 倍再加一圈金框。 */
+  private drawMonster(
+    g: Phaser.GameObjects.Graphics,
+    px: number,
+    py: number,
+    element: Element,
+    hpRatio: number,
+    isBoss: boolean,
+  ): void {
     const color = ELEMENT_COLORS[element];
+    const bossMul = isBoss ? 1.8 : 1;
 
     g.fillStyle(color, 0.16);
-    g.fillCircle(px, py, 10 * SCALE);
+    g.fillCircle(px, py, 10 * SCALE * bossMul);
 
     g.fillStyle(0x000000, 0.25);
-    g.fillEllipse(px, py + 5 * SCALE, 12 * SCALE, 4 * SCALE);
+    g.fillEllipse(px, py + 5 * SCALE * bossMul, 12 * SCALE * bossMul, 4 * SCALE * bossMul);
 
     g.fillStyle(color, 1);
-    g.fillCircle(px, py, 6 * SCALE);
+    g.fillCircle(px, py, 6 * SCALE * bossMul);
     g.lineStyle(1 * SCALE, 0x000000, 0.35);
-    g.strokeCircle(px, py, 6 * SCALE);
+    g.strokeCircle(px, py, 6 * SCALE * bossMul);
+    if (isBoss) {
+      // 首領怪額外一圈脈動感的金框,遠遠就看得出跟一般小怪不一樣
+      g.lineStyle(1.5 * SCALE, 0xffe98a, 0.85);
+      g.strokeCircle(px, py, 8 * SCALE * bossMul);
+    }
     // 左上角一小塊亮點當高光,打破純色圓的扁平感
     g.fillStyle(0xffffff, 0.3);
-    g.fillCircle(px - 2 * SCALE, py - 2.5 * SCALE, 1.8 * SCALE);
+    g.fillCircle(px - 2 * SCALE * bossMul, py - 2.5 * SCALE * bossMul, 1.8 * SCALE * bossMul);
     g.fillStyle(0x1a1a1a, 1);
-    g.fillCircle(px + 2 * SCALE, py - 2 * SCALE, 1.5 * SCALE);
+    g.fillCircle(px + 2 * SCALE * bossMul, py - 2 * SCALE * bossMul, 1.5 * SCALE * bossMul);
 
     const ratio = Math.max(0, Math.min(1, hpRatio));
     const barColor = ratio > 0.5 ? 0x3a9d3a : ratio > 0.25 ? 0xd4af37 : 0xe05a2b;
-    const barW = 16 * SCALE;
+    const barW = 16 * SCALE * bossMul;
     const barH = 3 * SCALE;
     g.fillStyle(0x000000, 0.6);
-    g.fillRect(px - barW / 2, py - 12 * SCALE, barW, barH);
+    g.fillRect(px - barW / 2, py - 12 * SCALE * bossMul, barW, barH);
     g.fillStyle(barColor, 1);
-    g.fillRect(px - barW / 2, py - 12 * SCALE, barW * ratio, barH);
+    g.fillRect(px - barW / 2, py - 12 * SCALE * bossMul, barW * ratio, barH);
   }
 }

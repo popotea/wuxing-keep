@@ -14,6 +14,8 @@ export interface Monster {
   pos: PathPos;
   /** 這隻怪屬於第幾波(0-based),加碼波判定「整波清光了沒」要用 */
   waveIndex: number;
+  /** 首領波的怪(目前只有最後一波),UI 用來畫得比較大隻/加標示,純視覺,不影響戰鬥數值判定。 */
+  isBoss: boolean;
 }
 
 export interface WaveDef {
@@ -25,6 +27,8 @@ export interface WaveDef {
   /** 加碼波(可選):在波次開始後這麼多 tick 內把整波清光,可以拿 bonusGold 額外獎勵。 */
   bonusClearWithinTicks?: number;
   bonusGold?: number;
+  /** 首領波(可選):目前只用在最後一波,單隻厚血高賞金的怪當收尾挑戰。 */
+  isBoss?: boolean;
 }
 
 export const WAVE_INTERVAL_TICKS = 400; // 20 tick/秒 * 20 秒
@@ -48,6 +52,8 @@ export const WAVES: readonly WaveDef[] = [
   { element: 'earth', count: 8, hp: 90, speedFp: 55, bounty: 16 },
   { element: 'metal', count: 10, hp: 110, speedFp: 60, bounty: 18 },
   { element: 'fire', count: 12, hp: 130, speedFp: 70, bounty: 22 },
+  // 最終首領波:單隻厚血慢速的收尾挑戰,賞金給得比較多當作全破獎勵的一部分。
+  { element: 'earth', count: 1, hp: 1200, speedFp: 45, bounty: 150, isBoss: true },
 ];
 
 export function totalWaveTicks(): number {
@@ -90,6 +96,7 @@ export interface SpawnEvent {
   bounty: number;
   pathId: number;
   waveIndex: number;
+  isBoss: boolean;
 }
 
 /** 純函式:給定 tick,回傳這一 tick 該生出的怪物。同一個 tick 在哪台機器算都是同一個答案。 */
@@ -109,6 +116,7 @@ export function getSpawnEventsForTick(tick: number): SpawnEvent[] {
           // 同一波怪物輪流分配路徑,逼玩家同時顧好兩條路,而不是把火力全堆在一條線上。
           pathId: j % PATH_COUNT,
           waveIndex: i,
+          isBoss: wave.isBoss ?? false,
         });
       }
     }
@@ -126,5 +134,6 @@ export function createMonster(id: number, spawn: SpawnEvent): Monster {
     bounty: spawn.bounty,
     pos: createStartPos(spawn.pathId),
     waveIndex: spawn.waveIndex,
+    isBoss: spawn.isBoss,
   };
 }

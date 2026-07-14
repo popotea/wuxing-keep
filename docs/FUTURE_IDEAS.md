@@ -4,7 +4,7 @@
 
 **目前視覺呈現狀態**:`src/game/GameScene.ts` 用 Phaser Graphics 畫了比較有辨識度的造型(塔是底座+尖塔+等級小點,怪物是圓身+眼睛+頭上血條),但仍然是幾何圖形佔位,不是真正的美術圖片/精靈。**✅ 產圖工具已就緒**:`npm run assets` 開啟 `tools/ai-hub/` 的 AI Hub,可以用 AI 生圖 API(含免金鑰的 Pollinations)產生五行塔/怪物/地形素材並存進 `public/assets/`,細節見 [`docs/ART_PIPELINE.md`](ART_PIPELINE.md)。工具已就緒不代表已經用它產過圖——`GameScene.ts` 目前還沒有任何程式碼會讀取 `public/assets/`,之後只要把 `drawTower`/`drawMonster` 內部畫法換成讀取圖片/Sprite 即可,外部呼叫介面不用改。
 
-**✅ 地圖裝飾物(樹/草叢/石頭/花/小動物)已完成(程序生成版)**:`GameScene.ts` 的 `drawDecorations()` 在非路徑格上用固定雜湊(`tileHash`,不是 `Math.random()`)決定要不要灑裝飾、灑哪一種,純視覺、跟 checksum/決定性無關,蓋在裝飾物上的塔一樣正常疊上去。**AI 生圖 10 張已全部產出、但還沒接進遊戲**:`scripts/generate-decor-assets.mjs` 直接呼叫 Pollinations API(跳過 `tools/ai-hub` 的瀏覽器互動+去背流程,使用者已同意這個取捨)產了 10 張(五行各配 1 種植物+1 種動物)存進 `public/assets/decor/`(`manifest.json` 記錄實際檔名)。**免金鑰匿名額度 `maxAllowed:1`,常態性回 429/500**,腳本內建重試+退避,實測跑一次要好幾分鐘、其中一張甚至要手動再單獨重試一次才成功,但最終 10 張都拿到了。目前 `GameScene.ts` 完全沒有讀取這些圖,畫面上看到的裝飾物是上面說的程序生成版——兩者是平行存在、還沒二選一,之後想真的換成 AI 圖,把 `drawDecorations()` 改成 `this.load.image()`(在 `preload()`)+ `this.add.image()` 取代對應的 `drawDecorXxx()` 呼叫即可,呼叫介面不用改。已生成的圖沒有透明背景(prompt 只能請它「站在草地上」讓方形背景大致融合,無法保證真的去背),真的要用可能還是需要去背處理。
+**✅ 地圖裝飾物(樹/草叢/石頭/花/小動物)已完成(程序生成版)**:`GameScene.ts` 的 `drawDecorations()` 在非路徑格上用固定雜湊(`tileHash`,不是 `Math.random()`)決定要不要灑裝飾、灑哪一種,純視覺、跟 checksum/決定性無關,蓋在裝飾物上的塔一樣正常疊上去。**✅ AI 生圖已接進遊戲**:`scripts/generate-decor-assets.mjs` 直接呼叫 Pollinations API(跳過 `tools/ai-hub` 的瀏覽器互動+去背流程,使用者已同意這個取捨)產了 10 張(五行各配 1 種植物+1 種動物)存進 `public/assets/decor/`(`manifest.json` 記錄實際檔名)。**免金鑰匿名額度 `maxAllowed:1`,常態性回 429/500**,腳本內建重試+退避,實測跑一次要好幾分鐘、其中一張甚至要手動再單獨重試一次才成功,但最終 10 張都拿到了。`GameScene.ts` 的 `preload()` 載入這 10 張圖,`drawDecorations()` 會優先用圖片(`this.textures.exists(key)` 判斷載入成功沒),失敗才退回程序生成造型,不會整格空白。圖片沒有透明背景,用圓形 `GeometryMask` 裁掉方角讓它看起來比較像貼在地上的裝飾物(`placeDecorImage()`)。
 
 ## 鏡頭 / 地圖瀏覽
 
@@ -59,15 +59,15 @@
 - **✅ 依人數縮放波次強度已完成**:`SimulationState.playerCountScalePercent`(`src/sim/simulation.ts` 的 `createInitialState`)依開局時的玩家數算出,每多一人 +20%,跟 `difficultyPercent`(New Game+ 倍率)相乘後套用在生怪的血量/速度上(`scaledSpawn`)。**賞金刻意不跟著這個加成**,只跟著 `difficultyPercent` 走——賞金已經因為「每個現存玩家各自拿全額」隨人數自動翻倍,人數加成再乘上去會雙重放大團隊經濟雪球。單人固定 `playerCount=1` → 100%,solo 平衡完全不受影響。這個倍率(每人 +20%)是先求「有在補償」的初版數字,還沒有實際多人測試調過手感。
 - **✅ 快捷鍵已完成**:對局畫面按數字鍵 1~5 切換建塔屬性(對應建塔列由左到右的順序)、Delete/Backspace 賣掉目前選中的塔(尊重原本「賣塔限本人」的限制,`towerSellBtn.disabled` 是 true 就不會動作)、Esc 取消選取。游標在任何文字輸入框(暱稱、房號等)裡時全部忽略,避免打字誤觸(`src/main.ts` 的 `keydown` 監聽,判斷 `document.activeElement`)。
 - **✅ 小地圖已完成**:見上面「鏡頭/地圖瀏覽」。
+- **✅ 記住最近房號已完成**:`joinCodeInput` 加了 `list="recentRoomsList"`,`main.ts` 的 `rememberRecentRoom()`/`loadRecentRooms()` 用 localStorage(`wuxing-keep:recentRooms`,最多存 5 筆)記錄建立/加入過的房號,靠原生 `<datalist>` 做自動完成下拉,不用額外自己刻 UI。
+- **✅ 塔的集火策略已完成**:`Tower.targetStrategy`(`'first' | 'lowest_hp' | 'highest_hp'`,`src/sim/towers.ts`)決定 `findTarget` 怎麼在範圍內選目標,新蓋的塔預設 `'first'`(維持原本「打最前面」行為)。新增 `set_target_strategy` action(`simulation.ts` 的 `applySetTargetStrategy`),**不分誰的塔、任何隊友都能改**(跟升級同一套邏輯),塔面板加了下拉選單。`computeChecksum` 有把 `targetStrategy` 算進去,策略不同步會直接反映在 checksum 上。
+- **✅ 首領波已完成**:`WaveDef`/`SpawnEvent`/`Monster` 都加了 `isBoss`,最後一波(第 7 波)換成單隻厚血(`hp:1200`)慢速(`speedFp:45`)、賞金 150 的首領怪當收尾挑戰,其餘波次/生怪邏輯完全沒動(`isBoss` 只是多一個標記欄位)。`GameScene.ts` 把首領怪畫大 1.8 倍+加一圈金框,小地圖上也是比較大的金點;HUD 的「下一波」提示是首領波時會顯示皇冠圖示+「XX首領」。數值(1200 血、150 賞金)是先求「有差異化」的初版,沒有實際多人測試調過。
 
 ## 這次盤點順手記下的新點子(尚未實作,優先度未定)
 
 沒有一個是拍板決定,單純腦力激盪順手記錄,避免想法飄走。跟其他 backlog 項目一樣「隨時可以繼續往裡面加東西」。
 
 - **房主斷線自動換房主 / 重連**:目前 MVP 決定「房主斷線 = 直接結束對局」(`CLAUDE.md` 已寫明是刻意取捨),但如果之後常常玩到一半斷線覺得很痛,這是最直接能救回來的方向。牽動 `src/net/room.ts` 的角色轉換邏輯跟 `lockstep.ts` 的 tick 權威轉移,工程量不小,建議真的常常遇到斷線問題再排。
-- **記住最近加入過的房號**:`joinCodeInput` 現在每次都要重打或靠邀請連結帶入,可以用 localStorage 記最近幾筆房號讓玩家快速重新加入,純前端小改動,風險很低。
-- **塔的集火策略選擇**:現在 `findTarget` 固定「打最前面(離出口最近)」,可以讓玩家在塔面板上選「最前面 / 血量最少 / 血量最多」幾種策略,豐富操作深度但不改變核心數值。
-- **精英怪/首領波**:目前每波都是單一屬性的普通小怪,可以在特定波次插入 1 隻血量厚、有特殊行為(例如免疫某種屬性克制)的首領,呼應「元素組合玩法延伸」那節提到的異常狀態構想,但範圍小很多,可以獨立先做。
 - **每日挑戰種子**:用日期算出一個固定 seed(例如 `hash(yyyy-mm-dd)`),當天所有人拿到同一組地圖/波次,單人模式下比較「今天大家走到第幾波」,不需要伺服器,靠 `localStorage` 記錄自己的每日成績就好,是輕量級但有趣的黏著度功能。
 - **成就/里程碑**:例如「不賣塔通關」「只用單一屬性通關」「全破且沒漏怪」,搭配現有的 `bestRecord` localStorage 機制擴充,UI 上一個小徽章列表。
 - **行動裝置觸控支援**:目前操作(邊緣平移、點擊蓋塔/選塔)都是滑鼠事件,手機瀏覽器點得到但體驗生硬(尤其邊緣平移完全沒有觸控等價操作),要支援的話至少要補雙指縮放/拖曳平移的觸控手勢,還有按鈕尺寸/版面要重新檢視是否夠大好點。

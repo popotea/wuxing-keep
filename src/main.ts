@@ -42,6 +42,7 @@ const roomCodeEl = $<HTMLSpanElement>('roomCode');
 const joinNameInput = $<HTMLInputElement>('joinName');
 const joinCodeInput = $<HTMLInputElement>('joinCode');
 const joinBtn = $<HTMLButtonElement>('joinBtn');
+const recentRoomsListEl = $<HTMLDataListElement>('recentRoomsList');
 const inviteLinkInput = $<HTMLInputElement>('inviteLink');
 const copyLinkBtn = $<HTMLButtonElement>('copyLinkBtn');
 const rosterEl = $<HTMLUListElement>('roster');
@@ -58,6 +59,7 @@ const towerPanelLevelEl = $<HTMLSpanElement>('towerPanelLevel');
 const towerPanelDamageEl = $<HTMLSpanElement>('towerPanelDamage');
 const towerPanelRangeEl = $<HTMLSpanElement>('towerPanelRange');
 const towerPanelCooldownEl = $<HTMLSpanElement>('towerPanelCooldown');
+const towerPanelStrategySelect = $<HTMLSelectElement>('towerPanelStrategy');
 const towerUpgradeBtn = $<HTMLButtonElement>('towerUpgradeBtn');
 const towerUpgradeCostEl = $<HTMLSpanElement>('towerUpgradeCost');
 const towerSellBtn = $<HTMLButtonElement>('towerSellBtn');
@@ -130,6 +132,7 @@ function renderTowerPanel(): void {
   towerPanelRangeEl.textContent = (stats.rangeFp / FP_SCALE).toFixed(1);
   towerPanelCooldownEl.textContent = ((stats.cooldownTicks * currentTickRateMs) / 1000).toFixed(2);
   towerSellValueEl.textContent = String(stats.sellValue);
+  towerPanelStrategySelect.value = tower.targetStrategy;
 
   // 升級不分誰的塔,誰都能幫忙出錢升級;賣塔限本人,避免動到別人的投資。
   if (stats.upgradeCost === null) {
@@ -155,6 +158,15 @@ towerSellBtn.addEventListener('click', () => {
 
 towerDeselectBtn.addEventListener('click', () => {
   gameRenderer.setSelectedTower(null);
+});
+
+// 集火策略不分誰的塔,任何隊友都能改(跟升級一樣的共享邏輯),純戰術選擇不花錢。
+towerPanelStrategySelect.addEventListener('change', () => {
+  if (selectedTowerId === null) return;
+  submitAction({
+    kind: 'set_target_strategy',
+    params: { towerId: selectedTowerId, strategy: towerPanelStrategySelect.value },
+  });
 });
 
 // 快捷鍵:1~5 切建塔屬性、Delete/Backspace 賣掉選中的塔、Esc 取消選取。只在對局畫面生效,
@@ -281,6 +293,31 @@ function renderRoster(roster: PlayerInfo[]): void {
     : '<svg class="icon"><use href="#icon-check" /></svg> 準備';
 }
 
+// 記住最近建立/加入過的房號(localStorage),下次打開「加入房間」的房號欄位就有原生瀏覽器自動完成清單可選。
+const RECENT_ROOMS_KEY = 'wuxing-keep:recentRooms';
+const MAX_RECENT_ROOMS = 5;
+
+function loadRecentRooms(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_ROOMS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function renderRecentRooms(codes: string[]): void {
+  recentRoomsListEl.innerHTML = codes.map((code) => `<option value="${escapeHtml(code)}"></option>`).join('');
+}
+
+function rememberRecentRoom(code: string): void {
+  const next = [code, ...loadRecentRooms().filter((c) => c !== code)].slice(0, MAX_RECENT_ROOMS);
+  localStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(next));
+  renderRecentRooms(next);
+}
+
 /** 目前用哪一個元素選擇區塊的 checkbox 群組(solo 選單 vs 多人選單),回傳玩家勾選的屬性(至少 1 個)。 */
 function selectedElements(scope: HTMLElement): Element[] {
   return ALL_ELEMENTS.filter(
@@ -376,7 +413,11 @@ function renderWaveHud(tick: number): void {
   nextWaveEl.textContent =
     ticksLeft === null ? '最後一波' : `${Math.ceil((ticksLeft * currentTickRateMs) / 1000)}s`;
   const upcoming = upcomingWaveDef(tick);
-  nextWaveElementEl.textContent = upcoming ? ELEMENT_NAMES[upcoming.element] : '—';
+  nextWaveElementEl.innerHTML = !upcoming
+    ? '—'
+    : upcoming.isBoss
+      ? `<svg class="icon" style="color: var(--accent)"><use href="#icon-crown" /></svg> ${ELEMENT_NAMES[upcoming.element]}首領`
+      : ELEMENT_NAMES[upcoming.element];
 
   const bonus = activeBonusWaveInfo(tick);
   bonusWaveEl.innerHTML = bonus
@@ -532,6 +573,7 @@ hostBtn.addEventListener('click', () => {
       inviteLinkInput.value = buildInviteLink(roomCode);
       copyLinkBtn.disabled = false;
       showLobby(true);
+      rememberRecentRoom(roomCode);
       log(`房間已建立:${roomCode}`);
     })
     .catch((err: unknown) => {
@@ -557,6 +599,7 @@ joinBtn.addEventListener('click', () => {
       inviteLinkInput.value = buildInviteLink(code);
       copyLinkBtn.disabled = false;
       showLobby(true);
+      rememberRecentRoom(code);
       log(`已加入房間:${code}`);
     })
     .catch((err: unknown) => {
@@ -593,4 +636,5 @@ startBtn.addEventListener('click', () => {
 });
 
 renderBestRecord(loadBestRecord());
+renderRecentRooms(loadRecentRooms());
 log(`元素對照:${Object.entries(ELEMENT_NAMES).map(([k, v]) => `${k}=${v}`).join(' ')}`);

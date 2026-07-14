@@ -24,6 +24,10 @@ export const TOWER_DEFS: Record<Element, TowerDef> = {
 
 export const MAX_TOWER_LEVEL = 5;
 
+/** 集火策略:first=打最前面(離出口最近,原本唯一的行為)、lowest_hp=打血量最少、highest_hp=打血量最多。 */
+export type TargetStrategy = 'first' | 'lowest_hp' | 'highest_hp';
+export const TARGET_STRATEGIES: readonly TargetStrategy[] = ['first', 'lowest_hp', 'highest_hp'];
+
 export interface Tower {
   id: number;
   element: Element;
@@ -33,6 +37,8 @@ export interface Tower {
   ticksSinceLastAttack: number;
   /** 誰蓋的這座塔——團隊模式金幣各自獨立,賣塔只有本人能賣,但升級任何人都能幫忙出錢。 */
   ownerId: PlayerId;
+  /** 集火策略,跟升級一樣不分誰的塔、任何隊友都能改,新蓋的塔預設 'first'。 */
+  targetStrategy: TargetStrategy;
 }
 
 /** 升級花費:每一級都用原始建造價當漲幅單位,越高級越貴。已滿級回傳 null。 */
@@ -80,7 +86,20 @@ function isFurtherAlongPath(a: Monster, b: Monster): boolean {
   return a.id < b.id; // 決定性 tie-break,避免兩隻怪剛好並排時各機器選到不同目標
 }
 
-/** 範圍內選「最靠近終點」的怪物當目標(classic TD 的 first 打法)。 */
+/** candidate 是否比 current 更符合這個策略——所有分支都用 monster.id 當決定性 tie-break。 */
+function isBetterTarget(strategy: TargetStrategy, candidate: Monster, current: Monster): boolean {
+  if (strategy === 'lowest_hp') {
+    if (candidate.hp !== current.hp) return candidate.hp < current.hp;
+    return candidate.id < current.id;
+  }
+  if (strategy === 'highest_hp') {
+    if (candidate.hp !== current.hp) return candidate.hp > current.hp;
+    return candidate.id < current.id;
+  }
+  return isFurtherAlongPath(candidate, current); // 'first':classic TD 的「打最前面」
+}
+
+/** 範圍內依塔的集火策略選一個目標(預設 first=最靠近終點)。 */
 function findTarget(monsters: readonly Monster[], tower: Tower, def: TowerDef): Monster | null {
   const towerXFp = tower.x * FP_SCALE;
   const towerYFp = tower.y * FP_SCALE;
@@ -92,7 +111,7 @@ function findTarget(monsters: readonly Monster[], tower: Tower, def: TowerDef): 
     const dy = towerYFp - yFp;
     const distSq = dx * dx + dy * dy;
     if (distSq > rangeSq) continue;
-    if (!best || isFurtherAlongPath(m, best)) best = m;
+    if (!best || isBetterTarget(tower.targetStrategy, m, best)) best = m;
   }
   return best;
 }

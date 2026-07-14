@@ -17,7 +17,16 @@ import {
   type Monster,
   type SpawnEvent,
 } from './monsters';
-import { sellValue, TOWER_DEFS, tryAttack, upgradeCost, type CombatEvent, type Tower } from './towers';
+import {
+  sellValue,
+  TARGET_STRATEGIES,
+  TOWER_DEFS,
+  tryAttack,
+  upgradeCost,
+  type CombatEvent,
+  type TargetStrategy,
+  type Tower,
+} from './towers';
 
 export interface SimulationState {
   tick: number;
@@ -140,6 +149,7 @@ function applyBuildTower(state: SimulationState, playerId: PlayerId, action: Act
     level: 1,
     ticksSinceLastAttack: 0,
     ownerId: playerId,
+    targetStrategy: 'first',
   });
 }
 
@@ -168,10 +178,22 @@ function applyUpgradeTower(state: SimulationState, playerId: PlayerId, action: A
   tower.level += 1;
 }
 
+/** 集火策略不分誰的塔,任何隊友都能改(跟升級一樣),不花錢、純戰術選擇。 */
+function applySetTargetStrategy(state: SimulationState, action: Action): void {
+  const towerId = asFiniteInt(action.params.towerId);
+  const strategy = action.params.strategy;
+  if (towerId === null || typeof strategy !== 'string') return;
+  if (!(TARGET_STRATEGIES as readonly string[]).includes(strategy)) return;
+  const tower = state.towers.find((t) => t.id === towerId);
+  if (!tower) return;
+  tower.targetStrategy = strategy as TargetStrategy;
+}
+
 function applyCommand(state: SimulationState, playerId: PlayerId, action: Action): void {
   if (action.kind === 'build_tower') applyBuildTower(state, playerId, action);
   else if (action.kind === 'sell_tower') applySellTower(state, playerId, action);
   else if (action.kind === 'upgrade_tower') applyUpgradeTower(state, playerId, action);
+  else if (action.kind === 'set_target_strategy') applySetTargetStrategy(state, action);
   // 其他/未知 kind 一律安全忽略
 }
 
@@ -189,7 +211,9 @@ function computeChecksum(state: SimulationState): string {
     .sort()
     .map((id) => `${id}:${state.gold[id]}`)
     .join(',');
-  const towerPart = state.towers.map((t) => `${t.id}:${t.x}:${t.y}:${t.element}:${t.level}`).join(';');
+  const towerPart = state.towers
+    .map((t) => `${t.id}:${t.x}:${t.y}:${t.element}:${t.level}:${t.targetStrategy}`)
+    .join(';');
   const monsterPart = state.monsters
     .map((m) => `${m.id}:${m.hp}:${m.pos.pathId}:${m.pos.segmentIndex}:${m.pos.distanceIntoSegmentFp}`)
     .join(';');
