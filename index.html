@@ -128,6 +128,23 @@
       .primary-btn:active:not(:disabled) { transform: translateY(0); }
       .primary-btn:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
       .best-record { color: var(--muted); margin-top: 14px; font-size: 14px; }
+      .achievements-row { display: flex; gap: 6px; justify-content: center; margin-top: 8px; flex-wrap: wrap; }
+      .achievement-badge {
+        font-size: 11px;
+        font-weight: bold;
+        padding: 3px 9px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        opacity: 0.4;
+        cursor: default;
+      }
+      .achievement-badge.unlocked {
+        color: var(--accent);
+        border-color: var(--accent);
+        opacity: 1;
+        box-shadow: 0 0 8px -2px rgba(212, 175, 55, 0.6);
+      }
 
       /* ---- 模式頁籤 ---- */
       .mode-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
@@ -510,6 +527,7 @@
         </div>
         <button id="soloBtn" class="primary-btn">開始遊戲</button>
         <p class="best-record">最佳紀錄: <span id="bestRecord">尚無紀錄</span></p>
+        <div id="achievements" class="achievements-row"></div>
       </div>
 
       <div id="multiPanel" class="menu-card panel-frame" hidden>

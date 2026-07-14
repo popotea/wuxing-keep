@@ -74,6 +74,7 @@ const waveNumberEl = $<HTMLSpanElement>('waveNumber');
 const nextWaveElementEl = $<HTMLSpanElement>('nextWaveElement');
 const bonusWaveEl = $<HTMLDivElement>('bonusWave');
 const bestRecordEl = $<HTMLSpanElement>('bestRecord');
+const achievementsEl = $<HTMLDivElement>('achievements');
 const checksumEl = $<HTMLSpanElement>('checksum');
 const resultBannerEl = $<HTMLDivElement>('resultBanner');
 const logEl = $<HTMLPreElement>('log');
@@ -154,6 +155,7 @@ towerSellBtn.addEventListener('click', () => {
   if (selectedTowerId === null) return;
   submitAction({ kind: 'sell_tower', params: { towerId: selectedTowerId } });
   gameRenderer.setSelectedTower(null);
+  everSoldTowerThisMatch = true;
 });
 
 towerDeselectBtn.addEventListener('click', () => {
@@ -183,6 +185,7 @@ window.addEventListener('keydown', (ev) => {
   if ((ev.key === 'Delete' || ev.key === 'Backspace') && selectedTowerId !== null && !towerSellBtn.disabled) {
     submitAction({ kind: 'sell_tower', params: { towerId: selectedTowerId } });
     gameRenderer.setSelectedTower(null);
+    everSoldTowerThisMatch = true;
     return;
   }
   const slot = Number(ev.key);
@@ -388,6 +391,70 @@ function saveBestRecordIfBetter(candidate: BestRecord): void {
   renderBestRecord(candidate);
 }
 
+// 成就是「這台瀏覽器/這個人」的紀錄,單人/多人都算,一旦解鎖就不會再消失(只做 unlock,不做 lock 回去)。
+// 多人連線時只反映「我自己」這一局的行為(有沒有賣塔、選了幾種屬性),不追蹤隊友做了什麼。
+interface AchievementDef {
+  id: string;
+  label: string;
+  hint: string;
+}
+
+const ACHIEVEMENTS: readonly AchievementDef[] = [
+  { id: 'full-clear', label: '全破', hint: '清空所有波次獲勝' },
+  { id: 'flawless', label: '無傷', hint: '全破且生命值全滿,一滴血都沒扣' },
+  { id: 'no-sell', label: '節儉', hint: '全破且整場對局沒賣過任何一座塔' },
+  { id: 'mono-element', label: '專精', hint: '只選 1 種屬性就全破' },
+];
+
+const ACHIEVEMENTS_KEY = 'wuxing-keep:achievements';
+
+function loadAchievements(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(ACHIEVEMENTS_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return {};
+    const result: Record<string, boolean> = {};
+    for (const def of ACHIEVEMENTS) {
+      if ((parsed as Record<string, unknown>)[def.id] === true) result[def.id] = true;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function renderAchievements(unlocked: Record<string, boolean>): void {
+  achievementsEl.innerHTML = ACHIEVEMENTS.map(
+    (def) =>
+      `<span class="achievement-badge${unlocked[def.id] ? ' unlocked' : ''}" title="${escapeHtml(def.hint)}">${escapeHtml(def.label)}</span>`,
+  ).join('');
+}
+
+// 本場對局的行為追蹤(不是模擬狀態,純前端記錄,對局開始時重置)。
+let everSoldTowerThisMatch = false;
+let myElementCountThisMatch = 5;
+
+function evaluateAchievements(state: SimulationState): void {
+  if (!state.victory) return;
+  const unlocked = loadAchievements();
+  let changed = false;
+  const unlock = (id: string) => {
+    if (!unlocked[id]) {
+      unlocked[id] = true;
+      changed = true;
+    }
+  };
+  unlock('full-clear');
+  if (state.lives === STARTING_LIVES) unlock('flawless');
+  if (!everSoldTowerThisMatch) unlock('no-sell');
+  if (myElementCountThisMatch === 1) unlock('mono-element');
+  if (changed) {
+    localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(unlocked));
+    renderAchievements(unlocked);
+  }
+}
+
 function renderLivesBar(lives: number): void {
   const ratio = Math.max(0, Math.min(1, lives / STARTING_LIVES));
   livesBarEl.style.width = `${ratio * 100}%`;
@@ -453,6 +520,7 @@ const lockstepHandlers: LockstepHandlers = {
     } else if (state.victory) {
       showResult('守備成功!全部波次清空', 'victory');
       saveBestRecordIfBetter({ wave: currentWaveNumber(state.tick), cleared: true });
+      evaluateAchievements(state);
       endLocalMatch();
       backToMenuBtn.style.display = 'inline-block';
     }
@@ -479,8 +547,10 @@ const roomHandlers: RoomHandlers = {
     showGameScreen(true);
     gameRenderer.setSelectedTower(null);
     gameRenderer.resetCamera();
+    everSoldTowerThisMatch = false;
     if (!room) return;
     const me = payload.roster.find((p) => p.playerId === room?.getMyPlayerId());
+    myElementCountThisMatch = me?.elements.length ?? 5;
     populateBuildBar(me?.elements ?? ['metal']);
     if (room.getRole() === 'host') {
       hostEngine = new HostLockstepEngine(
@@ -535,6 +605,8 @@ soloBtn.addEventListener('click', () => {
   showGameScreen(true);
   gameRenderer.setSelectedTower(null);
   gameRenderer.resetCamera();
+  everSoldTowerThisMatch = false;
+  myElementCountThisMatch = elements.length;
   populateBuildBar(elements);
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   localEngine = new LocalEngine(
@@ -636,5 +708,6 @@ startBtn.addEventListener('click', () => {
 });
 
 renderBestRecord(loadBestRecord());
+renderAchievements(loadAchievements());
 renderRecentRooms(loadRecentRooms());
 log(`元素對照:${Object.entries(ELEMENT_NAMES).map(([k, v]) => `${k}=${v}`).join(' ')}`);
