@@ -2,7 +2,7 @@
 // 完全不需要亂數——省掉「RNG 演算法在不同瀏覽器要跑出一樣結果」這個額外風險。
 
 import type { Element } from './elements';
-import { createStartPos, type PathPos } from './map';
+import { createStartPos, PATH_COUNT, type PathPos } from './map';
 
 export interface Monster {
   id: number;
@@ -12,6 +12,8 @@ export interface Monster {
   speedFp: number;
   bounty: number;
   pos: PathPos;
+  /** 這隻怪屬於第幾波(0-based),加碼波判定「整波清光了沒」要用 */
+  waveIndex: number;
 }
 
 export interface WaveDef {
@@ -20,6 +22,9 @@ export interface WaveDef {
   hp: number;
   speedFp: number;
   bounty: number;
+  /** 加碼波(可選):在波次開始後這麼多 tick 內把整波清光,可以拿 bonusGold 額外獎勵。 */
+  bonusClearWithinTicks?: number;
+  bonusGold?: number;
 }
 
 export const WAVE_INTERVAL_TICKS = 400; // 20 tick/秒 * 20 秒
@@ -30,6 +35,16 @@ export const WAVES: readonly WaveDef[] = [
   { element: 'water', count: 6, hp: 40, speedFp: 60, bounty: 10 },
   { element: 'fire', count: 6, hp: 55, speedFp: 65, bounty: 12 },
   { element: 'wood', count: 8, hp: 70, speedFp: 60, bounty: 14 },
+  // 加碼波:血少速度快,限時內清光才拿得到額外金幣,清不完也不會有懲罰。
+  {
+    element: 'earth',
+    count: 5,
+    hp: 30,
+    speedFp: 90,
+    bounty: 8,
+    bonusClearWithinTicks: 200,
+    bonusGold: 100,
+  },
   { element: 'earth', count: 8, hp: 90, speedFp: 55, bounty: 16 },
   { element: 'metal', count: 10, hp: 110, speedFp: 60, bounty: 18 },
   { element: 'fire', count: 12, hp: 130, speedFp: 70, bounty: 22 },
@@ -39,11 +54,42 @@ export function totalWaveTicks(): number {
   return WAVES.length * WAVE_INTERVAL_TICKS;
 }
 
+/** 目前是第幾波(1-based),超過最後一波就固定停在最後一波編號。 */
+export function currentWaveNumber(tick: number): number {
+  return Math.min(Math.floor(tick / WAVE_INTERVAL_TICKS), WAVES.length - 1) + 1;
+}
+
+/** 距離下一波開始還有幾個 tick;已經是最後一波的話回傳 null(沒有下一波了)。 */
+export function ticksUntilNextWave(tick: number): number | null {
+  const nextWaveIndex = Math.floor(tick / WAVE_INTERVAL_TICKS) + 1;
+  if (nextWaveIndex >= WAVES.length) return null;
+  return nextWaveIndex * WAVE_INTERVAL_TICKS - tick;
+}
+
+/** 下一波的波次定義(讓 UI 能提前顯示屬性);沒有下一波就回傳 null。 */
+export function upcomingWaveDef(tick: number): WaveDef | null {
+  const nextWaveIndex = Math.floor(tick / WAVE_INTERVAL_TICKS) + 1;
+  if (nextWaveIndex >= WAVES.length) return null;
+  return WAVES[nextWaveIndex];
+}
+
+/** 目前這波如果是加碼波,回傳距離時限還剩幾個 tick + 獎勵金額;不是加碼波或已經過時限就回傳 null。 */
+export function activeBonusWaveInfo(tick: number): { ticksLeft: number; bonusGold: number } | null {
+  const waveIndex = Math.min(Math.floor(tick / WAVE_INTERVAL_TICKS), WAVES.length - 1);
+  const wave = WAVES[waveIndex];
+  if (wave.bonusClearWithinTicks === undefined || wave.bonusGold === undefined) return null;
+  const deadline = waveIndex * WAVE_INTERVAL_TICKS + wave.bonusClearWithinTicks;
+  if (tick > deadline) return null;
+  return { ticksLeft: deadline - tick, bonusGold: wave.bonusGold };
+}
+
 export interface SpawnEvent {
   element: Element;
   hp: number;
   speedFp: number;
   bounty: number;
+  pathId: number;
+  waveIndex: number;
 }
 
 /** 純函式:給定 tick,回傳這一 tick 該生出的怪物。同一個 tick 在哪台機器算都是同一個答案。 */
@@ -55,7 +101,15 @@ export function getSpawnEventsForTick(tick: number): SpawnEvent[] {
     for (let j = 0; j < wave.count; j++) {
       const spawnTick = waveStartTick + j * SPAWN_INTERVAL_TICKS;
       if (spawnTick === tick) {
-        events.push({ element: wave.element, hp: wave.hp, speedFp: wave.speedFp, bounty: wave.bounty });
+        events.push({
+          element: wave.element,
+          hp: wave.hp,
+          speedFp: wave.speedFp,
+          bounty: wave.bounty,
+          // 同一波怪物輪流分配路徑,逼玩家同時顧好兩條路,而不是把火力全堆在一條線上。
+          pathId: j % PATH_COUNT,
+          waveIndex: i,
+        });
       }
     }
   }
@@ -70,6 +124,7 @@ export function createMonster(id: number, spawn: SpawnEvent): Monster {
     maxHp: spawn.hp,
     speedFp: spawn.speedFp,
     bounty: spawn.bounty,
-    pos: createStartPos(),
+    pos: createStartPos(spawn.pathId),
+    waveIndex: spawn.waveIndex,
   };
 }

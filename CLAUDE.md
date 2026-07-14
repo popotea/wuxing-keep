@@ -41,9 +41,9 @@ npm run preview   # 預覽 build 出來的 dist/
 ### 模擬層(`src/sim/`)—— 決定性塔防邏輯
 
 - `elements.ts` — 五行相剋(正統循環:金克木→木克土→土克水→水克火→火克金),整數傷害倍率
-- `map.ts` — **固定路徑**(寫死 waypoints,不做動態尋路/A*),怪物位置用定點數整數(`FP_SCALE=1000`)表示,全程整數運算(攻擊範圍判定用距離平方比較,不用 sqrt)
-- `monsters.ts` — 怪物 + 波次定義,生怪時機是「給定 tick 回傳該生什麼」的純函式,不依賴亂數
-- `towers.ts` — 五種元素塔屬性、範圍內選目標邏輯("打最前面"策略,決定性 tie-break)
+- `map.ts` — **固定路徑**,支援多條(`PATHS`,目前 2 條在 `(9,3)` 交叉),寫死 waypoints,不做動態尋路/A*。怪物位置用定點數整數(`FP_SCALE=1000`)表示,`PathPos` 帶 `pathId`,全程整數運算(攻擊範圍判定用距離平方比較,不用 sqrt;跨路徑比較用 `remainingDistanceFp`)
+- `monsters.ts` — 怪物 + 波次定義,生怪時機是「給定 tick 回傳該生什麼」的純函式,不依賴亂數;同一波怪物輪流分配路徑;支援加碼波(`bonusClearWithinTicks`/`bonusGold`)
+- `towers.ts` — 五種元素塔屬性、可升級(`Tower.level`,封頂 `MAX_TOWER_LEVEL`)、範圍內選目標邏輯("打最前面"策略,決定性 tie-break)
 - `simulation.ts` — 核心 `step(state: SimulationState, tick: number, commands: TimedCommand[]): SimulationState`
 
 **這個檔案的鐵則(修改 `src/sim/` 底下任何東西都要遵守)**:
@@ -54,7 +54,11 @@ npm run preview   # 預覽 build 出來的 dist/
 
 ### `src/main.ts` + `index.html`
 
-目前是 **Phase 1+3 的手動測試/診斷頁面**,不是正式遊戲 UI——用 canvas 畫簡陋的地圖/塔/怪物,驗證連線同步跟模擬邏輯有沒有正確運作。真正的遊戲畫面之後會換成 Phaser 3。
+目前是 **Phase 1+3 的手動測試/診斷頁面**,不是正式遊戲 UI——渲染已經改用 Phaser 3(`src/game/GameScene.ts`/`PhaserGame.ts`),但畫的還是幾何圖形佔位(底座+尖塔的塔、圓身+眼睛的怪物),不是正式美術,用來驗證連線同步跟模擬邏輯有沒有正確運作。
+
+### `tools/ai-hub/` + `scripts/asset-server.cjs` —— AI 美術產圖工具
+
+跟遊戲本體(Vite/TypeScript)完全分開的獨立小工具,不會被 `npm run build` 打包進去。`npm run assets` 啟動後開 http://localhost:8787,可以用 AI 生圖 API(含免金鑰的 Pollinations)產生塔/怪物/地形素材,存進 `public/assets/`。細節見 [`docs/ART_PIPELINE.md`](docs/ART_PIPELINE.md)。**工具已就緒不代表已經用它產過圖**——`GameScene.ts` 目前完全不會讀取 `public/assets/` 底下的圖片。
 
 ## 開發階段路線圖與目前狀態
 
@@ -67,3 +71,5 @@ npm run preview   # 預覽 build 出來的 dist/
 | 5 | 平衡調整、美術、Phaser 3 正式渲染 | 未開始 |
 
 已確認的產品決策:**只做單人模式 + 合作模式,不做對戰/PVP**;8 人上限。
+
+尚未排進上述 Phase、還在構想階段的功能點子記錄在 [`docs/FUTURE_IDEAS.md`](docs/FUTURE_IDEAS.md)。

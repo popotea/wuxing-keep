@@ -1,46 +1,60 @@
-// 固定路徑地圖。刻意不做動態尋路——路徑是寫死的 waypoints,蓋塔只能蓋在非路徑格,
-// 這樣完全不需要 A* 之類的尋路演算法,少一個決定性風險來源。
-// 所有座標/距離都用定點數整數(FP_SCALE = 1 格),不用 float。
+// 地圖:支援多條固定路徑(寫死 waypoints,不做動態尋路/A*),路徑之間可以交叉,
+// 蓋塔只能蓋在非路徑格。所有座標/距離都用定點數整數(FP_SCALE = 1 格),不用 float。
 
 export const FP_SCALE = 1000;
 export const GRID_WIDTH = 16;
 export const GRID_HEIGHT = 10;
 
-/** 路徑轉折點,格子座標。相鄰兩點必須是水平或垂直對齊(不能斜線)。 */
-export const PATH_WAYPOINTS: ReadonlyArray<readonly [number, number]> = [
-  [0, 5],
-  [4, 5],
-  [4, 2],
-  [9, 2],
-  [9, 7],
-  [13, 7],
-  [13, 4],
-  [15, 4],
+/**
+ * 多條路徑,每條是一串轉折點(格子座標)。相鄰兩點必須是水平或垂直對齊(不能斜線)。
+ * 路徑 0 是原本的路;路徑 1 跟路徑 0 在 (9,3) 交叉,提升防守難度(不能只顧一條線)。
+ */
+export const PATHS: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = [
+  [
+    [0, 5],
+    [4, 5],
+    [4, 2],
+    [9, 2],
+    [9, 7],
+    [13, 7],
+    [13, 4],
+    [15, 4],
+  ],
+  [
+    [12, 0],
+    [12, 3],
+    [6, 3],
+    [6, 9],
+  ],
 ];
 
-function computeSegmentLengthsFp(): number[] {
+export const PATH_COUNT = PATHS.length;
+
+function computeSegmentLengthsFp(waypoints: ReadonlyArray<readonly [number, number]>): number[] {
   const lengths: number[] = [];
-  for (let i = 0; i < PATH_WAYPOINTS.length - 1; i++) {
-    const [ax, ay] = PATH_WAYPOINTS[i];
-    const [bx, by] = PATH_WAYPOINTS[i + 1];
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const [ax, ay] = waypoints[i];
+    const [bx, by] = waypoints[i + 1];
     const tiles = Math.abs(bx - ax) + Math.abs(by - ay);
     lengths.push(tiles * FP_SCALE);
   }
   return lengths;
 }
 
-export const SEGMENT_LENGTHS_FP = computeSegmentLengthsFp();
+export const SEGMENT_LENGTHS_FP_BY_PATH: readonly number[][] = PATHS.map(computeSegmentLengthsFp);
 
 function computePathTiles(): Set<string> {
   const tiles = new Set<string>();
-  for (let i = 0; i < PATH_WAYPOINTS.length - 1; i++) {
-    const [ax, ay] = PATH_WAYPOINTS[i];
-    const [bx, by] = PATH_WAYPOINTS[i + 1];
-    const dx = Math.sign(bx - ax);
-    const dy = Math.sign(by - ay);
-    const steps = Math.max(Math.abs(bx - ax), Math.abs(by - ay));
-    for (let s = 0; s <= steps; s++) {
-      tiles.add(`${ax + dx * s},${ay + dy * s}`);
+  for (const waypoints of PATHS) {
+    for (let i = 0; i < waypoints.length - 1; i++) {
+      const [ax, ay] = waypoints[i];
+      const [bx, by] = waypoints[i + 1];
+      const dx = Math.sign(bx - ax);
+      const dy = Math.sign(by - ay);
+      const steps = Math.max(Math.abs(bx - ax), Math.abs(by - ay));
+      for (let s = 0; s <= steps; s++) {
+        tiles.add(`${ax + dx * s},${ay + dy * s}`);
+      }
     }
   }
   return tiles;
@@ -57,23 +71,25 @@ export function inBounds(x: number, y: number): boolean {
 }
 
 export interface PathPos {
-  /** 0..SEGMENT_LENGTHS_FP.length-1;等於 length 代表已經走到終點(漏怪) */
+  pathId: number;
+  /** 0..該路徑 segment 數-1;等於 segment 數代表已經走到終點(漏怪) */
   segmentIndex: number;
   distanceIntoSegmentFp: number;
 }
 
-export function createStartPos(): PathPos {
-  return { segmentIndex: 0, distanceIntoSegmentFp: 0 };
+export function createStartPos(pathId: number): PathPos {
+  return { pathId, segmentIndex: 0, distanceIntoSegmentFp: 0 };
 }
 
 /** 沿路徑前進 speedFp 定點數單位。回傳新位置,以及是否已經走到終點(漏怪)。 */
 export function advanceAlongPath(pos: PathPos, speedFp: number): { pos: PathPos; leaked: boolean } {
+  const lengths = SEGMENT_LENGTHS_FP_BY_PATH[pos.pathId];
   let segmentIndex = pos.segmentIndex;
   let distanceIntoSegmentFp = pos.distanceIntoSegmentFp;
   let remaining = speedFp;
 
-  while (remaining > 0 && segmentIndex < SEGMENT_LENGTHS_FP.length) {
-    const segLen = SEGMENT_LENGTHS_FP[segmentIndex];
+  while (remaining > 0 && segmentIndex < lengths.length) {
+    const segLen = lengths[segmentIndex];
     const spaceLeft = segLen - distanceIntoSegmentFp;
     if (remaining < spaceLeft) {
       distanceIntoSegmentFp += remaining;
@@ -85,22 +101,37 @@ export function advanceAlongPath(pos: PathPos, speedFp: number): { pos: PathPos;
     }
   }
 
-  const leaked = segmentIndex >= SEGMENT_LENGTHS_FP.length;
-  return { pos: { segmentIndex, distanceIntoSegmentFp }, leaked };
+  const leaked = segmentIndex >= lengths.length;
+  return { pos: { pathId: pos.pathId, segmentIndex, distanceIntoSegmentFp }, leaked };
 }
 
 /** 怪物在畫面上的定點數世界座標(x/y 都乘了 FP_SCALE),純整數運算。 */
 export function worldPositionFp(pos: PathPos): { xFp: number; yFp: number } {
-  if (pos.segmentIndex >= PATH_WAYPOINTS.length - 1) {
-    const [lx, ly] = PATH_WAYPOINTS[PATH_WAYPOINTS.length - 1];
+  const waypoints = PATHS[pos.pathId];
+  if (pos.segmentIndex >= waypoints.length - 1) {
+    const [lx, ly] = waypoints[waypoints.length - 1];
     return { xFp: lx * FP_SCALE, yFp: ly * FP_SCALE };
   }
-  const [ax, ay] = PATH_WAYPOINTS[pos.segmentIndex];
-  const [bx, by] = PATH_WAYPOINTS[pos.segmentIndex + 1];
+  const [ax, ay] = waypoints[pos.segmentIndex];
+  const [bx, by] = waypoints[pos.segmentIndex + 1];
   const dx = Math.sign(bx - ax);
   const dy = Math.sign(by - ay);
   return {
     xFp: ax * FP_SCALE + dx * pos.distanceIntoSegmentFp,
     yFp: ay * FP_SCALE + dy * pos.distanceIntoSegmentFp,
   };
+}
+
+/**
+ * 從目前位置走到該路徑終點還剩多少定點數距離。
+ * 不同路徑長度不一樣,segmentIndex 沒辦法直接跨路徑比較「誰比較接近終點」,
+ * 這個剩餘距離是統一的絕對單位,才能拿來跨路徑比大小(塔的選目標邏輯要用)。
+ */
+export function remainingDistanceFp(pos: PathPos): number {
+  const lengths = SEGMENT_LENGTHS_FP_BY_PATH[pos.pathId];
+  let remaining = 0;
+  for (let i = pos.segmentIndex; i < lengths.length; i++) {
+    remaining += i === pos.segmentIndex ? lengths[i] - pos.distanceIntoSegmentFp : lengths[i];
+  }
+  return remaining;
 }

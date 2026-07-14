@@ -1,0 +1,1445 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五行守衛 AI Hub</title>
+<style>
+  /* ===== 主題變數 ===== */
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --border: #e4e7ec;
+    --text: #1a2233; --muted: #667085; --accent: #4f46e5; --accent-soft: #eef2ff;
+    --green: #16a34a; --red: #dc2626; --amber: #d97706;
+    --shadow: 0 1px 3px rgba(16,24,40,.08);
+  }
+  [data-theme="dark"] {
+    --bg: #0f1419; --panel: #1a212b; --border: #2a3441;
+    --text: #e6edf3; --muted: #8b98a5; --accent: #6366f1; --accent-soft: #1e1b4b;
+    --shadow: 0 1px 3px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+  .layout { display: flex; min-height: 100vh; }
+
+  /* ===== 側邊欄 ===== */
+  .sidebar { width: 230px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; inset: 0 auto 0 0; transition: transform .2s; z-index: 50; }
+  .brand { padding: 18px 20px; font-weight: 700; font-size: 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+  .brand .dot { width: 26px; height: 26px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; color: #fff; }
+  .nav { padding: 12px 10px; flex: 1; }
+  .nav a { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 8px; color: var(--muted); text-decoration: none; font-weight: 500; margin-bottom: 2px; cursor: pointer; }
+  .nav a:hover { background: var(--bg); color: var(--text); }
+  .nav a.active { background: var(--accent-soft); color: var(--accent); }
+  .nav .ico { width: 18px; text-align: center; }
+  .conn { padding: 14px 18px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  .led { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .led.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .led.off { background: var(--red); }
+
+  /* ===== 主內容 ===== */
+  .main { flex: 1; margin-left: 230px; min-width: 0; }
+  .topbar { height: 60px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 14px; padding: 0 22px; position: sticky; top: 0; z-index: 40; }
+  .topbar .title { font-size: 17px; font-weight: 600; flex: 1; }
+  .icon-btn { background: transparent; border: 1px solid var(--border); border-radius: 8px; width: 38px; height: 38px; cursor: pointer; color: var(--text); font-size: 16px; }
+  .icon-btn:hover { background: var(--bg); }
+  .hamburger { display: none; }
+  .content { padding: 22px; }
+
+  /* ===== 統計卡 ===== */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 22px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; box-shadow: var(--shadow); }
+  .stat .label { color: var(--muted); font-size: 13px; }
+  .stat .value { font-size: 26px; font-weight: 700; margin: 8px 0 4px; }
+  .stat .ico { float: right; width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; font-size: 18px; background: var(--accent-soft); color: var(--accent); }
+
+  /* ===== 卡片 ===== */
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 22px; }
+  .card-head { padding: 16px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+  .card-head h3 { font-size: 15px; flex: 1; }
+  .card-body { padding: 18px; }
+
+  /* ===== 表單元件 ===== */
+  input, select, textarea { font-family: inherit; font-size: 14px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; width: 100%; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 70px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 5px; margin-top: 12px; }
+  label:first-child { margin-top: 0; }
+  .btn { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn.ghost:hover { background: var(--bg); }
+  .btn.sm { padding: 6px 11px; font-size: 13px; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 140px; }
+  .status { font-size: 13px; margin-top: 10px; min-height: 18px; }
+  .status.ok { color: var(--green); } .status.err { color: var(--red); }
+  .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: r .7s linear infinite; vertical-align: -2px; }
+  @keyframes r { to { transform: rotate(360deg); } }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+  /* ===== 模型 chip ===== */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .chip { background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; font-size: 12.5px; cursor: pointer; }
+  .chip:hover { border-color: var(--accent); }
+  .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* ===== 表格 ===== */
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  tbody tr:hover { background: var(--bg); }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge.chat { background: #dbeafe; color: #1e40af; } .badge.image { background: #fce7f3; color: #9d174d; } .badge.models { background: #dcfce7; color: #166534; }
+  [data-theme="dark"] .badge.chat { background: #1e3a5f; color: #bfdbfe; }
+  [data-theme="dark"] .badge.image { background: #500724; color: #fbcfe8; }
+  [data-theme="dark"] .badge.models { background: #14532d; color: #bbf7d0; }
+
+  /* ===== 對話 ===== */
+  .chat-box { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-height: 240px; max-height: 460px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  .msg { display: flex; gap: 10px; max-width: 88%; }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .avatar { width: 30px; height: 30px; border-radius: 8px; flex: none; display: grid; place-items: center; font-size: 15px; }
+  .msg.user .avatar { background: var(--accent); color: #fff; }
+  .msg.bot .avatar { background: var(--accent-soft); color: var(--accent); }
+  .bubble { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; white-space: pre-wrap; word-break: break-word; }
+  .msg.user .bubble { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .chat-input { display: flex; gap: 10px; margin-top: 14px; }
+  .chat-input textarea { min-height: 46px; }
+
+  /* ===== 圖像 ===== */
+  .img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin-top: 14px; }
+  .img-grid img { width: 100%; border-radius: 10px; border: 1px solid var(--border); display: block; }
+  .imgwrap { position: relative; }
+  .imgwrap .btns { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; }
+  .imgwrap .btns .btn { box-shadow: var(--shadow); }
+
+  /* ===== Modal / Toast / Page ===== */
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; place-items: center; z-index: 100; padding: 20px; }
+  .overlay.show { display: grid; }
+  .modal { background: var(--panel); border-radius: 14px; width: 100%; max-width: 720px; max-height: 88vh; overflow: auto; }
+  .modal img { width: 100%; border-radius: 10px; }
+  .page { display: none; } .page.active { display: block; }
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--text); color: var(--panel); padding: 12px 20px; border-radius: 10px; font-weight: 500; transition: transform .25s; z-index: 200; }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  @media (max-width: 768px) {
+    .sidebar { transform: translateX(-100%); } .sidebar.open { transform: translateX(0); }
+    .main { margin-left: 0; } .hamburger { display: block; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <!-- ===== 側邊欄 ===== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand"><span class="dot">✦</span> 五行守衛 AI Hub</div>
+    <nav class="nav" id="nav">
+      <a class="active" data-page="overview"><span class="ico">📊</span> 總覽</a>
+      <a data-page="chat"><span class="ico">💬</span> 對話</a>
+      <a data-page="selfchat"><span class="ico">🔁</span> 對聊測試</a>
+      <a data-page="image"><span class="ico">🎨</span> 圖像生成</a>
+      <a data-page="models"><span class="ico">🧩</span> 模型清單</a>
+      <a data-page="history"><span class="ico">🕑</span> 歷史記錄</a>
+      <a data-page="settings"><span class="ico">⚙️</span> 連線設定</a>
+    </nav>
+    <div class="conn"><span class="led off" id="led"></span><span id="connText">尚未連線</span></div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn hamburger" id="ham">☰</button>
+      <div class="title" id="pageTitle">總覽</div>
+      <button class="icon-btn" id="themeBtn" title="切換主題">🌙</button>
+    </header>
+    <div class="content">
+
+      <!-- ===== 總覽 ===== -->
+      <section class="page active" id="page-overview">
+        <div class="stats" id="statCards"></div>
+        <div class="card">
+          <div class="card-head"><h3>近期請求</h3><button class="btn ghost sm" data-goto="history">查看全部</button></div>
+          <div style="overflow-x:auto">
+            <table><thead><tr><th>時間</th><th>類型</th><th>模型</th><th>摘要</th></tr></thead>
+            <tbody id="recentBody"></tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 對話 ===== -->
+      <section class="page" id="page-chat">
+        <div class="card">
+          <div class="card-head">
+            <h3>💬 對話測試</h3>
+            <select id="chatModel" style="width:auto; max-width:260px"><option value="">選擇模型…</option></select>
+            <button class="btn ghost sm" id="chatExport" title="把目前這場對話存成檔案">⬇ 匯出</button>
+            <button class="btn ghost sm" id="chatImport" title="從檔案載入一場對話">⬆ 匯入</button>
+            <input type="file" id="chatImportFile" accept="application/json,.json" style="display:none">
+          </div>
+          <div class="card-body">
+            <div class="chat-box" id="chatBox">
+              <div class="hint" style="margin:auto">填好設定與模型後,開始對話吧 👋</div>
+            </div>
+            <div class="chat-input">
+              <textarea id="chatInput" placeholder="輸入訊息…(Enter 送出,Shift+Enter 換行)"></textarea>
+              <button class="btn" id="chatSend">送出</button>
+              <button class="btn ghost" id="chatClear" title="清空對話">🗑</button>
+            </div>
+            <div class="row" style="margin-top:12px">
+              <div><label>Temperature</label><input id="temp" type="number" value="0.7" step="0.1" min="0" max="2"></div>
+              <div><label>Max Tokens</label><input id="maxTokens" type="number" value="2048" min="1"></div>
+              <div style="display:flex;align-items:flex-end"><label style="display:flex;gap:6px;align-items:center;margin:0;color:var(--text);cursor:pointer"><input type="checkbox" id="stream" checked style="width:auto"> 串流</label></div>
+            </div>
+            <div class="status" id="chatStatus"></div>
+            <div class="chips" id="chatChips"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 對聊測試(兩模型自動對談) ===== -->
+      <section class="page" id="page-selfchat">
+        <div class="card">
+          <div class="card-head"><h3>🔁 對聊測試</h3><span class="hint" style="margin:0">兩個模型針對你的話題自動對談</span>
+            <button class="btn ghost sm" id="scExport" title="把這場對聊存成檔案">⬇ 匯出</button>
+            <button class="btn ghost sm" id="scImport" title="從檔案載入一場對聊">⬆ 匯入</button>
+            <input type="file" id="scImportFile" accept="application/json,.json" style="display:none">
+          </div>
+          <div class="card-body">
+            <label>📋 情境範本(選了自動帶入人格與開場白,模型仍由你選)</label>
+            <select id="scPreset"></select>
+            <div class="row" style="margin-top:12px">
+              <div>
+                <label>🅰️ 角色 A 模型</label>
+                <select id="scModelA"><option value="">選擇模型…</option></select>
+                <label>A 的人格設定(選填)</label>
+                <input id="scSysA" placeholder="例如:你是樂觀的分析師,立場偏正面">
+              </div>
+              <div>
+                <label>🅱️ 角色 B 模型</label>
+                <select id="scModelB"><option value="">選擇模型…</option></select>
+                <label>B 的人格設定(選填)</label>
+                <input id="scSysB" placeholder="例如:你是謹慎的評論者,負責提出質疑">
+              </div>
+            </div>
+            <label>開場白 / 話題(你來開頭)</label>
+            <textarea id="scSeed">請分析近期台灣與日本的關係,並提出你的觀察。</textarea>
+            <div class="row" style="margin-top:6px">
+              <div><label>對談輪數</label><input id="scTurns" type="number" value="6" min="1" max="40"></div>
+              <div><label>每則 Max Tokens</label><input id="scMax" type="number" value="1024" min="64"></div>
+              <div style="display:flex; align-items:flex-end; gap:10px">
+                <button class="btn" id="scStart">▶ 開始對聊</button>
+                <button class="btn ghost" id="scStop" disabled>⏹ 停止</button>
+              </div>
+            </div>
+            <div class="status" id="scStatus"></div>
+            <div class="chat-box" id="scBox" style="margin-top:6px"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 圖像 ===== -->
+      <section class="page" id="page-image">
+        <div class="card">
+          <div class="card-head"><h3>🧱 遊戲素材範本</h3><span class="hint" style="margin:0">依《2D Top-Down AI 美術規範》快速套用 Prompt</span></div>
+          <div class="card-body">
+            <div class="row">
+              <div><label>分類</label><select id="assetCat"></select></div>
+              <div><label>項目</label><select id="assetSubj"></select></div>
+              <div style="display:flex; align-items:flex-end"><button class="btn ghost" id="assetApply" style="width:100%">套用到下方 Prompt</button></div>
+            </div>
+            <label>自訂主體(選填,留空則用左邊選的項目;例如要生成清單沒有的新怪物 "Fire Goblin holding an axe")</label>
+            <input id="assetCustom" placeholder="例如:Fire Goblin holding an axe">
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>📁 遊戲貼圖檔名/資料夾</h3><span class="hint" style="margin:0">點一下複製該文字;檔名會同時帶入「下載檔名」</span></div>
+          <div class="card-body">
+            <div id="fileGroups"></div>
+            <div class="status" id="batchStatus"></div>
+            <div class="hint" id="targetHint" style="margin-top:10px">點單一項目=帶入 Prompt 與目標;按「⚡ 整組補齊」=缺少的檔案全自動生成並存入,連點都不用點。⚠️ 模板改版(2026-07 Q版貼紙風 v2)後,建議把舊圖清掉整組重生——同資料夾同一批、同一模型生成,風格才不會漂移混雜</div>
+            <label>下載檔名(留空=自動用 Prompt 主體命名;下載一律轉存 PNG)</label>
+            <input id="dlName" placeholder="例如:imp">
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>🎨 圖像生成</h3></div>
+          <div class="card-body">
+            <div class="row">
+              <div style="flex:2"><label>圖像模型</label><input id="imgModel" placeholder="到「模型清單」頁按圖像模型的「使用」鈕帶入,或手動貼上精確 ID(區分大小寫)"></div>
+              <div><label>數量</label><input id="imgN" type="number" value="1" min="1" max="4"></div>
+              <div><label>尺寸</label><select id="imgSize"><option>1024x1024</option><option>512x512</option><option>768x768</option><option>1024x768</option><option>768x1024</option></select></div>
+            </div>
+            <label>Prompt</label>
+            <textarea id="imgPrompt">A beautiful sunset over the ocean, digital art</textarea>
+            <label>Negative Prompt(選填,並非所有模型都支援,會忽略也沒關係)</label>
+            <textarea id="imgNegative" style="min-height:50px"></textarea>
+            <div style="margin-top:14px; display:flex; gap:14px; align-items:center; flex-wrap:wrap">
+              <button class="btn" id="imgBtn">🎨 生成圖像</button>
+              <label style="display:flex;gap:6px;align-items:center;margin:0;color:var(--text);cursor:pointer"><input type="checkbox" id="autoSpec" style="width:auto"> 自動套用美術規範(需求書)</label>
+              <label style="display:flex;gap:6px;align-items:center;margin:0;color:var(--text);cursor:pointer"><input type="checkbox" id="autoMatte" style="width:auto"> 存入遊戲前自動去背</label>
+              <label style="display:flex;gap:6px;align-items:center;margin:0;color:var(--text);cursor:pointer"><input type="checkbox" id="autoSave" style="width:auto"> 生成後自動存入遊戲</label>
+            </div>
+            <div class="hint">「自動存入」要先在上方選好目標(🎯 點怪物),生成完<b>第一張</b>會自動去背並寫進對應資料夾(檔案已存在仍會先問要不要覆蓋);一次生多張時,其餘的用各圖的「💾」手動挑著存。</div>
+            <div class="status" id="imgStatus"></div>
+            <div class="img-grid" id="imgResult"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 模型清單 ===== -->
+      <section class="page" id="page-models">
+        <div class="card">
+          <div class="card-head"><h3>🧩 可用模型</h3>
+            <select id="kindFilter" style="width:auto"><option value="">全部類型</option><option>圖像</option><option>對話</option><option>審核</option><option>嵌入</option><option>語音</option><option>重排</option></select>
+            <label style="display:flex;gap:6px;align-items:center;margin:0;color:var(--text);cursor:pointer;font-size:13px"><input type="checkbox" id="freeOnly" style="width:auto"> 只看免費</label>
+            <button class="btn sm" id="reloadModels">重新整理</button></div>
+          <div style="overflow-x:auto"><table><thead><tr><th>Model ID</th><th>擁有者</th><th>類型</th><th>操作</th></tr></thead><tbody id="modelBody"></tbody></table></div>
+          <div class="status" id="modelStatus" style="padding:0 18px 16px"></div>
+        </div>
+      </section>
+
+      <!-- ===== 歷史記錄 ===== -->
+      <section class="page" id="page-history">
+        <div class="card">
+          <div class="card-head"><h3>🕑 歷史記錄</h3>
+            <button class="btn ghost sm" id="exportHistory">⬇ 匯出</button>
+            <button class="btn ghost sm" id="importHistory">⬆ 匯入</button>
+            <button class="btn ghost sm" id="clearHistory">清空記錄</button>
+            <input type="file" id="importFile" accept="application/json,.json" style="display:none">
+          </div>
+          <div style="overflow-x:auto"><table><thead><tr><th>時間</th><th>類型</th><th>模型</th><th>內容</th><th></th></tr></thead><tbody id="historyBody"></tbody></table></div>
+        </div>
+      </section>
+
+      <!-- ===== 設定 ===== -->
+      <section class="page" id="page-settings">
+        <div class="card" style="max-width:620px">
+          <div class="card-head"><h3>⚙️ 連線設定</h3></div>
+          <div class="card-body">
+            <label>快速切換服務商(各自記住自己的金鑰)</label>
+            <div style="display:flex; gap:8px; flex-wrap:wrap">
+              <button class="btn ghost sm" data-preset="https://www.iai.nkust.edu.tw/aihub/v1">🏫 學校 AI Hub</button>
+              <button class="btn ghost sm" data-preset="https://openrouter.ai/api/v1">🌐 OpenRouter</button>
+              <button class="btn ghost sm" data-preset="https://generativelanguage.googleapis.com/v1beta/openai">✨ Google Gemini</button>
+              <button class="btn ghost sm" data-preset="https://image.pollinations.ai">🎨 Pollinations(免金鑰)</button>
+            </div>
+            <div class="hint">OpenRouter 金鑰到 openrouter.ai → Keys 申請;Gemini 金鑰到 aistudio.google.com 申請(免費額度隨官方政策變動);Pollinations 完全不用金鑰,但只支援圖像頁。</div>
+            <label>Base URL</label>
+            <input id="baseUrl" value="https://www.iai.nkust.edu.tw/aihub/v1">
+            <label>API Key（Bearer Token）</label>
+            <div style="display:flex; gap:8px">
+              <input id="apiKey" type="password" placeholder="貼上你的 API Key">
+              <button class="btn ghost" id="toggleKey" type="button" title="顯示／隱藏金鑰" style="width:46px; flex:none">👁</button>
+            </div>
+            <div class="hint">設定僅存在瀏覽器 localStorage,不會外傳。共用電腦用完請按「清除金鑰」。</div>
+            <div style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap">
+              <button class="btn" id="testConn">🔌 測試連線</button>
+              <button class="btn ghost" id="saveConn">💾 儲存</button>
+              <button class="btn ghost" id="clearKey">🗑 清除金鑰</button>
+            </div>
+            <div class="status" id="connStatus"></div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay"><div class="modal" id="modalContent"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+// AI Hub 管理後台 — 整合 列模型 / 對話 / 圖像生成 / 歷史 / 統計
+// API:OpenAI 相容(/models、/chat/completions、/images/generations)
+// ============================================================
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+// ---------- 設定與狀態 ----------
+const cfg = JSON.parse(localStorage.getItem('aihub-cfg') || '{}');
+const settings = { baseUrl: 'https://www.iai.nkust.edu.tw/aihub/v1', apiKey: '', keys: {}, imgModels: {}, theme: 'light', autoSpec: true, ...cfg };
+// 舊版設定沒有 keys 對照表:把現有金鑰掛到現在的 baseUrl 名下,切換服務商時才不會弄丟
+if (!settings.keys) settings.keys = {};
+if (!settings.imgModels) settings.imgModels = {};
+if (settings.apiKey && !settings.keys[settings.baseUrl]) settings.keys[settings.baseUrl] = settings.apiKey;
+let models = [];          // 模型清單快取
+let chatMessages = [];    // 當前對話訊息
+let currentChatId = null; // 當前對話在歷史記錄中的 id(null = 還沒存成一筆)
+
+function saveCfg() { localStorage.setItem('aihub-cfg', JSON.stringify(settings)); }
+function apiUrl(p) { return settings.baseUrl.replace(/\/+$/, '') + p; }
+function isOpenRouter() { return /openrouter\.ai/i.test(settings.baseUrl); }
+function isGemini() { return /generativelanguage\.googleapis\.com/i.test(settings.baseUrl); }
+function isPollinations() { return /pollinations\.ai/i.test(settings.baseUrl); }
+function providerName() { return isOpenRouter() ? 'OpenRouter' : isGemini() ? 'Google Gemini' : isPollinations() ? 'Pollinations' : '學校 AI Hub'; }
+function headers() {
+  const h = { 'accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + settings.apiKey };
+  if (isOpenRouter()) h['X-Title'] = 'Wuxing Keep AI Hub'; // OpenRouter 用這個在後台標示流量來源
+  return h;
+}
+
+// ---------- 主題 ----------
+function applyTheme() { document.documentElement.setAttribute('data-theme', settings.theme); $('#themeBtn').textContent = settings.theme === 'dark' ? '☀️' : '🌙'; }
+
+// ---------- 歷史記錄(localStorage) ----------
+const history = {
+  KEY: 'aihub-history',
+  all() { try { return JSON.parse(localStorage.getItem(this.KEY) || '[]'); } catch { return []; } },
+  // 共用存檔:最多 200 筆;容量爆掉(通常是圖片 base64 太大)時自動丟掉圖片資料,至少保住文字記錄
+  _save(list) {
+    const slice = list.slice(0, 200);
+    try { localStorage.setItem(this.KEY, JSON.stringify(slice)); }
+    catch { try { localStorage.setItem(this.KEY, JSON.stringify(slice.map(r => { const { images, ...rest } = r; return rest; }))); } catch {} }
+    refreshStats();
+  },
+  add(rec) { const list = this.all(); list.unshift(rec); this._save(list); },
+  // 對話用:依 id 更新或新增 → 同一場對話更新「同一筆」,而不是每則訊息各存一筆
+  upsert(rec) {
+    const list = this.all();
+    const i = list.findIndex(r => r.id && r.id === rec.id);
+    if (i >= 0) list.splice(i, 1);   // 取出舊的
+    list.unshift(rec);               // 更新後的放最前面(最新)
+    this._save(list);
+  },
+  clear() { localStorage.removeItem(this.KEY); refreshStats(); },
+};
+function nowStr() { return new Date().toLocaleString('zh-TW', { hour12: false }); }
+// 對話用的唯一 id(僅內部識別、不顯示給使用者)
+function newId() { return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+// ---------- 頁面切換 ----------
+const titles = { overview: '總覽', chat: '對話', selfchat: '對聊測試', image: '圖像生成', models: '模型清單', history: '歷史記錄', settings: '連線設定' };
+function go(page) {
+  $$('.page').forEach(p => p.classList.remove('active'));
+  $('#page-' + page).classList.add('active');
+  $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
+  $('#pageTitle').textContent = titles[page];
+  $('#sidebar').classList.remove('open');
+  if (page === 'overview') refreshStats();
+  if (page === 'selfchat') renderSC();
+  if (page === 'history') renderHistory();
+  // 進入會用到模型的頁面時,若還沒載入過模型且已設定金鑰,就自動載入,下拉才有東西可選
+  if ((page === 'models' || page === 'chat' || page === 'selfchat') && !models.length && settings.apiKey) loadModels();
+}
+$$('#nav a').forEach(a => a.onclick = () => go(a.dataset.page));
+$$('[data-goto]').forEach(b => b.onclick = () => go(b.dataset.goto));
+
+// ---------- Toast ----------
+let toastTimer;
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2200); }
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+// ---------- 連線狀態燈 ----------
+function setConn(state, text) {
+  const led = $('#led'); led.className = 'led ' + state;
+  $('#connText').textContent = text;
+}
+
+// ---------- 統計卡 + 近期請求 ----------
+function refreshStats() {
+  const list = history.all();
+  const chat = list.filter(r => r.type === 'chat').length;
+  const img = list.filter(r => r.type === 'image').length;
+  const cards = [
+    { label: '總請求數', value: list.length, ico: '📦' },
+    { label: '對話次數', value: chat, ico: '💬' },
+    { label: '生成圖片', value: img, ico: '🎨' },
+    { label: '可用模型', value: models.length || '—', ico: '🧩' },
+  ];
+  $('#statCards').innerHTML = cards.map(c => `<div class="stat"><div class="ico">${c.ico}</div><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`).join('');
+  const badge = { chat: 'chat', image: 'image', models: 'models' };
+  const tname = { chat: '對話', image: '圖像', models: '模型' };
+  $('#recentBody').innerHTML = list.slice(0, 6).map(r => `<tr><td>${r.time}</td><td><span class="badge ${badge[r.type]}">${tname[r.type]}</span></td><td>${esc(r.model || '—')}</td><td>${esc((r.summary || '').slice(0, 40))}</td></tr>`).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">尚無記錄</td></tr>`;
+}
+
+// ---------- 載入模型 ----------
+async function loadModels() {
+  const st = $('#modelStatus'); st.className = 'status';
+  // Pollinations 沒有 /models 端點也不用金鑰,直接說明而不是丟一個看不懂的錯誤
+  if (isPollinations()) { setConn('on', 'Pollinations(免金鑰)'); st.textContent = 'Pollinations 不提供模型清單,請直接到「圖像生成」頁使用(模型填 flux 即可)'; return; }
+  // 防呆:沒有金鑰就別送出(否則會送出空的 Bearer,拿到看不懂的 401)
+  if (!settings.apiKey) { setConn('off', '尚未設定金鑰'); st.className = 'status err'; st.textContent = '✗ 請先到「連線設定」填入並儲存 API Key'; return; }
+  st.innerHTML = '<span class="spin"></span> 載入中…';
+  try {
+    const res = await fetch(apiUrl('/models'), { headers: headers() });
+    const text = await res.text();
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + text.slice(0, 200));
+    const data = JSON.parse(text);
+    models = Array.isArray(data) ? data : (data.data || data.models || []);
+    setConn('on', '已連線 · ' + models.length + ' 個模型');
+    st.className = 'status ok'; st.textContent = '✓ 共 ' + models.length + ' 個模型';
+    renderModelTable();
+    fillModelSelects();
+    refreshStats();
+  } catch (e) {
+    setConn('off', '連線失敗');
+    st.className = 'status err'; st.textContent = '✗ ' + e.message;
+  }
+}
+function modelId(m) { return m.id || m.name || m.model || String(m); }
+// 判斷模型是否免費:OpenRouter 免費模型 id 以 :free 結尾或 pricing 全為 0
+function isFreeModel(m) {
+  const id = modelId(m);
+  if (/:free$/i.test(id)) return true;
+  return !!(m.pricing && +m.pricing.prompt === 0 && +m.pricing.completion === 0);
+}
+// 猜用途:OpenRouter 有提供輸出模態(最準),否則退回用名稱關鍵字判斷
+function modelKind(id, m) {
+  if (m?.architecture?.output_modalities?.includes('image')) return '圖像';
+  if (/safety|guard|moderat/i.test(id)) return '審核';
+  if (/image|dall-?e|flux|sdxl|stable-?diffusion|z-image|kandinsky|midjourney|playground-v|^pic-|-pic-|pic-(large|small)/i.test(id)) return '圖像';
+  if (/embed|bge|gte|text-embedding|m3e|jina-embed|e5-/i.test(id)) return '嵌入';
+  if (/whisper|tts|audio|speech|voice|speaker|\basr\b/i.test(id)) return '語音';
+  if (/rerank/i.test(id)) return '重排';
+  return '對話';
+}
+function renderModelTable() {
+  let list = $('#freeOnly')?.checked ? models.filter(isFreeModel) : models;
+  const kf = $('#kindFilter')?.value;
+  if (kf) list = list.filter(m => modelKind(modelId(m), m) === kf);
+  $('#modelBody').innerHTML = list.map(m => {
+    const id = modelId(m);
+    const kind = modelKind(id, m);
+    // 「對話」「圖像」套用到對應頁;「審核」也走對話頁(它吃 chat 格式、回傳安全分類)
+    const usable = kind === '對話' || kind === '圖像' || kind === '審核';
+    return `<tr><td><b>${esc(id)}</b>${isFreeModel(m) ? ' <span class="badge models">免費</span>' : ''}</td><td>${esc(m.owned_by || m.owner || '—')}</td><td>${kind}</td>
+      <td><button class="btn ghost sm" ${usable ? `onclick="useModel('${esc(id)}','${kind}')"` : 'disabled title="此類型不支援對話/圖像頁"'}>使用</button></td></tr>`;
+  }).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">${
+    !models.length ? '按「重新整理」載入模型'
+    : (kf === '圖像' && $('#freeOnly')?.checked) ? '目前的免費模型都不能產圖 —— 取消「只看免費」可看到付費的圖像模型,或切回學校 AI Hub 用免費的'
+    : '沒有符合篩選的模型,試著放寬類型或取消「只看免費」'
+  }</td></tr>`;
+}
+function fillModelSelects() {
+  const opts = models.map(m => `<option>${esc(modelId(m))}</option>`).join('');
+  // 對話頁 + 對聊頁的三個下拉一起填,保留原本選取值
+  ['#chatModel', '#scModelA', '#scModelB'].forEach(sel => {
+    const el = $(sel); if (!el) return; const cur = el.value;
+    el.innerHTML = '<option value="">選擇模型…</option>' + opts;
+    if (cur) el.value = cur;
+  });
+}
+window.useModel = (id, kind) => {
+  if (kind === '圖像') { $('#imgModel').value = id; saveImgModel(); go('image'); }
+  else {
+    const sel = $('#chatModel');
+    if (![...sel.options].some(o => o.value === id)) sel.innerHTML += `<option>${esc(id)}</option>`;
+    sel.value = id; go('chat');
+  }
+  toast(kind === '審核' ? '已選用審核模型:它只會判斷內容是否安全,不會生成內容' : '已選用 ' + id);
+};
+
+// ---------- 對話 ----------
+function renderChat() {
+  const box = $('#chatBox');
+  if (!chatMessages.length) { box.innerHTML = '<div class="hint" style="margin:auto">填好設定與模型後,開始對話吧 👋</div>'; return; }
+  box.innerHTML = chatMessages.map(m => `<div class="msg ${m.role === 'user' ? 'user' : 'bot'}">
+    <div class="avatar">${m.role === 'user' ? '🙂' : '🤖'}</div><div class="bubble">${esc(m.content)}</div></div>`).join('');
+  box.scrollTop = box.scrollHeight;
+}
+async function sendChat() {
+  const input = $('#chatInput'), st = $('#chatStatus');
+  const content = input.value.trim();
+  const model = $('#chatModel').value;
+  if (!settings.apiKey) { toast('請先到「連線設定」填 API Key'); go('settings'); return; }
+  if (!model) { toast('請先選擇模型'); return; }
+  if (!content) return;
+
+  chatMessages.push({ role: 'user', content });
+  input.value = ''; renderChat();
+  const botMsg = { role: 'assistant', content: '' };
+  chatMessages.push(botMsg);
+
+  const useStream = $('#stream').checked;
+  const body = { model, messages: chatMessages.filter(m => m !== botMsg), temperature: parseFloat($('#temp').value), max_tokens: parseInt($('#maxTokens').value), stream: useStream };
+  st.className = 'status'; st.innerHTML = '<span class="spin"></span> 回應中…';
+  $('#chatSend').disabled = true;
+  const time = nowStr();
+
+  try {
+    const res = await fetch(apiUrl('/chat/completions'), { method: 'POST', headers: headers(), body: JSON.stringify(body) });
+    if (!res.ok) { const t = await res.text(); throw new Error('HTTP ' + res.status + ' — ' + t.slice(0, 300)); }
+
+    if (useStream) {
+      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+      while (true) {
+        const { done, value } = await reader.read(); if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop();
+        for (const line of lines) {
+          const s = line.trim(); if (!s.startsWith('data:')) continue;
+          const p = s.slice(5).trim(); if (p === '[DONE]') continue;
+          try {
+            const d = JSON.parse(p).choices?.[0]?.delta || {};
+            // 一般模型用 content;reasoning 型模型(deepseek / nemotron 等)內容在 reasoning_content
+            botMsg.content += d.content || d.reasoning_content || '';
+            renderChat();
+          } catch {}
+        }
+      }
+    } else {
+      const data = await res.json();
+      const m = data.choices?.[0]?.message || {};
+      botMsg.content = m.content || m.reasoning_content || JSON.stringify(data);
+      renderChat();
+    }
+    // 串流/非串流都跑完還是空 → 給診斷提示,避免使用者看到一片空白
+    if (!botMsg.content.trim()) {
+      botMsg.content = '⚠️ 模型回傳空白內容。常見原因:\n• Max Tokens 太小,被推理思考用光(試著調高到 2048 以上)\n• 選到 embedding / 語音模型(不支援對話)\n• 該模型後端異常';
+      renderChat();
+    }
+    st.className = 'status ok'; st.textContent = '✓ 完成';
+    setConn('on', '已連線');
+    // 把整場對話存成同一筆(含完整訊息,日後可載回)。第一次送出才產生 id
+    if (!currentChatId) currentChatId = newId();
+    history.upsert({
+      id: currentChatId, time, type: 'chat', model,
+      summary: chatMessages.find(m => m.role === 'user')?.content || content, // 用第一則使用者訊息當標題
+      messages: chatMessages.slice(), // 完整對話快照
+    });
+  } catch (e) {
+    botMsg.content = '⚠️ ' + e.message; renderChat();
+    st.className = 'status err'; st.textContent = '✗ ' + e.message;
+    setConn('off', '請求失敗');
+  } finally { $('#chatSend').disabled = false; }
+}
+// 常用模型快選(OpenRouter):審核模型是分類器,只回傳安全判定,放這裡是拿來把關內容,不是拿來生成
+const CHAT_RECOS = [
+  { id: 'nvidia/nemotron-3.5-content-safety:free', label: '🛡 內容審核 nemotron-3.5', note: '審核模型:貼一段文字給它,它回答安不安全/屬於哪類違規。不會生成遊戲內容!' },
+];
+function renderChatChips() {
+  $('#chatChips').innerHTML = CHAT_RECOS.map((r, i) =>
+    `<span class="chip" onclick="pickReco(${i})" title="${esc(r.note)}">${esc(r.label)}</span>`).join('')
+    + `<span class="hint" style="align-self:center">← OpenRouter 快選;生成遊戲文字內容請到「模型清單」勾「只看免費」挑一般對話模型</span>`;
+}
+window.pickReco = i => {
+  const r = CHAT_RECOS[i];
+  if (!isOpenRouter()) { toast('這是 OpenRouter 的模型,請先到「連線設定」切換到 OpenRouter'); go('settings'); return; }
+  const sel = $('#chatModel');
+  if (![...sel.options].some(o => o.value === r.id)) sel.innerHTML += `<option>${esc(r.id)}</option>`;
+  sel.value = r.id;
+  toast(r.note);
+};
+$('#chatSend').onclick = sendChat;
+$('#chatInput').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } };
+$('#chatClear').onclick = () => { chatMessages = []; currentChatId = null; renderChat(); };
+$('#chatModel').onchange = e => { if (e.target.value) toast('已選 ' + e.target.value); };
+
+// 匯出「目前這場對話」成單一 JSON 檔(含完整訊息與模型)
+$('#chatExport').onclick = () => {
+  if (!chatMessages.length) { toast('目前沒有對話可匯出'); return; }
+  const rec = {
+    id: currentChatId || newId(), time: nowStr(), type: 'chat',
+    model: $('#chatModel').value || '',
+    summary: chatMessages.find(m => m.role === 'user')?.content || '',
+    messages: chatMessages.slice(),
+  };
+  const blob = new Blob([JSON.stringify(rec, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'aihub-chat-' + nowStr().replace(/[\/:\s]+/g, '-') + '.json';
+  a.click(); URL.revokeObjectURL(url);
+  toast('已匯出目前對話');
+};
+// 匯入一場對話:載回聊天視窗(含模型),並同步存進歷史
+$('#chatImport').onclick = () => $('#chatImportFile').click();
+$('#chatImportFile').onchange = e => {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      let data = JSON.parse(reader.result);
+      // 同時相容兩種檔案:聊天頁匯出的「單一對話物件」,或歷史頁匯出的「陣列」(取第一筆對話)
+      if (Array.isArray(data)) data = data.find(r => r && r.type === 'chat' && Array.isArray(r.messages));
+      if (!data || !Array.isArray(data.messages)) throw new Error('找不到可載入的對話內容');
+      chatMessages = data.messages.slice();
+      currentChatId = data.id || newId();
+      if (data.model) {
+        const sel = $('#chatModel');
+        if (![...sel.options].some(o => o.value === data.model)) sel.innerHTML += `<option>${esc(data.model)}</option>`;
+        sel.value = data.model;
+      }
+      renderChat();
+      // 一併寫進歷史,之後在歷史頁也找得到、可再載入
+      history.upsert({
+        id: currentChatId, time: data.time || nowStr(), type: 'chat', model: data.model || '',
+        summary: data.summary || (chatMessages.find(m => m.role === 'user')?.content || ''),
+        messages: chatMessages.slice(),
+      });
+      toast('已匯入對話');
+    } catch (err) { toast('匯入失敗:' + err.message); }
+    finally { e.target.value = ''; }
+  };
+  reader.readAsText(file);
+};
+
+// ---------- 對聊測試(兩模型自動對談) ----------
+let scTranscript = [];   // 對談記錄 [{speaker:'A'|'B', model, content}]
+let scStop = false, scRunning = false;
+
+function renderSC() {
+  const box = $('#scBox');
+  if (!scTranscript.length) { box.innerHTML = '<div class="hint" style="margin:auto">設定好上面欄位,按「開始對聊」👋</div>'; return; }
+  box.innerHTML = scTranscript.map(t => `<div class="msg ${t.speaker === 'A' ? 'bot' : 'user'}">
+    <div class="avatar">${t.speaker === 'A' ? '🅰️' : '🅱️'}</div>
+    <div class="bubble"><div style="font-size:11px;opacity:.65;margin-bottom:3px">${t.speaker} · ${esc(t.model || '')}</div>${esc(t.content)}</div></div>`).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+// 呼叫單一模型(非串流,含 reasoning 欄位 fallback)
+async function callModel(model, messages, maxTokens) {
+  const res = await fetch(apiUrl('/chat/completions'), {
+    method: 'POST', headers: headers(),
+    // presence/frequency_penalty:降低模型重複既有文字的傾向(對付複讀)
+    body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: 0.9, top_p: 0.95, presence_penalty: 0.6, frequency_penalty: 0.3, stream: false }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + text.slice(0, 200));
+  const m = JSON.parse(text).choices?.[0]?.message || {};
+  return (m.content || m.reasoning_content || '').trim();
+}
+
+async function runSelfChat() {
+  if (scRunning) return;
+  const a = $('#scModelA').value, b = $('#scModelB').value;
+  if (!settings.apiKey) { toast('請先到「連線設定」填 API Key'); go('settings'); return; }
+  if (!a || !b) { toast('請先為 A、B 各選一個模型'); return; }
+  const seed = $('#scSeed').value.trim();
+  if (!seed) { toast('請先填開場白 / 話題'); return; }
+  const turns = parseInt($('#scTurns').value) || 6;
+  const mt = parseInt($('#scMax').value) || 1024;
+  const sysA = $('#scSysA').value.trim(), sysB = $('#scSysB').value.trim();
+
+  // 開場白視為 A 先發言(由你代筆),接著輪到 B 回應
+  scTranscript = [{ speaker: 'A', model: a, content: seed }];
+  renderSC();
+  scStop = false; scRunning = true;
+  $('#scStart').disabled = true; $('#scStop').disabled = false;
+  const st = $('#scStatus');
+
+  let next = 'B';
+  try {
+    for (let i = 0; i < turns && !scStop; i++) {
+      const model = next === 'A' ? a : b;
+      const sys = next === 'A' ? sysA : sysB;
+      st.className = 'status'; st.innerHTML = `<span class="spin"></span> ${next} (${esc(model)}) 思考中… 第 ${i + 1}/${turns} 則`;
+
+      // 組訊息:對「當前發言者」而言,自己過去的話是 assistant,對方的話是 user
+      // 基底指示:明確禁止複讀,逼模型產生新內容而非複製對方的話
+      const base = '你正在與另一位 AI 進行對談討論。嚴格遵守:(1) 一律使用繁體中文。(2) 只針對對方「最新」一則發言,提出你自己的分析、補充、舉例或反駁。(3) 絕對禁止重複、複製、或原封不動引用對方說過的任何句子。(4) 每則聚焦 1~3 個重點,簡潔有觀點,要推進討論,不要只是附和或換句話說重講一遍。';
+      const msgs = [{ role: 'system', content: sys ? base + '\n\n你的角色設定:' + sys : base }];
+      for (const t of scTranscript) msgs.push({ role: t.speaker === next ? 'assistant' : 'user', content: t.content });
+
+      // 先放佔位泡泡,讓使用者看到輪到誰
+      const ph = { speaker: next, model, content: '…' };
+      scTranscript.push(ph); renderSC();
+
+      let out;
+      try { out = await callModel(model, msgs, mt); }
+      catch (e) { ph.content = '⚠️ ' + e.message; renderSC(); st.className = 'status err'; st.textContent = '✗ ' + e.message; break; }
+
+      ph.content = out || '(模型回傳空白)';
+      renderSC();
+      history.add({ time: nowStr(), type: 'chat', model, summary: '[對聊] ' + out.slice(0, 30) });
+      next = next === 'A' ? 'B' : 'A';
+    }
+    if (!st.className.includes('err')) { st.className = 'status ok'; st.textContent = scStop ? '⏹ 已停止' : '✓ 對談結束'; }
+  } finally {
+    scRunning = false; $('#scStart').disabled = false; $('#scStop').disabled = true;
+  }
+}
+$('#scStart').onclick = runSelfChat;
+$('#scStop').onclick = () => { scStop = true; $('#scStop').disabled = true; };
+
+// 匯出「目前這場對聊」:含雙方模型、人格、開場白、輪數與完整對談記錄
+$('#scExport').onclick = () => {
+  if (!scTranscript.length) { toast('目前沒有對聊內容可匯出'); return; }
+  const rec = {
+    type: 'selfchat', time: nowStr(),
+    modelA: $('#scModelA').value, modelB: $('#scModelB').value,
+    sysA: $('#scSysA').value, sysB: $('#scSysB').value,
+    seed: $('#scSeed').value, turns: $('#scTurns').value, max: $('#scMax').value,
+    transcript: scTranscript.slice(),
+  };
+  const blob = new Blob([JSON.stringify(rec, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'aihub-selfchat-' + nowStr().replace(/[\/:\s]+/g, '-') + '.json';
+  a.click(); URL.revokeObjectURL(url);
+  toast('已匯出對聊');
+};
+// 匯入一場對聊:還原雙方設定與對談記錄到畫面上
+$('#scImport').onclick = () => $('#scImportFile').click();
+$('#scImportFile').onchange = e => {
+  const file = e.target.files[0]; if (!file) return;
+  if (scRunning) { toast('對聊進行中,請先停止再匯入'); e.target.value = ''; return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      let data = JSON.parse(reader.result);
+      if (Array.isArray(data)) data = data.find(r => r && r.type === 'selfchat' && Array.isArray(r.transcript));
+      if (!data || !Array.isArray(data.transcript)) throw new Error('找不到可載入的對聊內容');
+      // 還原模型下拉(若清單裡沒有就先補一個選項),其餘欄位有值才覆蓋
+      const setSel = (sel, val) => { if (!val) return; const el = $(sel); if (![...el.options].some(o => o.value === val)) el.innerHTML += `<option>${esc(val)}</option>`; el.value = val; };
+      setSel('#scModelA', data.modelA); setSel('#scModelB', data.modelB);
+      if (data.sysA != null) $('#scSysA').value = data.sysA;
+      if (data.sysB != null) $('#scSysB').value = data.sysB;
+      if (data.seed != null) $('#scSeed').value = data.seed;
+      if (data.turns != null) $('#scTurns').value = data.turns;
+      if (data.max != null) $('#scMax').value = data.max;
+      scTranscript = data.transcript.slice();
+      renderSC();
+      toast('已匯入對聊');
+    } catch (err) { toast('匯入失敗:' + err.message); }
+    finally { e.target.value = ''; }
+  };
+  reader.readAsText(file);
+};
+
+// 對聊情境範本:一鍵帶入雙方人格 / 開場白 / 輪數(模型仍由使用者自選)
+const SC_PRESETS = {
+  recruit: {
+    name: '🎓 客戶 vs 工程師(招生系統需求訪談)',
+    sysA: '你是一所私立大學的招生主任,不懂技術。你想開發一套線上招生系統,只會用行政與商業語言描述需求(希望報名流程順、提升報名人數、報表好看、長官好交代)。當工程師問你技術問題時,你用非技術的方式回答,並會不時冒出新的想法或擔憂(預算、上線時程、個資安全、跟現有校務系統整合)。你常常一開始講不清楚,需要被引導。',
+    sysB: '你是資深全端工程師,負責訪談客戶、把模糊的商業需求轉成具體功能規格。你會主動提問釐清:使用者角色、完整報名流程、需要哪些欄位、是否要線上繳費與金流、審核機制、要產出哪些報表、預估報名人數與資料量、個資法遵循。每次只聚焦問 1~2 個最關鍵問題,並適時提出技術建議。不要一次問太多。',
+    seed: '你好,我們學校想做一套線上招生報名系統,希望讓學生能網路報名、線上繳費,行政人員可以在後台管理跟匯出名單。我們對技術不太懂,可以幫我們規劃嗎?',
+    turns: 10,
+  },
+  debate: {
+    name: '⚖️ 正方 vs 反方(議題辯論)',
+    sysA: '你是正方,堅定支持討論中的議題。提出有力論點、數據與實例佐證,並逐點反駁對方的說法。',
+    sysB: '你是反方,堅定反對該議題。指出風險、漏洞與反例,並逐點反駁對方的論點。',
+    seed: '我們來辯論:政府是否應該全面禁止國高中學生在校使用手機?請先表達你的立場與三個理由。',
+    turns: 8,
+  },
+  interview: {
+    name: '💼 面試官 vs 求職者(模擬面試)',
+    sysA: '你是科技公司的資深面試官,針對「後端工程師」職缺提問,從自我介紹、技術基礎、專案經驗到情境題逐步深入,並針對對方的回答追問細節。',
+    sysB: '你是來面試後端工程師的求職者,有三年實務經驗,誠實作答但盡量表現專業,回答問題並適度反問公司情況。',
+    seed: '你好,歡迎來面試。我們先從簡單的開始,可以請你做個自我介紹嗎?',
+    turns: 10,
+  },
+  socratic: {
+    name: '📚 老師 vs 學生(蘇格拉底式教學)',
+    sysA: '你是學生,對主題似懂非懂,會提出疑問與不完整的想法,並根據老師的引導逐步修正、深化自己的理解。',
+    sysB: '你是老師,用蘇格拉底式提問引導學生思考,不直接給答案,而是用層層反問幫學生自己想通。',
+    seed: '老師,我不太懂什麼是「機會成本」,可以教我嗎?',
+    turns: 8,
+  },
+  analysis: {
+    name: '🔍 樂觀派 vs 謹慎派(時事分析)',
+    sysA: '你是樂觀的分析師,聚焦機會與正面發展,用趨勢與案例支持你的觀點。',
+    sysB: '你是謹慎的評論者,專門指出風險、盲點與反例,不輕易認同對方。',
+    seed: '請分析近期台灣與日本的關係,並提出你的觀察。',
+    turns: 8,
+  },
+  pmdev: {
+    name: '📱 產品經理 vs 工程師(功能可行性討論)',
+    sysA: '你是產品經理,從使用者價值與商業角度提出功能需求,對技術細節不熟,會在意時程與優先級。',
+    sysB: '你是工程師,評估需求的技術可行性、工時與風險,提出取捨方案,必要時建議更簡單的替代做法。',
+    seed: '我想在我們的 App 加一個「AI 客服聊天」功能,讓使用者隨時能問問題,這個做得出來嗎?大概要多久?',
+    turns: 10,
+  },
+};
+function initPresets() {
+  const sel = $('#scPreset');
+  sel.innerHTML = '<option value="">— 自訂(不套用範本)—</option>' +
+    Object.entries(SC_PRESETS).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
+  sel.onchange = () => {
+    const p = SC_PRESETS[sel.value]; if (!p) return;
+    $('#scSysA').value = p.sysA; $('#scSysB').value = p.sysB;
+    $('#scSeed').value = p.seed; $('#scTurns').value = p.turns;
+    toast('已套用範本,記得選好 A、B 模型');
+  };
+}
+
+// ---------- 遊戲素材範本(五行守衛專用:魔獸爭霸風格元素塔防) ----------
+const ASSET_LIB = {
+  // 「true top-down」是 applySpec 的特徵字,改模板措辭務必保留這句
+  master: 'Stylized fantasy RTS game building asset in the visual spirit of Warcraft III, true top-down (90-degree overhead) view, bold clean readable silhouette at small size, painterly cel-shaded rendering, rich saturated elemental colors, moderate fantasy detail without photorealism, single centered structure, transparent background, game-ready PNG.',
+  negative: 'isometric,45 degree,side view,3D render,photo,realistic,anime,chibi,cute,pastel,flat vector,line art,text,watermark,logo,blurry,multiple subjects,character,creature',
+  cats: {
+    '塔(元素)': ['Metal Tower', 'Wood Tower', 'Water Tower', 'Fire Tower', 'Earth Tower'],
+    '怪物(元素)': ['Metal Creature', 'Wood Creature', 'Water Creature', 'Fire Creature', 'Earth Creature'],
+    '地形': ['Buildable Grass Tile', 'Monster Path Tile'],
+    'UI': ['Gold Coin', 'Heart Life', 'Element Rune'],
+  },
+  sheets: {},
+};
+function initAssetLib() {
+  const catSel = $('#assetCat'), subjSel = $('#assetSubj');
+  catSel.innerHTML = Object.keys(ASSET_LIB.cats).map(c => `<option>${c}</option>`).join('');
+  const fillSubj = () => { subjSel.innerHTML = ASSET_LIB.cats[catSel.value].map(s => `<option>${s}</option>`).join(''); };
+  catSel.onchange = fillSubj; fillSubj();
+  $('#imgNegative').value = ASSET_LIB.negative;
+  $('#assetApply').onclick = () => {
+    const custom = $('#assetCustom').value.trim();
+    const sheet = ASSET_LIB.sheets[subjSel.value];
+    let subject;
+    if (catSel.value === '動作表 Sprite Sheet') {
+      // 動作表要有角色主體才有意義:沒填就用通用角色,並照需求書補上透明背景與等距排版要求
+      subject = (custom || 'game character') + ', ' + sheet + ', uniform frame spacing';
+    } else {
+      subject = custom || subjSel.value;
+    }
+    $('#imgPrompt').value = ASSET_LIB.master + '\nSubject: ' + subject + '.';
+    if (!$('#imgNegative').value.trim()) $('#imgNegative').value = ASSET_LIB.negative;
+    toast('已套用範本:' + subject);
+  };
+}
+
+// ---------- 遊戲貼圖檔名對照(依種類分資料夾) ----------
+// 檔名對應 src/sim/elements.ts 的 Element 型別(metal/wood/water/fire/earth),
+// GameScene.ts 目前還是用幾何圖形畫塔/怪物,還沒讀取這些圖片——先把素材產好備著,
+// 之後只要把 drawTower/drawMonster 內部畫法換成讀取這裡的 PNG 就好,對外介面不用改。
+// 每個項目:[檔名, 遊戲內名稱, 生圖用英文外觀描述(照 src/game/GameScene.ts 的 ELEMENT_COLORS 配色寫)]
+const GAME_ASSETS = [
+  { dir: 'assets/towers/', note: '五行塔 — 遊戲尚未讀取,先分類備存', files: [
+    ['metal.png', '金塔', 'ornate golden metal spire tower with sharp blade-like finials and polished bronze armor plating, small defensive turret, faint magical shimmer'],
+    ['wood.png', '木塔', 'living wooden watchtower entwined with green vines and glowing leaves, organic bark texture, small defensive turret'],
+    ['water.png', '水塔', 'crystalline deep-blue tower with flowing water motifs and a translucent aqua crystal spire, small defensive turret'],
+    ['fire.png', '火塔', 'volcanic obsidian tower with glowing orange lava cracks and small flame bursts at the top, small defensive turret'],
+    ['earth.png', '土塔', 'sturdy brown stone and clay tower with mossy boulders and earthen rune carvings, small squat defensive turret'],
+  ] },
+  { dir: 'assets/monsters/', note: '五行怪物 — 遊戲尚未讀取,先分類備存', files: [
+    ['metal.png', '金怪', 'small mechanical golem creature made of gleaming gold and bronze plates, sharp metallic claws, glowing amber eyes, single creature'],
+    ['wood.png', '木怪', 'small forest treant sprite creature covered in green leaves and vines, bark-like skin, glowing green eyes, single creature'],
+    ['water.png', '水怪', 'small serpentine water elemental creature made of flowing translucent blue water, fin-like limbs, glowing cyan eyes, single creature'],
+    ['fire.png', '火怪', 'small fiery imp creature wreathed in orange flames, charcoal-black skin with glowing cracks, glowing red eyes, single creature'],
+    ['earth.png', '土怪', 'small rocky golem creature made of brown clay and stone chunks with mossy patches, glowing yellow eyes, single creature'],
+  ] },
+  { dir: 'assets/tiles/', note: '地圖材質 — 遊戲尚未讀取,先分類備存,整格材質不去背', files: [
+    ['floor.png', '可蓋塔地面', 'plain grassy ground, muted green, minimal detail'],
+    ['path.png', '怪物行走路徑', 'worn packed dirt path, muted brown, minimal detail'],
+  ] },
+];
+let saveTarget = null; // 目前選定的「存入遊戲」目標 {dir:'monsters', file:'imp.png'}
+// 備援:沒點怪物 chip 但「下載檔名」填的名字對得上遊戲檔名時,自動推斷目標
+function targetFromName() {
+  const n = ($('#dlName').value.trim().replace(/\.png$/i, '') + '.png').toLowerCase();
+  for (const g of GAME_ASSETS) {
+    const hit = g.files.find(([f]) => f.toLowerCase() === n);
+    if (hit) return { dir: g.dir.replace(/^assets\//, '').replace(/\/$/, ''), file: hit[0], cname: hit[1] };
+  }
+  return null;
+}
+// 備援二:連檔名都沒填時,從 Prompt 內容辨識目標(對得上英文外觀描述或中文名就算)
+function targetFromPrompt(prompt) {
+  const p = (prompt || '').toLowerCase();
+  for (const g of GAME_ASSETS) {
+    for (const [file, cname, subject] of g.files) {
+      if ((subject && p.includes(subject.toLowerCase())) || prompt.includes(cname)) {
+        return { dir: g.dir.replace(/^assets\//, '').replace(/\/$/, ''), file, cname };
+      }
+    }
+  }
+  return null;
+}
+function initGameFiles() {
+  $('#fileGroups').innerHTML = GAME_ASSETS.map((g, gi) => `
+    <label>${esc(g.dir)} — ${esc(g.note)}</label>
+    <div class="chips" style="margin-top:6px">
+      <span class="chip" onclick="copyAsset('${g.dir}')">📁 ${g.dir}</span>
+      ${g.files.length ? `<button class="btn sm" id="batchbtn-${gi}" onclick="batchGen(${gi})">⚡ 整組補齊(${g.files.length})</button>` : ''}
+      ${g.files.map(([f, n], fi) => `<span class="chip" onclick="selectAsset(${gi},${fi})"><b>${f}</b> ${n}</span>`).join('')}
+    </div>`).join('');
+}
+// ⚡ 整組批次:只補「還沒有檔案」的項目,逐一生成→去背→存入;已存在的略過
+// (想重生某一項:點該項 chip 單獨生成,存入時會問要不要覆蓋)
+let batchRunning = false, batchStop = false;
+window.batchGen = async gi => {
+  const st = $('#batchStatus');
+  if (batchRunning) { batchStop = true; toast('批次會在目前這張完成後停止'); return; }
+  const g = GAME_ASSETS[gi];
+  if (!settings.apiKey && !isPollinations()) { toast('請先到「連線設定」填 API Key'); go('settings'); return; }
+  const model = $('#imgModel').value.trim() || (isPollinations() ? 'flux' : '');
+  if (!model) { toast('請先在下方「圖像生成」填模型 ID'); return; }
+  const dir = g.dir.replace(/^assets\//, '').replace(/\/$/, '');
+  const btn = $('#batchbtn-' + gi);
+  batchRunning = true; batchStop = false;
+  if (btn) btn.textContent = '⏹ 停止';
+  let saved = 0, skipped = 0, failed = 0;
+  const size = $('#imgSize').value || '1024x1024';
+  for (let i = 0; i < g.files.length && !batchStop; i++) {
+    const [file, cname, subject] = g.files[i];
+    st.className = 'status'; st.innerHTML = `<span class="spin"></span> (${i + 1}/${g.files.length}) ${esc(file)} ${esc(cname)} 生成中…(新增 ${saved}、略過 ${skipped}、失敗 ${failed})`;
+    try {
+      // 先問伺服器檔案在不在:已存在直接略過,不浪費生成額度
+      const head = await fetch(serverBase() + '/' + g.dir + file, { cache: 'no-store' });
+      if (head.ok) { skipped++; continue; }
+    } catch (e) {
+      st.className = 'status err'; st.textContent = '✗ 批次需要「啟動遊戲.bat」的伺服器在跑,請開啟後再按一次';
+      batchRunning = false; if (btn) btn.textContent = `⚡ 整組補齊(${g.files.length})`;
+      return;
+    }
+    try {
+      const target = { dir, file, cname };
+      const { prompt, negative } = applySpec(subject, '', specKindOf(target));
+      const srcs = await generateSrcs(model, prompt, negative, 1, size);
+      const r = await saveToGame(srcs[0], target, true); // 上面確認過缺檔,直接寫入
+      r === 'saved' ? saved++ : failed++;
+    } catch (e) { failed++; }
+    await new Promise(r => setTimeout(r, 1200)); // 對免費服務客氣點,連發容易被限流
+  }
+  st.className = failed ? 'status err' : 'status ok';
+  st.textContent = `${failed ? '⚠' : '✓'} 批次結束:新增 ${saved}、已存在略過 ${skipped}、失敗 ${failed}` + (batchStop ? '(手動停止)' : '') + (saved ? ' — 遊戲頁 Ctrl+F5 即可看到' : '');
+  batchRunning = false;
+  if (btn) btn.textContent = `⚡ 整組補齊(${g.files.length})`;
+};
+window.copyAsset = async text => {
+  try { await navigator.clipboard.writeText(text); toast('已複製 ' + text); }
+  catch { toast('複製失敗,請手動選取'); }
+};
+// 選擇要產生的項目:一次帶好 Prompt 主體、下載檔名、存入遊戲的目標位置,並複製檔名
+window.selectAsset = async (gi, fi) => {
+  const g = GAME_ASSETS[gi], [file, cname, subject] = g.files[fi];
+  saveTarget = { dir: g.dir.replace(/^assets\//, '').replace(/\/$/, ''), file, cname };
+  $('#dlName').value = file.replace(/\.png$/i, '');
+  $('#imgPrompt').value = subject; // 只放主體,「自動套用美術規範」會在生成時包上完整模板
+  $('#targetHint').textContent = '🎯 目前目標:' + g.dir + file + '(' + cname + ')— 生成後每張圖會多一顆「存入遊戲」按鈕';
+  try { await navigator.clipboard.writeText(file); } catch {}
+  toast('已選 ' + cname + ',Prompt 已帶入主體,可直接生成');
+};
+
+// ---------- 圖像生成 ----------
+// 記住每個服務商「上次用的圖像模型」,重開頁或切換服務商時自動帶回
+function saveImgModel() { settings.imgModels[settings.baseUrl] = $('#imgModel').value.trim(); saveCfg(); }
+function restoreImgModel() { $('#imgModel').value = settings.imgModels[settings.baseUrl] || ''; }
+// OpenRouter/Gemini 生圖走 chat/generateContent 端點,沒有數量/尺寸參數:反灰避免使用者以為調了有效
+// Pollinations 反而完全支援(尺寸走網址參數、張數用不同 seed 生),保持可用
+function updateImgFieldState() {
+  const off = isOpenRouter() || isGemini();
+  ['#imgN', '#imgSize'].forEach(s => { const el = $(s); el.disabled = off; el.title = off ? '此服務商生圖不支援這個參數,尺寸與張數由模型自行決定' : ''; });
+}
+$('#imgModel').onchange = saveImgModel;
+// 下載檔名候選:優先用「下載檔名」欄位,否則從 Prompt 的 Subject 取主體轉成安全檔名
+function slugify(s) { return (s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''); }
+function baseNameOf(prompt) {
+  const manual = $('#dlName').value.trim().replace(/\.png$/i, '');
+  if (manual) return manual;
+  const subj = (prompt.match(/Subject:\s*([^,.\n]+)/i) || [])[1];
+  return slugify(subj) || slugify(prompt.slice(0, 30)) || 'image';
+}
+// 一律轉成 PNG(遊戲只吃 PNG;Pollinations 回的是 JPEG,經 canvas 重新編碼)
+async function toPngBlob(src) {
+  let blob = await (await fetch(src)).blob();
+  if (blob.type !== 'image/png') {
+    const bmp = await createImageBitmap(blob);
+    const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+    c.getContext('2d').drawImage(bmp, 0, 0);
+    blob = await new Promise(r => c.toBlob(r, 'image/png'));
+  }
+  return blob;
+}
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = name; a.click();
+  URL.revokeObjectURL(url);
+}
+async function downloadImg(src, base, idx, total) {
+  const name = base + (total > 1 ? '-' + (idx + 1) : '') + '.png';
+  try {
+    downloadBlob(await toPngBlob(src), name);
+    toast('已下載 ' + name);
+  } catch (e) {
+    // 跨域抓取失敗就退回開新分頁讓使用者右鍵另存,至少不會什麼都拿不到
+    window.open(src, '_blank');
+    toast('自動下載失敗,已開新分頁,請右鍵另存');
+  }
+}
+// 自動去背:AI 生圖的「透明背景」是畫出來的假透明,不去背的話怪物會揹一塊方形底色進遊戲。
+// 做法:從邊框像素取背景色(最多兩群,對付灰白棋盤格),flood fill 只挖「跟邊框相連」的背景,
+// 怪物身體內部就算有相近顏色也不會被誤刪
+async function removeBgBlob(blob) {
+  const bmp = await createImageBitmap(blob);
+  const w = bmp.width, h = bmp.height;
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d'); g.drawImage(bmp, 0, 0);
+  const im = g.getImageData(0, 0, w, h), px = im.data;
+  const TOL = 48; // 顏色距離容忍度(RGB 歐氏距離),太小去不乾淨、太大會吃到主體邊緣
+  const at = i => [px[i * 4], px[i * 4 + 1], px[i * 4 + 2]];
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const seeds = [];
+  for (let x = 0; x < w; x++) seeds.push(x, (h - 1) * w + x);
+  for (let y = 0; y < h; y++) seeds.push(y * w, y * w + w - 1);
+  const centers = [];
+  for (const s of seeds) {
+    const col = at(s);
+    if (centers.length < 2 && !centers.some(cc => dist(cc, col) < TOL)) centers.push(col);
+  }
+  const isBg = i => { const col = at(i); return centers.some(cc => dist(cc, col) < TOL); };
+  const seen = new Uint8Array(w * h), stack = [];
+  for (const s of seeds) if (!seen[s] && isBg(s)) { seen[s] = 1; stack.push(s); }
+  while (stack.length) {
+    const i = stack.pop(); px[i * 4 + 3] = 0;
+    const x = i % w, y = (i / w) | 0;
+    if (x > 0) { const n = i - 1; if (!seen[n] && isBg(n)) { seen[n] = 1; stack.push(n); } }
+    if (x < w - 1) { const n = i + 1; if (!seen[n] && isBg(n)) { seen[n] = 1; stack.push(n); } }
+    if (y > 0) { const n = i - w; if (!seen[n] && isBg(n)) { seen[n] = 1; stack.push(n); } }
+    if (y < h - 1) { const n = i + w; if (!seen[n] && isBg(n)) { seen[n] = 1; stack.push(n); } }
+  }
+  g.putImageData(im, 0, 0);
+  return new Promise(r => c.toBlob(r, 'image/png'));
+}
+// 預縮:AI 生圖動輒 1024px/1MB+,遊戲內塔/怪物只顯示 32px 一格,存檔前先縮到夠用的解析度
+// (塔/地形 256、怪物 512 留一點餘裕給之後可能的動作幀)——載入慢是資產問題,不是程式碼問題
+function shrinkMaxOf(target) { return target.dir === 'monsters' ? 512 : 256; }
+async function shrinkBlob(blob, max) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+    if (img.width <= max && img.height <= max) return blob; // 只縮不放大
+    const s = Math.min(max / img.width, max / img.height);
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.width * s)); c.height = Math.max(1, Math.round(img.height * s));
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(img, 0, 0, c.width, c.height);
+    return await new Promise(r => c.toBlob(r, 'image/png'));
+  } finally { URL.revokeObjectURL(url); }
+}
+// 存入遊戲:透過 scripts/asset-server.cjs 的 /api/save-asset 寫進 D:\newgame\public\assets\<分類>\<檔名>
+// 頁面若是 file:// 開的就打 localhost:8787(所以要先跑 npm run assets)
+function serverBase() { return /^http/.test(location.origin) ? location.origin : 'http://localhost:8787'; }
+// ow 參數:undefined=已存在時跳確認視窗(單張流程)、true=直接覆蓋、false=已存在就略過(批次用)
+async function saveToGame(src, target, ow) {
+  let blob;
+  try {
+    blob = await toPngBlob(src);
+    // 整格地形材質不去背(挖了會破洞);怪物/物品/圍籬等透明物件照常去背
+    if ($('#autoMatte').checked && !isTileTexture(target)) blob = await removeBgBlob(blob);
+    blob = await shrinkBlob(blob, shrinkMaxOf(target)); // 存檔前預縮,控制載入量
+  } catch (e) { toast('圖片處理失敗:' + e.message); return 'failed'; }
+  try {
+    const b64 = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result.split(',')[1]); fr.readAsDataURL(blob); });
+    const post = overwrite => fetch(serverBase() + '/api/save-asset', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir: target.dir, name: target.file, b64, overwrite }),
+    });
+    let res = await post(ow === true);
+    if (res.status === 409) {
+      if (ow === false) { toast('⏭ ' + target.file + ' 已存在,略過'); return 'skipped'; }
+      // 已有舊圖時再問一次要不要蓋掉,避免不小心毀掉滿意的舊貼圖
+      if (!confirm(target.file + ' 已存在,要覆蓋成這張嗎?')) { toast('已取消,保留原檔'); return 'cancel'; }
+      res = await post(true);
+    }
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'HTTP ' + res.status);
+    toast('✅ 已存入 ' + data.path + ',重新整理遊戲頁面即可看到新貼圖');
+    return 'saved';
+  } catch (e) {
+    // 伺服器沒開時的備援:瀏覽器不能自己寫進遊戲資料夾(安全限制),
+    // 改成把處理好的成品(已去背、已命名)匯出到下載資料夾,至少只剩「搬檔案」一步
+    downloadBlob(blob, target.file);
+    toast('⚠️ 伺服器未開,已改成下載 ' + target.file + ',請手動放進 assets/' + target.dir + '/(或開啟 啟動遊戲.bat 後重按存入)');
+    return 'fallback';
+  }
+}
+// 地形材質要「鋪滿整格、無縫」,跟一般素材的「置中物件、透明背景」相反,用獨立模板
+// v2 貼紙卡通風:與生物/物品同風格家族(圓潤平塗),「fills the entire square」是 applySpec 特徵字,務必保留
+// 「few large simple shapes / reads clearly at very small scale」是關鍵:遊戲一格只有 40px,
+// 細節太多縮下去會變成高頻雜訊(2026-07-12 教訓,渲染端另有 2×2 攤開補救,但源頭就該低細節)
+const MASTER_TILE = 'Seamless top-down terrain tile texture for a fantasy RTS game, viewed from directly above, few large simple shapes in the pattern, minimal fine detail, reads clearly at very small scale (grid tile is small on screen), painterly flat shading, rich saturated colors, fills the entire square, evenly distributed pattern, uniform lighting, no border, no single centered object, game-ready.';
+const NEG_TILE = 'isometric,3D,realistic,photo,single object,character,creature,border,frame,vignette,text,watermark,logo,busy pattern,high detail,noisy texture,small intricate details';
+// 生物(怪物/動物)用:90° 正俯視只會看到背,AI 又愛只畫一顆頭;
+// 改用「全身 + 站姿 + 3/4 俯視 RPG 視角」,負面詞把頭像/半身/裁切都擋掉
+// v2 貼紙卡通風:「full body from head to feet」是 applySpec 特徵字,務必保留
+const MASTER_CREATURE = 'Stylized fantasy RTS game creature sprite in the visual spirit of Warcraft III, three-quarter top-down RPG view (not directly overhead), full body from head to feet visible, entire body visible including all legs, standing pose, bold clean readable silhouette, painterly cel-shaded rendering, rich saturated elemental colors, moderate fantasy detail without photorealism, transparent background, centered, game-ready PNG.';
+const NEG_CREATURE = 'portrait,face only,head only,headshot,bust,cropped,close-up,half body,isometric,3D,realistic,photo,chibi,cute,pastel,anime,background,text,watermark,logo,multiple subjects';
+// 判斷這個目標是不是「整格材質」:地形都是,唯獨圍籬/軌道是透明物件(要去背、疊在地板上)
+function isTileTexture(target) { return !!target && target.dir === 'tiles'; }
+// 依目標決定 Prompt 模板種類:地形=整格材質、怪物/動物/NPC=全身生物、其餘=置中物件
+function specKindOf(target) {
+  if (!target) return '';
+  if (isTileTexture(target)) return 'tile';
+  if (target.dir === 'monsters' || target.dir === 'animals' || target.dir === 'npcs') return 'creature';
+  return '';
+}
+// 自動套用需求書:Prompt 裡沒有模板特徵字時,把使用者輸入當「主體」包進對應模板
+function applySpec(prompt, negative, kind) {
+  if (!$('#autoSpec').checked) return { prompt, negative };
+  if (kind === 'tile') {
+    if (!prompt.includes('fills the entire square')) prompt = MASTER_TILE + '\nSubject: ' + prompt.trim().replace(/\.$/, '') + '.';
+    if (!negative) negative = NEG_TILE;
+  } else if (kind === 'creature') {
+    if (!prompt.includes('full body from head to feet')) prompt = MASTER_CREATURE + '\nSubject: ' + prompt.trim().replace(/\.$/, '') + '.';
+    if (!negative) negative = NEG_CREATURE;
+  } else {
+    if (!/true top-down/i.test(prompt)) prompt = ASSET_LIB.master + '\nSubject: ' + prompt.trim().replace(/\.$/, '') + '.';
+    if (!negative) negative = ASSET_LIB.negative;
+  }
+  return { prompt, negative };
+}
+// 依目前服務商生成圖片,回傳圖片來源字串陣列(URL 或 data URL)——單張生成與批次共用
+async function generateSrcs(model, prompt, negative, n, size) {
+  let srcs = [];
+  if (isPollinations()) {
+    // Pollinations 是「網址即圖片」:組好 URL 後,誰去載入(<img> 或 fetch)才真正生成;
+    // 多張用不同 seed 產生變化
+    const [w, h] = size.split('x');
+    for (let i = 0; i < n; i++) {
+      const seed = Math.floor(Math.random() * 1e9);
+      srcs.push('https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt) +
+        `?width=${w}&height=${h}&model=${encodeURIComponent(model)}&seed=${seed}&nologo=true`);
+    }
+  } else if (isGemini()) {
+    // Gemini 的 OpenAI 相容層不支援生圖,要打原生 :generateContent 端點,圖片以 base64 回在 inlineData
+    const mid = model.replace(/^models\//, '');
+    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + mid + ':generateContent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.apiKey },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt + (negative ? '\nAvoid: ' + negative : '') }] }],
+        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
+      }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + text.slice(0, 300));
+    const parts = JSON.parse(text).candidates?.[0]?.content?.parts || [];
+    srcs = parts.filter(p => p.inlineData).map(p => 'data:' + (p.inlineData.mimeType || 'image/png') + ';base64,' + p.inlineData.data);
+    if (!srcs.length) throw new Error('模型沒有回傳圖片(此模型可能不支援圖像輸出:' + ((parts.find(p => p.text) || {}).text || '').slice(0, 120) + ')');
+  } else if (isOpenRouter()) {
+    // OpenRouter 沒有 /images/generations 端點,圖像生成走 chat/completions + modalities,
+    // 圖片以 data URL 形式回在 message.images;negative prompt 沒有欄位,只能併進文字請模型避開
+    const body = {
+      model,
+      messages: [{ role: 'user', content: 'Generate an image. ' + prompt + (negative ? '\nAvoid: ' + negative : '') }],
+      modalities: ['image', 'text'],
+    };
+    const res = await fetch(apiUrl('/chat/completions'), { method: 'POST', headers: headers(), body: JSON.stringify(body) });
+    const text = await res.text();
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + text.slice(0, 300));
+    const msg = JSON.parse(text).choices?.[0]?.message || {};
+    srcs = (msg.images || []).map(it => it.image_url?.url || it.url).filter(Boolean);
+    if (!srcs.length) throw new Error('模型沒有回傳圖片(此模型可能不支援圖像輸出:' + (msg.content || '').slice(0, 120) + ')');
+  } else {
+    const body = { model, prompt, n, size };
+    // 不是每個模型都支援負面提示詞,但多送這個欄位不支援的後端通常會直接忽略,故無條件附加(有填的話)
+    if (negative) body.negative_prompt = negative;
+    const res = await fetch(apiUrl('/images/generations'), { method: 'POST', headers: headers(), body: JSON.stringify(body) });
+    const text = await res.text();
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + text.slice(0, 300));
+    const items = (JSON.parse(text).data || []);
+    if (!items.length) throw new Error('後端沒有回傳圖片:' + text.slice(0, 200));
+    srcs = items.map(it => it.url || ('data:image/png;base64,' + it.b64_json));
+  }
+  return srcs;
+}
+$('#imgBtn').onclick = async () => {
+  const st = $('#imgStatus'), out = $('#imgResult');
+  if (!settings.apiKey && !isPollinations()) { toast('請先到「連線設定」填 API Key'); go('settings'); return; }
+  const model = $('#imgModel').value.trim() || (isPollinations() ? 'flux' : '');
+  if (!model) { toast('請填圖像模型 ID'); return; }
+  saveImgModel(); // 按下生成一定記住,不依賴輸入框的 change 事件有沒有觸發
+  st.className = 'status'; st.innerHTML = '<span class="spin"></span> 生成中…(可能需數十秒)'; out.innerHTML = '';
+  // 先用原始輸入解析目標,才知道要套「物件」還是「整格材質」模板
+  const raw = $('#imgPrompt').value;
+  const preTarget = saveTarget || targetFromName() || targetFromPrompt(raw); // 目標:點選的 chip > 下載檔名 > Prompt 內容辨識
+  const { prompt, negative } = applySpec(raw, $('#imgNegative').value.trim(), specKindOf(preTarget));
+  const time = nowStr();
+  try {
+    const srcs = await generateSrcs(model, prompt, negative, parseInt($('#imgN').value) || 1, $('#imgSize').value);
+    const lazy = isPollinations(); // 網址型圖片:掛上去才開始生成,用 onload 回報進度
+    const base = baseNameOf(prompt); // 生成當下就決定檔名基底,之後改欄位不影響這批圖
+    const target = preTarget;
+    // 生成後自動存入:有目標才有得存;只自動存第一張,其餘讓使用者用 💾 挑
+    const autoSave = $('#autoSave').checked && target;
+    // 勾了自動存入卻沒有目標:大聲提醒,不要默默跳過害使用者以為壞掉
+    if ($('#autoSave').checked && !target) toast('⚠️ 這批不會自動存入:請先點「遊戲貼圖檔名」區的怪物(或在下載檔名填遊戲檔名,如 imp)');
+    let autoSaved = false;
+    const tryAutoSave = src => {
+      if (autoSaved) return; autoSaved = true;
+      toast('⏳ 自動存入 ' + target.file + ' 處理中…');
+      saveToGame(src, target);
+    };
+    let loaded = 0;
+    srcs.forEach((src, i) => {
+      const wrap = document.createElement('div'); wrap.className = 'imgwrap';
+      const img = document.createElement('img'); img.src = src; img.onclick = () => openImg(src);
+      if (lazy) {
+        img.onload = () => {
+          loaded++; st.className = 'status ok'; st.textContent = `✓ 完成 ${loaded}/${srcs.length} 張`;
+          if (autoSave && i === 0) tryAutoSave(src); // 網址型要等圖真的生好才能抓來存
+        };
+        img.onerror = () => { st.className = 'status err'; st.textContent = '✗ 有圖片生成失敗(可能被限流,等幾秒再按一次)'; };
+      }
+      const btns = document.createElement('div'); btns.className = 'btns';
+      const dl = document.createElement('button'); dl.className = 'btn sm'; dl.textContent = '⬇';
+      dl.title = '下載 ' + base + (srcs.length > 1 ? '-' + (i + 1) : '') + '.png';
+      dl.onclick = e => { e.stopPropagation(); downloadImg(src, base, i, srcs.length); };
+      btns.appendChild(dl);
+      if (target) {
+        const sv = document.createElement('button'); sv.className = 'btn sm'; sv.textContent = '💾 存入遊戲';
+        sv.title = '寫入 assets/' + target.dir + '/' + target.file + '(' + target.cname + ')';
+        sv.onclick = e => { e.stopPropagation(); saveToGame(src, target); };
+        btns.appendChild(sv);
+      }
+      wrap.appendChild(img); wrap.appendChild(btns); out.appendChild(wrap);
+    });
+    if (lazy) { st.innerHTML = '<span class="spin"></span> 已送出 ' + srcs.length + ' 張,Pollinations 生成中(約 10~30 秒)…'; }
+    else {
+      st.className = 'status ok'; st.textContent = '✓ 完成,共 ' + srcs.length + ' 張';
+      if (autoSave && srcs.length) tryAutoSave(srcs[0]); // 非網址型(base64)已經拿到成品,直接存
+    }
+    setConn('on', '已連線');
+    history.add({ time, type: 'image', model, summary: prompt, images: srcs });
+  } catch (e) {
+    st.className = 'status err'; st.textContent = '✗ ' + e.message;
+    setConn('off', '請求失敗');
+  }
+};
+// 記住自動套用規範/自動去背的開關狀態
+$('#autoSpec').onchange = () => { settings.autoSpec = $('#autoSpec').checked; saveCfg(); };
+$('#autoMatte').onchange = () => { settings.autoMatte = $('#autoMatte').checked; saveCfg(); };
+$('#autoSave').onchange = () => { settings.autoSave = $('#autoSave').checked; saveCfg(); };
+function openImg(src) { $('#modalContent').innerHTML = `<img src="${src}">`; $('#overlay').classList.add('show'); }
+$('#overlay').onclick = e => { if (e.target === $('#overlay')) $('#overlay').classList.remove('show'); };
+
+// ---------- 歷史記錄頁 ----------
+function renderHistory() {
+  const list = history.all();
+  const tname = { chat: '對話', image: '圖像', models: '模型' };
+  $('#historyBody').innerHTML = list.map((r, i) => `<tr>
+    <td style="white-space:nowrap">${r.time}</td>
+    <td><span class="badge ${r.type}">${tname[r.type]}</span></td>
+    <td>${esc(r.model || '—')}</td>
+    <td>${esc((r.summary || '').slice(0, 60))}</td>
+    <td>${r.images ? `<button class="btn ghost sm" onclick="showHistImg(${i})">看圖</button>` : ''}${(r.type === 'chat' && r.messages) ? `<button class="btn ghost sm" onclick="loadChat(${i})">載入</button>` : ''}</td>
+  </tr>`).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">尚無記錄</td></tr>`;
+}
+window.showHistImg = i => { const r = history.all()[i]; $('#modalContent').innerHTML = (r.images || []).map(s => `<img src="${s}" style="margin-bottom:10px">`).join(''); $('#overlay').classList.add('show'); };
+// 載入歷史對話:把整段訊息 + 模型還原到聊天頁,之後可接著聊(會更新同一筆記錄)
+window.loadChat = i => {
+  const r = history.all()[i];
+  if (!r || !r.messages) { toast('這筆沒有可載入的完整對話'); return; }
+  chatMessages = r.messages.slice();
+  currentChatId = r.id || newId();
+  // 還原模型選單:若清單裡沒有這個模型(還沒載入或已下架),先補一個選項再選取
+  if (r.model) {
+    const sel = $('#chatModel');
+    if (![...sel.options].some(o => o.value === r.model)) sel.innerHTML += `<option>${esc(r.model)}</option>`;
+    sel.value = r.model;
+  }
+  go('chat'); renderChat();
+  toast('已載入對話');
+};
+$('#clearHistory').onclick = () => { if (confirm('確定清空所有歷史記錄?')) { history.clear(); renderHistory(); toast('已清空'); } };
+
+// 匯出歷史:下載成 JSON 檔,換電腦時可帶著走
+$('#exportHistory').onclick = () => {
+  const data = history.all();
+  if (!data.length) { toast('沒有記錄可匯出'); return; }
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  // 檔名帶當地時間(去掉檔名不允許的字元),避免覆蓋
+  a.href = url; a.download = 'aihub-history-' + nowStr().replace(/[\/:\s]+/g, '-') + '.json';
+  a.click(); URL.revokeObjectURL(url);
+  toast('已匯出 ' + data.length + ' 筆');
+};
+// 匯入歷史:讀 JSON 檔,與現有記錄合併(去除完全重複),最多保留 200 筆
+$('#importHistory').onclick = () => $('#importFile').click();
+$('#importFile').onchange = e => {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const imported = JSON.parse(reader.result);
+      if (!Array.isArray(imported)) throw new Error('格式不對,應為記錄陣列');
+      const seen = new Set();
+      const merged = [...imported, ...history.all()].filter(r => {
+        const k = JSON.stringify(r); if (seen.has(k)) return false; seen.add(k); return true;
+      }).slice(0, 200);
+      // 存檔(容量爆掉時自動丟掉圖片資料保住文字)
+      try { localStorage.setItem(history.KEY, JSON.stringify(merged)); }
+      catch { localStorage.setItem(history.KEY, JSON.stringify(merged.map(r => { const { images, ...rest } = r; return rest; }))); }
+      refreshStats(); renderHistory();
+      toast('已匯入,合併後共 ' + merged.length + ' 筆');
+    } catch (err) { toast('匯入失敗:' + err.message); }
+    finally { e.target.value = ''; } // 清掉選取,讓同一檔可再次匯入
+  };
+  reader.readAsText(file);
+};
+
+// ---------- 設定頁 ----------
+function loadSettingsUI() { $('#baseUrl').value = settings.baseUrl; $('#apiKey').value = settings.apiKey; }
+function pullSettings() {
+  settings.baseUrl = $('#baseUrl').value.trim();
+  // 清理使用者常見的誤貼:把 Bearer 前綴、頭尾引號、所有空白/換行都去掉
+  // (金鑰本身不會含空白,所以整段移除空白是安全的,可順便清掉複製到的換行)
+  let k = $('#apiKey').value.trim().replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').replace(/\s+/g, '');
+  settings.apiKey = k;
+  settings.keys[settings.baseUrl] = k; // 每個服務商各記各的金鑰,切換時互不覆蓋
+  $('#apiKey').value = k; // 把清理後的值寫回輸入框,讓使用者看到實際會用的金鑰
+}
+// 快速切換服務商:先把目前輸入框的金鑰記到原網址名下,再帶出目標服務商已存的金鑰
+$$('#page-settings [data-preset]').forEach(b => b.onclick = () => {
+  pullSettings();
+  settings.baseUrl = b.dataset.preset;
+  settings.apiKey = settings.keys[settings.baseUrl] || '';
+  saveCfg(); loadSettingsUI();
+  models = []; fillModelSelects(); renderModelTable(); // 換服務商後模型清單已失效,清掉避免選到不存在的模型
+  restoreImgModel(); updateImgFieldState();
+  if (isPollinations()) {
+    // Pollinations 免金鑰、只有圖像功能:直接視為已連線,並預設 flux 模型
+    if (!$('#imgModel').value) { $('#imgModel').value = 'flux'; saveImgModel(); }
+    setConn('on', 'Pollinations(免金鑰,只支援圖像頁)');
+  } else {
+    setConn('off', settings.apiKey ? '已切換,請按測試連線' : '請填入金鑰');
+  }
+  toast('已切換到 ' + providerName());
+});
+$('#saveConn').onclick = () => { pullSettings(); saveCfg(); restoreImgModel(); updateImgFieldState(); toast('設定已儲存'); };
+$('#testConn').onclick = async () => {
+  pullSettings(); saveCfg(); restoreImgModel(); updateImgFieldState();
+  const st = $('#connStatus'); st.className = 'status';
+  if (isPollinations()) { setConn('on', 'Pollinations(免金鑰)'); st.className = 'status ok'; st.textContent = '✓ Pollinations 免金鑰,不需測試,直接到「圖像生成」頁使用'; return; }
+  st.innerHTML = '<span class="spin"></span> 測試中…';
+  try {
+    const res = await fetch(apiUrl('/models'), { headers: headers() });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    models = Array.isArray(data) ? data : (data.data || data.models || []);
+    fillModelSelects(); renderModelTable(); refreshStats();
+    setConn('on', '已連線 · ' + models.length + ' 個模型');
+    st.className = 'status ok'; st.textContent = '✓ 連線成功,找到 ' + models.length + ' 個模型';
+  } catch (e) {
+    setConn('off', '連線失敗');
+    st.className = 'status err'; st.textContent = '✗ ' + e.message + '(可能是 CORS 或金鑰錯誤)';
+  }
+};
+$('#reloadModels').onclick = loadModels;
+// 顯示／隱藏金鑰:貼錯時方便核對
+$('#toggleKey').onclick = () => {
+  const el = $('#apiKey');
+  el.type = el.type === 'password' ? 'text' : 'password';
+  $('#toggleKey').textContent = el.type === 'password' ? '👁' : '🙈';
+};
+// 清除金鑰:共用電腦用完一鍵清掉,降低外洩風險
+$('#clearKey').onclick = () => {
+  if (!confirm('確定清除這台瀏覽器儲存的 API Key?')) return;
+  settings.apiKey = ''; $('#apiKey').value = ''; saveCfg();
+  setConn('off', '尚未連線'); toast('已清除金鑰');
+};
+
+// ---------- 共用 ----------
+$('#themeBtn').onclick = () => { settings.theme = settings.theme === 'dark' ? 'light' : 'dark'; applyTheme(); saveCfg(); };
+$('#ham').onclick = () => $('#sidebar').classList.toggle('open');
+
+// ---------- 初始化 ----------
+function init() {
+  applyTheme(); loadSettingsUI(); initPresets(); initAssetLib(); initGameFiles();
+  $('#autoSpec').checked = settings.autoSpec !== false;
+  $('#autoMatte').checked = settings.autoMatte !== false;
+  $('#autoSave').checked = settings.autoSave !== false;
+  $('#freeOnly').onchange = renderModelTable;
+  $('#kindFilter').onchange = renderModelTable;
+  restoreImgModel(); updateImgFieldState();
+  renderChatChips();
+  refreshStats(); renderChat(); renderSC(); renderModelTable();
+}
+init();
+</script>
+</body>
+</html>

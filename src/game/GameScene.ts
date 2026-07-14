@@ -3,8 +3,9 @@
 
 import Phaser from 'phaser';
 import type { Element } from '../sim/elements';
-import { FP_SCALE, GRID_HEIGHT, GRID_WIDTH, PATH_WAYPOINTS, worldPositionFp } from '../sim/map';
+import { FP_SCALE, GRID_HEIGHT, GRID_WIDTH, PATHS, worldPositionFp } from '../sim/map';
 import type { SimulationState } from '../sim/simulation';
+import { MAX_TOWER_LEVEL } from '../sim/towers';
 
 export const TILE_PX = 32;
 
@@ -58,16 +59,19 @@ export class GameScene extends Phaser.Scene {
       g.lineBetween(0, y * TILE_PX, GRID_WIDTH * TILE_PX, y * TILE_PX);
     }
 
+    // 畫出所有路徑;交叉的地方線段會自然疊在一起,看起來就是個十字路口。
     g.lineStyle(TILE_PX * 0.6, 0x555555, 1);
-    for (let i = 0; i < PATH_WAYPOINTS.length - 1; i++) {
-      const [ax, ay] = PATH_WAYPOINTS[i];
-      const [bx, by] = PATH_WAYPOINTS[i + 1];
-      g.lineBetween(
-        ax * TILE_PX + TILE_PX / 2,
-        ay * TILE_PX + TILE_PX / 2,
-        bx * TILE_PX + TILE_PX / 2,
-        by * TILE_PX + TILE_PX / 2,
-      );
+    for (const waypoints of PATHS) {
+      for (let i = 0; i < waypoints.length - 1; i++) {
+        const [ax, ay] = waypoints[i];
+        const [bx, by] = waypoints[i + 1];
+        g.lineBetween(
+          ax * TILE_PX + TILE_PX / 2,
+          ay * TILE_PX + TILE_PX / 2,
+          bx * TILE_PX + TILE_PX / 2,
+          by * TILE_PX + TILE_PX / 2,
+        );
+      }
     }
   }
 
@@ -75,17 +79,47 @@ export class GameScene extends Phaser.Scene {
     const g = this.dynamicLayer;
     g.clear();
 
-    for (const t of state.towers) {
-      g.fillStyle(ELEMENT_COLORS[t.element], 1);
-      g.fillCircle(t.x * TILE_PX + TILE_PX / 2, t.y * TILE_PX + TILE_PX / 2, TILE_PX * 0.35);
-    }
+    for (const t of state.towers) this.drawTower(g, t.x, t.y, t.element, t.level);
 
     for (const m of state.monsters) {
       const { xFp, yFp } = worldPositionFp(m.pos);
       const px = (xFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
       const py = (yFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
-      g.fillStyle(ELEMENT_COLORS[m.element], 1);
-      g.fillRect(px - 4, py - 4, 8, 8);
+      this.drawMonster(g, px, py, m.element, m.hp / m.maxHp);
     }
+  }
+
+  /** 底座 + 尖塔的簡易造型,比純色圓形更有辨識度;等級用塔尖上方的一排小點表示。 */
+  private drawTower(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number, element: Element, level: number): void {
+    const cx = gridX * TILE_PX + TILE_PX / 2;
+    const cy = gridY * TILE_PX + TILE_PX / 2;
+
+    g.fillStyle(0x222222, 1);
+    g.fillRect(cx - 10, cy + 2, 20, 6);
+
+    g.fillStyle(ELEMENT_COLORS[element], 1);
+    g.fillTriangle(cx, cy - 12, cx - 10, cy + 6, cx + 10, cy + 6);
+
+    const pipSpacing = 5;
+    const pipsWidth = (Math.min(level, MAX_TOWER_LEVEL) - 1) * pipSpacing;
+    for (let i = 0; i < level; i++) {
+      g.fillStyle(0xffffff, 1);
+      g.fillCircle(cx - pipsWidth / 2 + i * pipSpacing, cy - 17, 1.5);
+    }
+  }
+
+  /** 圓身 + 小眼睛 + 頭上血條,取代原本的純色方塊。 */
+  private drawMonster(g: Phaser.GameObjects.Graphics, px: number, py: number, element: Element, hpRatio: number): void {
+    g.fillStyle(ELEMENT_COLORS[element], 1);
+    g.fillCircle(px, py, 6);
+    g.fillStyle(0x1a1a1a, 1);
+    g.fillCircle(px + 2, py - 2, 1.5);
+
+    const ratio = Math.max(0, Math.min(1, hpRatio));
+    const barColor = ratio > 0.5 ? 0x3a9d3a : ratio > 0.25 ? 0xd4af37 : 0xe05a2b;
+    g.fillStyle(0x000000, 0.6);
+    g.fillRect(px - 8, py - 12, 16, 3);
+    g.fillStyle(barColor, 1);
+    g.fillRect(px - 8, py - 12, 16 * ratio, 3);
   }
 }

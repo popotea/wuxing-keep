@@ -8,6 +8,8 @@ import type { PlayerInfo } from './net/protocol';
 import { createGameRenderer } from './game/PhaserGame';
 import { ELEMENT_NAMES, type Element } from './sim/elements';
 import { LocalEngine } from './sim/localEngine';
+import { activeBonusWaveInfo, currentWaveNumber, ticksUntilNextWave, upcomingWaveDef } from './sim/monsters';
+import { STARTING_LIVES, type SimulationState } from './sim/simulation';
 
 const DEFAULT_MATCH_CONFIG: MatchConfig = {
   tickRateMs: 50,
@@ -34,7 +36,12 @@ const rosterEl = $<HTMLUListElement>('roster');
 const startBtn = $<HTMLButtonElement>('startBtn');
 const goldEl = $<HTMLSpanElement>('gold');
 const livesEl = $<HTMLSpanElement>('lives');
+const livesBarEl = $<HTMLDivElement>('livesBar');
 const tickEl = $<HTMLSpanElement>('tick');
+const nextWaveEl = $<HTMLSpanElement>('nextWave');
+const waveNumberEl = $<HTMLSpanElement>('waveNumber');
+const nextWaveElementEl = $<HTMLSpanElement>('nextWaveElement');
+const bonusWaveEl = $<HTMLDivElement>('bonusWave');
 const checksumEl = $<HTMLSpanElement>('checksum');
 const resultBannerEl = $<HTMLDivElement>('resultBanner');
 const logEl = $<HTMLPreElement>('log');
@@ -44,10 +51,15 @@ let hostEngine: HostLockstepEngine | null = null;
 let clientEngine: ClientLockstepEngine | null = null;
 let localEngine: LocalEngine | null = null;
 let matchActive = false;
+let currentTickRateMs = DEFAULT_MATCH_CONFIG.tickRateMs;
+let latestState: SimulationState | null = null;
 
 const gameRenderer = createGameRenderer('gameCanvas', (x, y) => {
   if (!matchActive || (!room && !localEngine)) return;
-  const action = { kind: 'build_tower', params: { x, y, element: selectedElement() } };
+  const existingTower = latestState?.towers.find((t) => t.x === x && t.y === y);
+  const action = existingTower
+    ? { kind: 'upgrade_tower', params: { towerId: existingTower.id } }
+    : { kind: 'build_tower', params: { x, y, element: selectedElement() } };
   if (localEngine) localEngine.submitCommand(action);
   else if (room?.getRole() === 'host') hostEngine?.submitLocalCommand(action);
   else clientEngine?.submitLocalCommand(action);
@@ -88,6 +100,26 @@ function selectedElement(): Element {
   return (checked?.value as Element | undefined) ?? 'metal';
 }
 
+function renderLivesBar(lives: number): void {
+  const ratio = Math.max(0, Math.min(1, lives / STARTING_LIVES));
+  livesBarEl.style.width = `${ratio * 100}%`;
+  livesBarEl.style.background = ratio > 0.5 ? '#3a9d3a' : ratio > 0.25 ? '#d4af37' : '#e05a2b';
+}
+
+function renderWaveHud(tick: number): void {
+  waveNumberEl.textContent = String(currentWaveNumber(tick));
+  const ticksLeft = ticksUntilNextWave(tick);
+  nextWaveEl.textContent =
+    ticksLeft === null ? '最後一波' : `${Math.ceil((ticksLeft * currentTickRateMs) / 1000)}s`;
+  const upcoming = upcomingWaveDef(tick);
+  nextWaveElementEl.textContent = upcoming ? ELEMENT_NAMES[upcoming.element] : '—';
+
+  const bonus = activeBonusWaveInfo(tick);
+  bonusWaveEl.textContent = bonus
+    ? `⭐ 加碼波!剩 ${Math.ceil((bonus.ticksLeft * currentTickRateMs) / 1000)}s 內清光可得 ${bonus.bonusGold} 金幣`
+    : '';
+}
+
 function endLocalMatch(): void {
   if (!localEngine) return;
   localEngine.stop();
@@ -99,10 +131,13 @@ function endLocalMatch(): void {
 
 const lockstepHandlers: LockstepHandlers = {
   onStateUpdated: (state) => {
+    latestState = state;
     tickEl.textContent = String(state.tick);
     checksumEl.textContent = state.checksum;
     goldEl.textContent = String(state.gold);
     livesEl.textContent = String(state.lives);
+    renderLivesBar(state.lives);
+    renderWaveHud(state.tick);
     gameRenderer.renderState(state);
     if (state.gameOver) {
       resultBannerEl.textContent = '守備失敗(生命歸零)';
@@ -125,6 +160,7 @@ const roomHandlers: RoomHandlers = {
   onMatchStarted: (payload) => {
     log(`對局開始,seed=${payload.seed}`);
     matchActive = true;
+    currentTickRateMs = payload.tickRateMs;
     resultBannerEl.textContent = '';
     if (!room) return;
     if (room.getRole() === 'host') {
@@ -160,6 +196,7 @@ soloBtn.addEventListener('click', () => {
   hostBtn.disabled = true;
   joinBtn.disabled = true;
   matchActive = true;
+  currentTickRateMs = DEFAULT_MATCH_CONFIG.tickRateMs;
   resultBannerEl.textContent = '';
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   localEngine = new LocalEngine(seed, DEFAULT_MATCH_CONFIG.tickRateMs, lockstepHandlers);

@@ -58,12 +58,26 @@
         <label><input type="radio" name="element" value="fire" /> 火</label>
         <label><input type="radio" name="element" value="earth" /> 土</label>
       </div>
-      <p>對局開始後,點擊地圖上的空地(非路徑格)蓋塔。相剋循環:金克木→木克土→土克水→水克火→火克金。</p>
+      <p>
+        對局開始後,點擊地圖上的空地(非路徑格)蓋塔;點擊已經有塔的格子則花錢升級那座塔。
+        相剋循環:金克木→木克土→土克水→水克火→火克金。
+      </p>
       <div
         id="gameCanvas"
         style="width: 512px; height: 320px; border: 1px solid #888; cursor: crosshair;"
       ></div>
-      <div>金幣: <span id="gold">-</span> ｜ 生命: <span id="lives">-</span> ｜ 目前 tick: <span id="tick">-</span></div>
+      <div>
+        金幣: <span id="gold">-</span> ｜ 目前 tick: <span id="tick">-</span> ｜
+        下一波倒數: <span id="nextWave">-</span>(第 <span id="waveNumber">-</span> 波,下一波屬性:
+        <span id="nextWaveElement">-</span>)
+      </div>
+      <div id="bonusWave" style="font-weight: bold; color: #d4af37;"></div>
+      <div style="display: flex; align-items: center; gap: 8px; margin: 4px 0;">
+        <span>生命: <span id="lives">-</span></span>
+        <div style="width: 200px; height: 14px; background: #333; border: 1px solid #666;">
+          <div id="livesBar" style="height: 100%; width: 100%; background: #3a9d3a;"></div>
+        </div>
+      </div>
       <div>Checksum: <span id="checksum">-</span>(兩邊分頁這個值要一直相同,不同就代表跑飛了)</div>
       <div id="resultBanner" style="font-weight: bold;"></div>
     </section>

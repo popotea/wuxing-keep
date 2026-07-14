@@ -1,7 +1,7 @@
 // 塔:五行各一種基礎塔,攻擊判定全部用整數距離平方比較,不用 sqrt/float。
 
 import { applyElementalDamage, type Element } from './elements';
-import { FP_SCALE, worldPositionFp } from './map';
+import { FP_SCALE, remainingDistanceFp, worldPositionFp } from './map';
 import type { Monster } from './monsters';
 
 export interface TowerDef {
@@ -21,19 +21,34 @@ export const TOWER_DEFS: Record<Element, TowerDef> = {
   fire: { element: 'fire', cost: 50, damage: 12, rangeFp: 2000, cooldownTicks: 20 },
 };
 
+export const MAX_TOWER_LEVEL = 5;
+
 export interface Tower {
   id: number;
   element: Element;
   x: number;
   y: number;
+  level: number;
   ticksSinceLastAttack: number;
 }
 
+/** 升級花費:每一級都用原始建造價當漲幅單位,越高級越貴。已滿級回傳 null。 */
+export function upgradeCost(tower: Tower): number | null {
+  if (tower.level >= MAX_TOWER_LEVEL) return null;
+  return TOWER_DEFS[tower.element].cost * tower.level;
+}
+
+/** 初版先只讓等級影響傷害(線性倍增),範圍/冷卻留給之後平衡調整。 */
+function effectiveDamage(tower: Tower): number {
+  return TOWER_DEFS[tower.element].damage * tower.level;
+}
+
+// 現在地圖有多條路徑,segmentIndex/distanceIntoSegmentFp 只在同一條路徑內才有可比性,
+// 改用「剩餘距離」這種跨路徑通用的絕對單位來比較誰比較接近終點。
 function isFurtherAlongPath(a: Monster, b: Monster): boolean {
-  if (a.pos.segmentIndex !== b.pos.segmentIndex) return a.pos.segmentIndex > b.pos.segmentIndex;
-  if (a.pos.distanceIntoSegmentFp !== b.pos.distanceIntoSegmentFp) {
-    return a.pos.distanceIntoSegmentFp > b.pos.distanceIntoSegmentFp;
-  }
+  const remainingA = remainingDistanceFp(a.pos);
+  const remainingB = remainingDistanceFp(b.pos);
+  if (remainingA !== remainingB) return remainingA < remainingB;
   return a.id < b.id; // 決定性 tie-break,避免兩隻怪剛好並排時各機器選到不同目標
 }
 
@@ -62,5 +77,5 @@ export function tryAttack(tower: Tower, monsters: readonly Monster[]): void {
   const target = findTarget(monsters, tower, def);
   if (!target) return;
   tower.ticksSinceLastAttack = 0;
-  target.hp -= applyElementalDamage(def.damage, tower.element, target.element);
+  target.hp -= applyElementalDamage(effectiveDamage(tower), tower.element, target.element);
 }
