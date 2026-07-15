@@ -128,19 +128,19 @@ export class GameScene extends Phaser.Scene {
 
   preload(): void {
     for (const key of DECOR_IMAGE_KEYS) {
-      this.load.image(key, `/assets/decor/${DECOR_IMAGE_FILES[key]}`);
+      this.load.image(key, `assets/decor/${DECOR_IMAGE_FILES[key]}`);
     }
     for (const element of Object.keys(TOWER_IMAGE_FILES) as Element[]) {
-      this.load.image(towerTextureKey(element), `/assets/towers/${TOWER_IMAGE_FILES[element]}`);
+      this.load.image(towerTextureKey(element), `assets/towers/${TOWER_IMAGE_FILES[element]}`);
       for (const evolutionPath of ['burst', 'splash'] as const) {
-        this.load.image(towerEvolutionTextureKey(element, evolutionPath), `/assets/towers/${element}-${evolutionPath}.png`);
+        this.load.image(towerEvolutionTextureKey(element, evolutionPath), `assets/towers/${element}-${evolutionPath}.png`);
       }
     }
     for (const element of Object.keys(MONSTER_IMAGE_FILES) as Element[]) {
-      this.load.image(monsterTextureKey(element), `/assets/monsters/${MONSTER_IMAGE_FILES[element]}`);
+      this.load.image(monsterTextureKey(element), `assets/monsters/${MONSTER_IMAGE_FILES[element]}`);
     }
-    this.load.image(TILE_FLOOR_KEY, '/assets/tiles/floor.png');
-    this.load.image(TILE_PATH_KEY, '/assets/tiles/path.png');
+    this.load.image(TILE_FLOOR_KEY, 'assets/tiles/floor.png');
+    this.load.image(TILE_PATH_KEY, 'assets/tiles/path.png');
   }
 
   create(): void {
