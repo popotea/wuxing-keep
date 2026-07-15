@@ -46,6 +46,7 @@ export interface MatchConfig {
   inputDelayTicks: number;
   countdownMs: number;
   difficultyPercent: number;
+  endlessMode: boolean;
 }
 
 export interface RoomHandlers {
@@ -170,6 +171,7 @@ export class Room {
       inputDelayTicks: config.inputDelayTicks,
       countdownMs: config.countdownMs,
       difficultyPercent: config.difficultyPercent,
+      endlessMode: config.endlessMode,
     };
     this.net.broadcast(payload);
     this.handlers.onMatchStarted?.(payload);

@@ -65,6 +65,8 @@ export interface StartMatchMsg {
   inputDelayTicks: number;
   countdownMs: number;
   difficultyPercent: number;
+  /** 無限模式:沒有固定波次終點,難度隨波次持續往上疊,直到守不住為止。 */
+  endlessMode: boolean;
 }
 
 export interface SetReadyMsg {
@@ -220,7 +222,8 @@ export function parse(raw: unknown): NetMessage | null {
         typeof o.tickRateMs === 'number' &&
         typeof o.inputDelayTicks === 'number' &&
         typeof o.countdownMs === 'number' &&
-        typeof o.difficultyPercent === 'number'
+        typeof o.difficultyPercent === 'number' &&
+        typeof o.endlessMode === 'boolean'
       ) {
         return {
           type: 'START_MATCH',
@@ -230,6 +233,7 @@ export function parse(raw: unknown): NetMessage | null {
           inputDelayTicks: o.inputDelayTicks,
           countdownMs: o.countdownMs,
           difficultyPercent: o.difficultyPercent,
+          endlessMode: o.endlessMode,
         };
       }
       return null;

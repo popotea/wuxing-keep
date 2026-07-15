@@ -25,8 +25,9 @@ export class LocalEngine {
     private handlers: LocalEngineHandlers,
     difficultyPercent = 100,
     allowedElements: Element[] = ['metal', 'wood', 'water', 'fire', 'earth'],
+    endlessMode = false,
   ) {
-    this.state = createInitialState(seed, difficultyPercent, { [LOCAL_PLAYER_ID]: allowedElements });
+    this.state = createInitialState(seed, difficultyPercent, { [LOCAL_PLAYER_ID]: allowedElements }, endlessMode);
   }
 
   start(): void {

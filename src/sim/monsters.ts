@@ -1,7 +1,7 @@
 // 怪物與波次。波次全部是寫死的腳本(數量/血量/速度/賞金都是常數),
 // 完全不需要亂數——省掉「RNG 演算法在不同瀏覽器要跑出一樣結果」這個額外風險。
 
-import type { Element } from './elements';
+import { ALL_ELEMENTS, type Element } from './elements';
 import { createStartPos, PATH_COUNT, type PathPos } from './map';
 
 /**
@@ -153,4 +153,123 @@ export function createMonster(id: number, spawn: SpawnEvent): Monster {
     isBoss: spawn.isBoss,
     moveType: spawn.moveType,
   };
+}
+
+// ---- 無限模式(2026-07-15 加的):跟上面固定 8 波的 WAVES 完全獨立的另一套生怪規則,
+// 沒有終點,難度隨波次持續往上疊,直到守不住(gameOver)為止,不會有 victory。
+// 選這個模式的對局在 createInitialState() 就會把 SimulationState.endlessMode 設成 true,
+// step() 依這個旗標二選一走這裡的邏輯還是走上面固定的 WAVES 邏輯,兩套互不干擾。
+
+/** 每隔這麼多波(0-based,第 4、9、14...波,也就是每 5 波的最後一波)是首領波。 */
+export const ENDLESS_BOSS_INTERVAL = 5;
+const ENDLESS_BASE_HP = 50;
+const ENDLESS_BASE_SPEED_FP = 60;
+const ENDLESS_BASE_BOUNTY = 12;
+const ENDLESS_WAVE_MONSTER_COUNT = 8;
+/** 血量/賞金每波 +12%(對第 0 波基準值線性疊加,不封頂——就是要讓怪物「持續變強」)。 */
+const ENDLESS_HP_GROWTH_PERCENT = 12;
+/** 速度每波 +3%,但封頂在基準值的 160%,避免無限模式後期怪物快到玩家反應不過來/定點數運算異常。 */
+const ENDLESS_SPEED_GROWTH_PERCENT = 3;
+const ENDLESS_SPEED_GROWTH_CAP_PERCENT = 60;
+
+/**
+ * 純函式的決定性雜湊(不是密碼學等級,風格跟 GameScene.ts 的 tileHash() 一致):同樣的
+ * (waveIndex, salt) 在任何機器上都算出同一個整數,無限模式的「隨機」生怪內容全靠這個,
+ * 不能用 Math.random()(那樣每台機器/每次重播都會兜不起來,違反 lockstep 決定性）。
+ */
+function waveHash(waveIndex: number, salt: number): number {
+  let h = (waveIndex * 374761393 + salt * 668265263) ^ 0x9e3779b9;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+interface EndlessArchetype {
+  element: Element;
+  moveType: MoveType;
+}
+
+interface EndlessWave {
+  archetypes: readonly EndlessArchetype[];
+  hp: number;
+  speedFp: number;
+  bounty: number;
+  count: number;
+  isBoss: boolean;
+}
+
+/** 純函式:無限模式第 waveIndex 波(0-based,沒有上限)要生什麼怪,同樣的 waveIndex 到哪都算出同一份結果。 */
+function generateEndlessWave(waveIndex: number): EndlessWave {
+  const hpGrowthPercent = 100 + waveIndex * ENDLESS_HP_GROWTH_PERCENT;
+  const speedGrowthPercent = 100 + Math.min(waveIndex * ENDLESS_SPEED_GROWTH_PERCENT, ENDLESS_SPEED_GROWTH_CAP_PERCENT);
+  const hp = Math.floor((ENDLESS_BASE_HP * hpGrowthPercent) / 100);
+  const speedFp = Math.floor((ENDLESS_BASE_SPEED_FP * speedGrowthPercent) / 100);
+  const bounty = Math.floor((ENDLESS_BASE_BOUNTY * hpGrowthPercent) / 100);
+
+  const isBoss = waveIndex > 0 && (waveIndex + 1) % ENDLESS_BOSS_INTERVAL === 0;
+  if (isBoss) {
+    const element = ALL_ELEMENTS[waveHash(waveIndex, 1) % ALL_ELEMENTS.length];
+    return {
+      archetypes: [{ element, moveType: 'ground' }],
+      hp: hp * 12, // 首領血量大幅放大,呼應固定模式最終首領波的「單隻厚血」收尾感
+      speedFp: Math.floor(speedFp * 0.7), // 首領慢一點,拉長對戰時間(跟固定模式首領波同樣的設計理由)
+      bounty: bounty * 10,
+      count: 1,
+      isBoss: true,
+    };
+  }
+
+  // 非首領波:約 1/3 機率混 2 種元素(不是每波都混,保留「單一元素波」的辨識度跟節奏感)。
+  const mixCount = waveHash(waveIndex, 2) % 3 === 0 ? 2 : 1;
+  const archetypes: EndlessArchetype[] = [];
+  for (let i = 0; i < mixCount; i++) {
+    const element = ALL_ELEMENTS[waveHash(waveIndex, 10 + i) % ALL_ELEMENTS.length];
+    // 各約 10% 機率出現空/水路怪,製造變化,其餘都是一般地面怪。
+    const moveRoll = waveHash(waveIndex, 20 + i) % 10;
+    const moveType: MoveType = moveRoll === 0 ? 'air' : moveRoll === 1 ? 'water' : 'ground';
+    archetypes.push({ element, moveType });
+  }
+
+  return { archetypes, hp, speedFp, bounty, count: ENDLESS_WAVE_MONSTER_COUNT, isBoss: false };
+}
+
+/** 無限模式版的 getSpawnEventsForTick——只算「現在這一波」該生什麼,O(1) 不會隨對局拉長而變慢。 */
+export function getEndlessSpawnEventsForTick(tick: number): SpawnEvent[] {
+  const waveIndex = Math.floor(tick / WAVE_INTERVAL_TICKS);
+  const waveStartTick = waveIndex * WAVE_INTERVAL_TICKS;
+  const wave = generateEndlessWave(waveIndex);
+  const events: SpawnEvent[] = [];
+  for (let j = 0; j < wave.count; j++) {
+    const spawnTick = waveStartTick + j * SPAWN_INTERVAL_TICKS;
+    if (spawnTick !== tick) continue;
+    const archetype = wave.archetypes[j % wave.archetypes.length];
+    events.push({
+      element: archetype.element,
+      hp: wave.hp,
+      speedFp: wave.speedFp,
+      bounty: wave.bounty,
+      pathId: j % PATH_COUNT,
+      waveIndex,
+      isBoss: wave.isBoss,
+      moveType: archetype.moveType,
+    });
+  }
+  return events;
+}
+
+/** 無限模式版的「目前第幾波」,不像固定模式封頂在 WAVES.length,永遠照實際 tick 往上算。 */
+export function currentWaveNumberEndless(tick: number): number {
+  return Math.floor(tick / WAVE_INTERVAL_TICKS) + 1;
+}
+
+/** 無限模式版的「距離下一波還有幾個 tick」,永遠有下一波,不會回傳 null。 */
+export function ticksUntilNextWaveEndless(tick: number): number {
+  const nextWaveIndex = Math.floor(tick / WAVE_INTERVAL_TICKS) + 1;
+  return nextWaveIndex * WAVE_INTERVAL_TICKS - tick;
+}
+
+/** 無限模式版的下一波預覽(給 HUD 顯示用):只給主要元素跟是否首領波,不細列混波的第二種元素。 */
+export function upcomingWaveDefEndless(tick: number): { element: Element; isBoss: boolean } {
+  const nextWaveIndex = Math.floor(tick / WAVE_INTERVAL_TICKS) + 1;
+  const wave = generateEndlessWave(nextWaveIndex);
+  return { element: wave.archetypes[0].element, isBoss: wave.isBoss };
 }

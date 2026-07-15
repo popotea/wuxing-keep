@@ -9,6 +9,7 @@ import { isElement, type Element } from './elements';
 import { advanceAlongPath, FP_SCALE, inBounds, isOnPath, worldPositionFp } from './map';
 import {
   createMonster,
+  getEndlessSpawnEventsForTick,
   getSpawnEventsForTick,
   SPAWN_INTERVAL_TICKS,
   totalWaveTicks,
@@ -80,6 +81,13 @@ export interface SimulationState {
   playerStats: Record<PlayerId, PlayerStats>;
   /** 這個 tick 發生的攻擊事件,只給 UI 顯示飄動傷害數字用,每個 tick 開始都會清空重算,不是累積狀態。 */
   combatEvents: CombatEvent[];
+  /**
+   * 無限模式:開局後固定不變,跟 difficultyPercent 一樣是靜態設定,不用算進 checksum(不會被
+   * step() 修改,也不是跨機器可能分岐的來源)。true 時 step() 改用 monsters.ts 的
+   * getEndlessSpawnEventsForTick() 生怪(難度隨波次持續往上疊,沒有終點),victory 永遠不會
+   * 被設成 true(只有 gameOver),加碼波機制(applyBonusWaveRewards)也整個跳過不判定。
+   */
+  endlessMode: boolean;
   /** 除錯用:多台機器互相比對,一旦不一致就代表跑飛了 */
   checksum: string;
 }
@@ -91,6 +99,7 @@ export function createInitialState(
   seed: number,
   difficultyPercent = 100,
   playerElements: Record<PlayerId, Element[]> = {},
+  endlessMode = false,
 ): SimulationState {
   const gold: Record<PlayerId, number> = {};
   const playerStats: Record<PlayerId, PlayerStats> = {};
@@ -123,6 +132,7 @@ export function createInitialState(
     playerElements,
     playerStats,
     combatEvents: [],
+    endlessMode,
     checksum: seed.toString(16),
   };
 }
@@ -340,8 +350,13 @@ function computeChecksum(state: SimulationState): string {
   );
 }
 
-/** 加碼波判定:限時內把整波怪物清光,發放額外金幣;不管有沒有趕上時限,都只判定一次。 */
+/**
+ * 加碼波判定:限時內把整波怪物清光,發放額外金幣;不管有沒有趕上時限,都只判定一次。
+ * 無限模式沒有這個機制(生怪內容是無限模式自己那套規則,跟這裡讀的固定 WAVES 定義對不上,
+ * 硬套用會誤判/誤發獎勵),整個跳過不判定。
+ */
 function applyBonusWaveRewards(state: SimulationState, tick: number): void {
+  if (state.endlessMode) return;
   for (let i = 0; i < WAVES.length; i++) {
     if (state.bonusAwarded[i]) continue;
     const wave = WAVES[i];
@@ -380,7 +395,8 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
     applyCommand(next, cmd.playerId, cmd.action);
   }
 
-  for (const spawn of getSpawnEventsForTick(tick)) {
+  const spawnEvents = next.endlessMode ? getEndlessSpawnEventsForTick(tick) : getSpawnEventsForTick(tick);
+  for (const spawn of spawnEvents) {
     const scaled = scaledSpawn(spawn, next.difficultyPercent, next.playerCountScalePercent);
     next.monsters.push(createMonster(next.nextMonsterId++, scaled));
   }
@@ -441,7 +457,8 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
 
   if (next.lives <= 0) {
     next.gameOver = true;
-  } else if (tick >= totalWaveTicks() && next.monsters.length === 0) {
+  } else if (!next.endlessMode && tick >= totalWaveTicks() && next.monsters.length === 0) {
+    // 無限模式沒有「破完」這回事,永遠不會走到這個分支,只有 lives<=0 的 gameOver。
     next.victory = true;
   }
 

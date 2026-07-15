@@ -30,7 +30,12 @@ export class HostLockstepEngine {
     seed: number,
     private handlers: LockstepHandlers,
   ) {
-    this.state = createInitialState(seed, config.difficultyPercent, playerElementsFromRoster(room.getRoster()));
+    this.state = createInitialState(
+      seed,
+      config.difficultyPercent,
+      playerElementsFromRoster(room.getRoster()),
+      config.endlessMode,
+    );
   }
 
   start(): void {
@@ -82,9 +87,10 @@ export class ClientLockstepEngine {
     private room: Room,
     seed: number,
     difficultyPercent: number,
+    endlessMode: boolean,
     private handlers: LockstepHandlers,
   ) {
-    this.state = createInitialState(seed, difficultyPercent, playerElementsFromRoster(room.getRoster()));
+    this.state = createInitialState(seed, difficultyPercent, playerElementsFromRoster(room.getRoster()), endlessMode);
   }
 
   /** 收到房主 TICK 訊息時呼叫(外部把 Room 的 onTick 接到這裡)。 */

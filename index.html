@@ -103,6 +103,8 @@
         transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.15s;
       }
       .choice-row label:hover { border-color: var(--muted); transform: translateY(-1px); }
+      .endless-mode-row { display: block; text-align: left; font-size: 13px; color: var(--muted); margin: 4px 0 10px; }
+      .endless-mode-row input { margin-right: 6px; }
       .choice-row input:checked + label {
         border-color: currentColor;
         background: linear-gradient(160deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02));
@@ -716,6 +718,10 @@
           <input type="radio" id="diff-hard" name="difficulty" value="150" />
           <label for="diff-hard">困難(怪物更強,獎勵更多)</label>
         </div>
+        <label class="endless-mode-row">
+          <input type="checkbox" id="soloEndlessMode" />
+          無限模式(沒有終點,怪物隨波次持續變強,看你能撐到第幾波)
+        </label>
         <h3>選擇你的屬性(至少 1 種,可複選)</h3>
         <div class="choice-row solo-elements">
           <input type="checkbox" id="solo-el-metal" value="metal" checked />
@@ -761,6 +767,10 @@
                 <option value="100" selected>普通</option>
                 <option value="150">困難</option>
               </select>
+            </label>
+            <label class="endless-mode-row">
+              <input type="checkbox" id="hostEndlessMode" />
+              無限模式(沒有終點,怪物隨波次持續變強,看大家能撐到第幾波)
             </label>
             <button id="hostBtn" class="btn"><svg class="icon"><use href="#icon-plus" /></svg> 建立房間</button>
           </div>

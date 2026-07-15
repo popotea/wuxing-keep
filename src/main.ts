@@ -10,7 +10,15 @@ import { isMultiplayer, ownerColorCss } from './game/playerColors';
 import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
 import { LOCAL_PLAYER_ID, LocalEngine } from './sim/localEngine';
 import { FP_SCALE, isOnPath } from './sim/map';
-import { activeBonusWaveInfo, currentWaveNumber, ticksUntilNextWave, upcomingWaveDef } from './sim/monsters';
+import {
+  activeBonusWaveInfo,
+  currentWaveNumber,
+  currentWaveNumberEndless,
+  ticksUntilNextWave,
+  ticksUntilNextWaveEndless,
+  upcomingWaveDef,
+  upcomingWaveDefEndless,
+} from './sim/monsters';
 import { RESOURCE_BUILDING_COST, TRAP_COST, TRAP_SLOW_PERCENT_BY_LEVEL, trapUpgradeCost } from './sim/placements';
 import { STARTING_LIVES, type SimulationState } from './sim/simulation';
 import {
@@ -46,6 +54,8 @@ const turnUserInput = $<HTMLInputElement>('turnUser');
 const turnCredInput = $<HTMLInputElement>('turnCred');
 const hostNameInput = $<HTMLInputElement>('hostName');
 const hostDifficultySelect = $<HTMLSelectElement>('hostDifficulty');
+const hostEndlessModeCheckbox = $<HTMLInputElement>('hostEndlessMode');
+const soloEndlessModeCheckbox = $<HTMLInputElement>('soloEndlessMode');
 const hostBtn = $<HTMLButtonElement>('hostBtn');
 const roomCodeEl = $<HTMLSpanElement>('roomCode');
 const joinNameInput = $<HTMLInputElement>('joinName');
@@ -141,7 +151,7 @@ function formatElapsed(tick: number): string {
 function renderScoreboard(): void {
   if (!latestState) return;
   const state = latestState;
-  scoreboardMetaEl.textContent = `第 ${currentWaveNumber(state.tick)} 波 · 已進行 ${formatElapsed(state.tick)}`;
+  scoreboardMetaEl.textContent = `第 ${currentWaveNumberFor(state)} 波 · 已進行 ${formatElapsed(state.tick)}`;
   const rows = Object.keys(state.gold)
     .map((playerId) => {
       const stats = state.playerStats[playerId] ?? { damageDealt: 0, kills: 0 };
@@ -822,8 +832,28 @@ function showResult(text: string, variant: 'victory' | 'defeat'): void {
   resultBannerEl.classList.add(`result-${variant}`);
 }
 
-function renderWaveHud(tick: number): void {
-  waveNumberEl.textContent = String(currentWaveNumber(tick));
+/** 兩種模式都適用的「目前第幾波」,無限模式沒有上限、固定模式封頂在 WAVES.length。 */
+function currentWaveNumberFor(state: SimulationState): number {
+  return state.endlessMode ? currentWaveNumberEndless(state.tick) : currentWaveNumber(state.tick);
+}
+
+function renderWaveHud(state: SimulationState): void {
+  const tick = state.tick;
+  waveNumberEl.textContent = String(currentWaveNumberFor(state));
+
+  if (state.endlessMode) {
+    // 無限模式永遠有下一波、永遠有預覽,不會是 null;沒有加碼波這個機制。
+    const ticksLeft = ticksUntilNextWaveEndless(tick);
+    nextWaveEl.textContent = `${Math.ceil((ticksLeft * currentTickRateMs) / 1000)}s`;
+    const upcoming = upcomingWaveDefEndless(tick);
+    const bossBadge = upcoming.isBoss
+      ? `<svg class="icon" style="color: var(--accent)"><use href="#icon-crown" /></svg> `
+      : '';
+    nextWaveElementEl.innerHTML = `${bossBadge}${ELEMENT_NAMES[upcoming.element]}${upcoming.isBoss ? '首領' : ''}`;
+    bonusWaveEl.innerHTML = '';
+    return;
+  }
+
   const ticksLeft = ticksUntilNextWave(tick);
   nextWaveEl.textContent =
     ticksLeft === null ? '最後一波' : `${Math.ceil((ticksLeft * currentTickRateMs) / 1000)}s`;
@@ -867,14 +897,21 @@ const lockstepHandlers: LockstepHandlers = {
     goldEl.textContent = String(state.gold[myPlayerId()] ?? 0);
     livesEl.textContent = String(state.lives);
     renderLivesBar(state.lives);
-    renderWaveHud(state.tick);
+    renderWaveHud(state);
     gameRenderer.renderState(state);
     renderTowerPanel();
     if (scoreboardOverlayEl.classList.contains('show')) renderScoreboard();
     if (state.gameOver) {
-      showResult('守備失敗(生命歸零)', 'defeat');
-      saveBestRecordIfBetter({ wave: currentWaveNumber(state.tick), cleared: false });
-      saveDailyBestIfBetter({ wave: currentWaveNumber(state.tick), cleared: false });
+      // 無限模式沒有「破完」這回事,唯一的結局就是撐不住——顯示撐到第幾波當作這局的成績,
+      // 不動最佳紀錄/今日最佳/成就系統(那套是繞著固定模式「全破」設計的,無限模式波次
+      // 可以遠超過 8,兩種模式的數字混在一起比較沒有意義,先各自獨立,之後有需要再另外設計)。
+      if (state.endlessMode) {
+        showResult(`撐到第 ${currentWaveNumberFor(state)} 波,守備失敗`, 'defeat');
+      } else {
+        showResult('守備失敗(生命歸零)', 'defeat');
+        saveBestRecordIfBetter({ wave: currentWaveNumber(state.tick), cleared: false });
+        saveDailyBestIfBetter({ wave: currentWaveNumber(state.tick), cleared: false });
+      }
       endLocalMatch();
       backToMenuBtn.style.display = 'inline-block';
     } else if (state.victory) {
@@ -920,13 +957,20 @@ const roomHandlers: RoomHandlers = {
           inputDelayTicks: payload.inputDelayTicks,
           countdownMs: payload.countdownMs,
           difficultyPercent: payload.difficultyPercent,
+          endlessMode: payload.endlessMode,
         },
         payload.seed,
         lockstepHandlers,
       );
       hostEngine.start();
     } else {
-      clientEngine = new ClientLockstepEngine(room, payload.seed, payload.difficultyPercent, lockstepHandlers);
+      clientEngine = new ClientLockstepEngine(
+        room,
+        payload.seed,
+        payload.difficultyPercent,
+        payload.endlessMode,
+        lockstepHandlers,
+      );
     }
   },
   onRejected: (reason) => log(`加入被拒絕:${reason}`),
@@ -974,6 +1018,7 @@ soloBtn.addEventListener('click', () => {
     lockstepHandlers,
     selectedDifficulty(soloPanelEl),
     elements,
+    soloEndlessModeCheckbox.checked,
   );
   localEngine.start();
   log(`單人模式開始,seed=${seed}`);
@@ -1063,7 +1108,11 @@ copyLinkBtn.addEventListener('click', () => {
 });
 
 startBtn.addEventListener('click', () => {
-  room?.startMatch({ ...BASE_MATCH_CONFIG, difficultyPercent: Number(hostDifficultySelect.value) || 100 });
+  room?.startMatch({
+    ...BASE_MATCH_CONFIG,
+    difficultyPercent: Number(hostDifficultySelect.value) || 100,
+    endlessMode: hostEndlessModeCheckbox.checked,
+  });
 });
 
 renderBestRecord(loadBestRecord());
