@@ -108,6 +108,12 @@ function tileHash(x: number, y: number): number {
   return (h ^ (h >>> 16)) >>> 0;
 }
 
+/** 滑鼠目前停在哪個物件上面(塔/怪物/陷阱/資源建築),main.ts 靠這個決定要不要顯示浮動說明。 */
+export interface HoverInfo {
+  kind: 'tower' | 'monster' | 'trap' | 'resourceBuilding';
+  id: number;
+}
+
 export class GameScene extends Phaser.Scene {
   /**
    * main.ts 在 new GameScene() 之後、Phaser boot 完成 create() 之前就會設定好這個 callback。
@@ -117,6 +123,13 @@ export class GameScene extends Phaser.Scene {
   onTilePlaced: ((x: number, y: number, screenX: number, screenY: number) => void) | null = null;
   /** 選到塔(WC3 式:點塔是選取,不是直接升級)或取消選取時呼叫,null 代表沒有選取任何塔。 */
   onTowerSelected: ((towerId: number | null) => void) | null = null;
+  /**
+   * 滑鼠移到塔/怪物/陷阱/資源建築上面(或移開)時呼叫,每影格都會重算並呼叫一次(不只在
+   * 「換了一個不同物件」時才呼叫)——不是浪費,塔本身資訊不常變但怪物血量之類的數值持續在
+   * 變,main.ts 的浮動說明要能跟著即時更新,不能只在「切換到別的物件」才重畫。null 代表滑鼠
+   * 沒有停在任何物件上面(main.ts 收到 null 要把浮動說明藏起來)。screenX/screenY 同上。
+   */
+  onHoverInfoChanged: ((info: HoverInfo | null, screenX: number, screenY: number) => void) | null = null;
 
   /** 水路怪的流水視覺效果、飛行怪的地面影子——要蓋在地板材質上面、但在塔/怪物圖片下面。 */
   private groundEffectsLayer!: Phaser.GameObjects.Graphics;
@@ -192,6 +205,7 @@ export class GameScene extends Phaser.Scene {
       this.hoverX = null;
       this.hoverY = null;
       this.drawPreview();
+      this.onHoverInfoChanged?.(null, 0, 0);
     });
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (this.jumpCameraFromMinimapClick(pointer)) return;
@@ -332,6 +346,44 @@ export class GameScene extends Phaser.Scene {
     return { x: Math.floor(world.x / TILE_PX), y: Math.floor(world.y / TILE_PX) };
   }
 
+  /**
+   * 滑鼠目前停在哪個物件上面,給 main.ts 顯示浮動說明用。怪物不像塔/陷阱固定在格子中心,
+   * 用「格子座標一樣」比對會抓不到(怪物走在路徑上,位置是連續的像素座標),改成拿滑鼠的
+   * 世界座標跟每隻怪物實際畫面位置比距離平方,抓門檻內最近的一隻;怪物優先於同格的塔/
+   * 陷阱(陷阱蓋在路徑格,怪物走過去時兩者會疊在一起,滑鼠停在那邊通常是想看怪物資訊)。
+   */
+  private computeHoverInfo(pointer: Phaser.Input.Pointer): HoverInfo | null {
+    if (!this.pendingState) return null;
+    const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+
+    const hoverRadiusSq = (TILE_PX * 0.4) * (TILE_PX * 0.4);
+    let closestMonster: Monster | null = null;
+    let closestDistSq = Infinity;
+    for (const m of this.pendingState.monsters) {
+      const { xFp, yFp } = worldPositionFp(m.pos);
+      const px = (xFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
+      const py = (yFp / FP_SCALE) * TILE_PX + TILE_PX / 2 - (m.moveType === 'air' ? 8 * SCALE : 0);
+      const dx = px - world.x;
+      const dy = py - world.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq <= hoverRadiusSq && distSq < closestDistSq) {
+        closestDistSq = distSq;
+        closestMonster = m;
+      }
+    }
+    if (closestMonster) return { kind: 'monster', id: closestMonster.id };
+
+    const gridX = Math.floor(world.x / TILE_PX);
+    const gridY = Math.floor(world.y / TILE_PX);
+    const tower = this.pendingState.towers.find((t) => t.x === gridX && t.y === gridY);
+    if (tower) return { kind: 'tower', id: tower.id };
+    const trap = this.pendingState.traps.find((t) => t.x === gridX && t.y === gridY);
+    if (trap) return { kind: 'trap', id: trap.id };
+    const building = this.pendingState.resourceBuildings.find((b) => b.x === gridX && b.y === gridY);
+    if (building) return { kind: 'resourceBuilding', id: building.id };
+    return null;
+  }
+
   /** 每影格都跑:小地圖即時更新、滑鼠停在畫布邊緣時捲動鏡頭(世紀帝國式),建造預覽格跟著鏡頭移動同步更新。 */
   update(_time: number, delta: number): void {
     this.drawMinimap();
@@ -343,6 +395,7 @@ export class GameScene extends Phaser.Scene {
     this.hoverX = tile.x;
     this.hoverY = tile.y;
     this.drawPreview();
+    this.onHoverInfoChanged?.(this.computeHoverInfo(pointer), pointer.x, pointer.y);
 
     const cam = this.cameras.main;
     let dx = 0;

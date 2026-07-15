@@ -4,7 +4,9 @@
 import Phaser from 'phaser';
 import { VIEWPORT_TILES_H, VIEWPORT_TILES_W } from '../sim/map';
 import type { SimulationState } from '../sim/simulation';
-import { GameScene, TILE_PX } from './GameScene';
+import { GameScene, TILE_PX, type HoverInfo } from './GameScene';
+
+export type { HoverInfo };
 
 export interface GameRenderer {
   renderState(state: SimulationState): void;
@@ -24,10 +26,12 @@ export function createGameRenderer(
   parentId: string,
   onTilePlaced: (x: number, y: number, screenX: number, screenY: number) => void,
   onTowerSelected: (towerId: number | null) => void,
+  onHoverInfoChanged: (info: HoverInfo | null, screenX: number, screenY: number) => void,
 ): GameRenderer {
   const scene = new GameScene();
   scene.onTilePlaced = onTilePlaced;
   scene.onTowerSelected = onTowerSelected;
+  scene.onHoverInfoChanged = onHoverInfoChanged;
 
   const game = new Phaser.Game({
     type: Phaser.AUTO,

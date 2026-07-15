@@ -5,7 +5,7 @@ import type { IceConfig } from './net/net';
 import { HostLockstepEngine, ClientLockstepEngine, type LockstepHandlers } from './net/lockstep';
 import { Room, type RoomHandlers } from './net/room';
 import type { Action, PlayerInfo } from './net/protocol';
-import { createGameRenderer } from './game/PhaserGame';
+import { createGameRenderer, type HoverInfo } from './game/PhaserGame';
 import { isMultiplayer, ownerColorCss } from './game/playerColors';
 import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
 import { LOCAL_PLAYER_ID, LocalEngine } from './sim/localEngine';
@@ -19,7 +19,14 @@ import {
   upcomingWaveDef,
   upcomingWaveDefEndless,
 } from './sim/monsters';
-import { RESOURCE_BUILDING_COST, TRAP_COST, TRAP_SLOW_PERCENT_BY_LEVEL, trapUpgradeCost } from './sim/placements';
+import {
+  RESOURCE_BUILDING_COST,
+  RESOURCE_BUILDING_INCOME,
+  RESOURCE_BUILDING_INTERVAL_TICKS,
+  TRAP_COST,
+  TRAP_SLOW_PERCENT_BY_LEVEL,
+  trapUpgradeCost,
+} from './sim/placements';
 import { STARTING_LIVES, type SimulationState } from './sim/simulation';
 import {
   describeTower,
@@ -101,6 +108,8 @@ const nextWaveEl = $<HTMLSpanElement>('nextWave');
 const waveNumberEl = $<HTMLSpanElement>('waveNumber');
 const nextWaveElementEl = $<HTMLSpanElement>('nextWaveElement');
 const bonusWaveEl = $<HTMLDivElement>('bonusWave');
+const skipWaveBtn = $<HTMLButtonElement>('skipWaveBtn');
+const objectTooltipEl = $<HTMLDivElement>('objectTooltip');
 const hudCompactBtn = $<HTMLButtonElement>('hudCompactBtn');
 const scoreboardBtn = $<HTMLButtonElement>('scoreboardBtn');
 const scoreboardOverlayEl = $<HTMLDivElement>('scoreboardOverlay');
@@ -291,6 +300,76 @@ function hideFloatingBuildMenu(): void {
 
 floatingBuildBackdropEl.addEventListener('click', hideFloatingBuildMenu);
 
+function hideObjectTooltip(): void {
+  objectTooltipEl.classList.remove('show');
+}
+
+/**
+ * 滑鼠移到塔/怪物/陷阱/資源建築上面浮動顯示的說明,跟著游標定位(換算成頁面座標,同
+ * showFloatingBuildMenu() 的做法)。GameScene.ts 的 onHoverInfoChanged 每影格都會呼叫一次
+ * (不只在換了不同物件時才呼叫),塔的攻速/怪物血量這些數值才能跟著即時更新。
+ */
+function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: number): void {
+  if (!info || !latestState) {
+    hideObjectTooltip();
+    return;
+  }
+  const state = latestState;
+  let html: string;
+
+  if (info.kind === 'tower') {
+    const tower = state.towers.find((t) => t.id === info.id);
+    if (!tower) {
+      hideObjectTooltip();
+      return;
+    }
+    const stats = describeTower(tower, state.towers);
+    const rows = [
+      `<div class="tooltip-row">攻擊力 <b>${stats.damage}</b> · 範圍 <b>${(stats.rangeFp / FP_SCALE).toFixed(1)}</b> 格 · 攻速 <b>${((stats.cooldownTicks * currentTickRateMs) / 1000).toFixed(2)}s</b></div>`,
+    ];
+    if (tower.upgradePath !== 'none') rows.push(`<div class="tooltip-row">${escapeHtml(UPGRADE_PATH_NAMES[tower.upgradePath])}</div>`);
+    if (stats.adjacencyBonusActive) rows.push(`<div class="tooltip-row" style="color: var(--accent)">相生加速中(+15% 攻速)</div>`);
+    rows.push(`<div class="tooltip-row">建造者:${escapeHtml(displayNameFor(tower.ownerId))}</div>`);
+    html = `<div class="tooltip-title">${escapeHtml(TOWER_CHARACTER_NAMES[tower.element])}(${ELEMENT_NAMES[tower.element]}塔)Lv.${tower.level}</div>${rows.join('')}`;
+  } else if (info.kind === 'monster') {
+    const m = state.monsters.find((x) => x.id === info.id);
+    if (!m) {
+      hideObjectTooltip();
+      return;
+    }
+    const moveTypeLabel = m.moveType === 'air' ? '空中' : m.moveType === 'water' ? '水路' : '地面';
+    html = `<div class="tooltip-title">${ELEMENT_NAMES[m.element]}${m.isBoss ? ' · 首領' : ''}</div><div class="tooltip-row">血量 <b>${m.hp}</b> / ${m.maxHp}</div><div class="tooltip-row">移動:${moveTypeLabel}</div>`;
+  } else if (info.kind === 'trap') {
+    const trap = state.traps.find((t) => t.id === info.id);
+    if (!trap) {
+      hideObjectTooltip();
+      return;
+    }
+    const cost = trapUpgradeCost(trap);
+    const upgradeRow = cost === null ? '已滿級' : `升級到 Lv.${trap.level + 1} 需要 ${cost} 金幣`;
+    html = `<div class="tooltip-title">陷阱 Lv.${trap.level}</div><div class="tooltip-row">減速 <b>${TRAP_SLOW_PERCENT_BY_LEVEL[trap.level]}%</b></div><div class="tooltip-row">${upgradeRow}</div>`;
+  } else {
+    const building = state.resourceBuildings.find((b) => b.id === info.id);
+    if (!building) {
+      hideObjectTooltip();
+      return;
+    }
+    const intervalSec = Math.round((RESOURCE_BUILDING_INTERVAL_TICKS * currentTickRateMs) / 1000);
+    html = `<div class="tooltip-title">資源建築</div><div class="tooltip-row">每 ${intervalSec}s +${RESOURCE_BUILDING_INCOME} 金幣</div><div class="tooltip-row">建造者:${escapeHtml(displayNameFor(building.ownerId))}</div>`;
+  }
+
+  objectTooltipEl.innerHTML = html;
+  objectTooltipEl.classList.add('show');
+  const canvasRect = document.getElementById('gameCanvas')?.getBoundingClientRect();
+  const pageX = (canvasRect?.left ?? 0) + canvasX;
+  const pageY = (canvasRect?.top ?? 0) + canvasY;
+  const OFFSET_PX = 16;
+  const width = objectTooltipEl.offsetWidth;
+  const height = objectTooltipEl.offsetHeight;
+  objectTooltipEl.style.left = `${Math.max(8, Math.min(pageX + OFFSET_PX, window.innerWidth - width - 8))}px`;
+  objectTooltipEl.style.top = `${Math.max(8, Math.min(pageY + OFFSET_PX, window.innerHeight - height - 8))}px`;
+}
+
 const gameRenderer = createGameRenderer(
   'gameCanvas',
   (x, y, screenX, screenY) => {
@@ -384,7 +463,12 @@ const gameRenderer = createGameRenderer(
     selectedTowerId = towerId;
     renderTowerPanel();
   },
+  renderObjectTooltip,
 );
+
+skipWaveBtn.addEventListener('click', () => {
+  submitAction({ kind: 'skip_to_next_wave', params: {} });
+});
 
 /** WC3 式選取面板:顯示選到的塔的即時數值,升級/賣出按鈕才會真的送出指令。 */
 function renderTowerPanel(): void {

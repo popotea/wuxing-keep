@@ -88,8 +88,20 @@ export interface SimulationState {
    * 被設成 true(只有 gameOver),加碼波機制(applyBonusWaveRewards)也整個跳過不判定。
    */
   endlessMode: boolean;
+  /**
+   * 「呼叫下一波」按鈕的累計快轉量:只影響「現在算到第幾波、該生什麼」的判斷(見
+   * effectiveWaveTick()),不影響真正的 tick(怪物移動速度、塔冷卻、資源建築收入這些都還是
+   * 照實際 tick 走,不會被這個影響——按了「呼叫下一波」不會讓場上怪物突然移動變快)。
+   * 任何玩家都能按,不分誰的操作(跟升級/集火策略同一套慣例)。
+   */
+  waveTickOffset: number;
   /** 除錯用:多台機器互相比對,一旦不一致就代表跑飛了 */
   checksum: string;
+}
+
+/** 判斷「現在算到第幾波」用的有效 tick——真正的 tick 加上「呼叫下一波」按鈕累計的快轉量。 */
+export function effectiveWaveTick(state: SimulationState): number {
+  return state.tick + state.waveTickOffset;
 }
 
 const STARTING_GOLD = 300;
@@ -126,6 +138,7 @@ export function createInitialState(
     nextResourceBuildingId: 1,
     gameOver: false,
     victory: false,
+    waveTickOffset: 0,
     bonusAwarded: WAVES.map(() => false),
     difficultyPercent,
     playerCountScalePercent,
@@ -305,6 +318,20 @@ function applyBuildResourceBuilding(state: SimulationState, playerId: PlayerId, 
   });
 }
 
+/**
+ * 「呼叫下一波」:把 waveTickOffset 往前調,讓 effectiveWaveTick() 直接跳到下一波開始的
+ * 那一刻——不分誰按,任何隊友都能按(跟升級/集火策略同一套慣例)。固定模式已經是最後一波
+ * 就沒有下一波可以跳,安全忽略;無限模式永遠有下一波。目前場上還沒清完的怪物不會被清掉,
+ * 兩波會疊在一起同時出現,這是刻意的(提早叫下一波本來就該有風險,不是純粹加速沒有代價)。
+ */
+function applySkipToNextWave(state: SimulationState): void {
+  const current = effectiveWaveTick(state);
+  const currentWaveIndex = Math.floor(current / WAVE_INTERVAL_TICKS);
+  if (!state.endlessMode && currentWaveIndex + 1 >= WAVES.length) return;
+  const nextWaveStartTick = (currentWaveIndex + 1) * WAVE_INTERVAL_TICKS;
+  state.waveTickOffset += nextWaveStartTick - current;
+}
+
 function applyCommand(state: SimulationState, playerId: PlayerId, action: Action): void {
   if (action.kind === 'build_tower') applyBuildTower(state, playerId, action);
   else if (action.kind === 'sell_tower') applySellTower(state, playerId, action);
@@ -313,6 +340,7 @@ function applyCommand(state: SimulationState, playerId: PlayerId, action: Action
   else if (action.kind === 'build_trap') applyBuildTrap(state, playerId, action);
   else if (action.kind === 'upgrade_trap') applyUpgradeTrap(state, playerId, action);
   else if (action.kind === 'build_resource_building') applyBuildResourceBuilding(state, playerId, action);
+  else if (action.kind === 'skip_to_next_wave') applySkipToNextWave(state);
   // 其他/未知 kind 一律安全忽略
 }
 
@@ -346,7 +374,7 @@ function computeChecksum(state: SimulationState): string {
     .map((id) => `${id}:${state.playerStats[id].damageDealt}:${state.playerStats[id].kills}`)
     .join(',');
   return simpleHash(
-    `${state.tick}|${goldPart}|${state.lives}|${towerPart}|${monsterPart}|${trapPart}|${resourceBuildingPart}|${bonusPart}|${statsPart}`,
+    `${state.tick}|${state.waveTickOffset}|${goldPart}|${state.lives}|${towerPart}|${monsterPart}|${trapPart}|${resourceBuildingPart}|${bonusPart}|${statsPart}`,
   );
 }
 
@@ -395,7 +423,8 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
     applyCommand(next, cmd.playerId, cmd.action);
   }
 
-  const spawnEvents = next.endlessMode ? getEndlessSpawnEventsForTick(tick) : getSpawnEventsForTick(tick);
+  const waveTick = effectiveWaveTick(next);
+  const spawnEvents = next.endlessMode ? getEndlessSpawnEventsForTick(waveTick) : getSpawnEventsForTick(waveTick);
   for (const spawn of spawnEvents) {
     const scaled = scaledSpawn(spawn, next.difficultyPercent, next.playerCountScalePercent);
     next.monsters.push(createMonster(next.nextMonsterId++, scaled));
@@ -453,11 +482,11 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
     }
   }
 
-  applyBonusWaveRewards(next, tick);
+  applyBonusWaveRewards(next, waveTick);
 
   if (next.lives <= 0) {
     next.gameOver = true;
-  } else if (!next.endlessMode && tick >= totalWaveTicks() && next.monsters.length === 0) {
+  } else if (!next.endlessMode && waveTick >= totalWaveTicks() && next.monsters.length === 0) {
     // 無限模式沒有「破完」這回事,永遠不會走到這個分支,只有 lives<=0 的 gameOver。
     next.victory = true;
   }

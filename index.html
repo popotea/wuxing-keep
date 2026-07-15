@@ -198,6 +198,27 @@
         transition: opacity 0.25s ease-out, transform 0.25s ease-out;
       }
       #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+      /* ---- 滑鼠移到塔/怪物/陷阱/資源建築上面的浮動說明,純顯示不用互動 ---- */
+      #objectTooltip {
+        position: fixed;
+        z-index: 22;
+        background: rgba(15, 18, 24, 0.92);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 12px;
+        line-height: 1.6;
+        box-shadow: var(--shadow-soft);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.12s ease-out;
+        max-width: 220px;
+      }
+      #objectTooltip.show { opacity: 1; }
+      #objectTooltip .tooltip-title { font-weight: bold; font-size: 13px; margin-bottom: 2px; }
+      #objectTooltip .tooltip-row { color: var(--muted); }
+      #objectTooltip .tooltip-row b { color: var(--text); font-weight: normal; }
       .primary-btn {
         font-size: 18px;
         padding: 12px 28px;
@@ -368,6 +389,22 @@
       .hud-stat-gold #gold { color: var(--accent); font-weight: bold; }
       .hud-stat-wave { color: var(--muted); }
       .hud-stat-wave b { color: var(--text); font-weight: bold; }
+      /* #hud 整體 pointer-events:none 是為了不擋地圖點擊,這顆按鈕要單獨蓋回 auto 才點得到。 */
+      .hud-skip-wave-btn {
+        pointer-events: auto;
+        margin-left: 6px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        color: var(--text);
+        font-size: 11px;
+        padding: 2px 8px;
+        cursor: pointer;
+        transition: border-color 0.15s, color 0.15s;
+      }
+      .hud-skip-wave-btn:hover { border-color: var(--accent); color: var(--accent); }
+      .hud-skip-wave-btn .icon { width: 0.9em; height: 0.9em; vertical-align: -0.1em; }
+      body.hud-compact .hud-skip-wave-btn { background: rgba(0, 0, 0, 0.4); }
       .lives-bar-outer { width: 110px; height: 10px; background: #333; border-radius: 6px; overflow: hidden; }
       #livesBar { height: 100%; width: 100%; background: var(--wood); transition: width 0.2s, background 0.2s; }
       .lives-bar-outer.lives-critical { animation: pulse-danger 1s ease-in-out infinite; }
@@ -821,6 +858,9 @@
         </div>
         <div class="hud-stat hud-stat-wave">
           第 <b><span id="waveNumber">-</span></b> 波 ｜ 下一波 <span id="nextWaveElement">-</span> · <span id="nextWave">-</span>
+          <button id="skipWaveBtn" class="hud-skip-wave-btn" type="button" title="提早呼叫下一波(場上怪物不會被清掉,兩波會疊在一起)">
+            <svg class="icon"><use href="#icon-enter" /></svg> 呼叫下一波
+          </button>
         </div>
       </div>
       <div id="bonusWave"></div>
@@ -830,6 +870,8 @@
       </div>
       <div id="gameCanvas"></div>
       <div id="toast"></div>
+      <!-- 滑鼠移到塔/怪物/陷阱/資源建築上面浮動顯示的物件說明,純顯示不用互動,跟著游標走。 -->
+      <div id="objectTooltip"></div>
 
       <!-- 記分板(參考 WC3):按鈕切換常顯/隱藏,不像 choice-modal 那樣擋住地圖,可以邊玩邊看。 -->
       <div id="scoreboardOverlay" class="scoreboard-overlay">
