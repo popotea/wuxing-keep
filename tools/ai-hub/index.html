@@ -857,8 +857,10 @@ function initPresets() {
 // ---------- 遊戲素材範本(五行守衛專用:魔獸爭霸風格元素塔防) ----------
 const ASSET_LIB = {
   // 「true top-down」是 applySpec 的特徵字,改模板措辭務必保留這句
-  master: 'Stylized fantasy RTS game building asset in the visual spirit of Warcraft III, true top-down (90-degree overhead) view, bold clean readable silhouette at small size, painterly cel-shaded rendering, rich saturated elemental colors, moderate fantasy detail without photorealism, single centered structure, transparent background, game-ready PNG.',
-  negative: 'isometric,45 degree,side view,3D render,photo,realistic,anime,chibi,cute,pastel,flat vector,line art,text,watermark,logo,blurry,multiple subjects,character,creature',
+  // 2026-07-15:美術方向從魔獸爭霸暗黑奇幻改成 Q 版可愛(參考 Kingdom Rush 系列),
+  // negative 也把 chibi/cute 拿掉(以前是要避免,現在反過來是目標風格)。
+  master: 'Cute chibi cartoon fantasy RTS building asset in the visual spirit of Kingdom Rush, chunky rounded proportions, thick clean outlines, warm saturated colors, whimsical and friendly (not scary), true top-down (90-degree overhead) view, bold clean readable silhouette at small size, painterly cel-shaded rendering, single centered structure, transparent background, game-ready PNG.',
+  negative: 'isometric,45 degree,side view,3D render,photo,realistic,photorealistic,dark,scary,grim,pastel,flat vector,line art,text,watermark,logo,blurry,multiple subjects,character,creature',
   cats: {
     '塔(元素)': ['Metal Tower', 'Wood Tower', 'Water Tower', 'Fire Tower', 'Earth Tower'],
     '怪物(元素)': ['Metal Creature', 'Wood Creature', 'Water Creature', 'Fire Creature', 'Earth Creature'],
@@ -890,28 +892,30 @@ function initAssetLib() {
 }
 
 // ---------- 遊戲貼圖檔名對照(依種類分資料夾) ----------
-// 檔名對應 src/sim/elements.ts 的 Element 型別(metal/wood/water/fire/earth),
-// GameScene.ts 目前還是用幾何圖形畫塔/怪物,還沒讀取這些圖片——先把素材產好備著,
-// 之後只要把 drawTower/drawMonster 內部畫法換成讀取這裡的 PNG 就好,對外介面不用改。
+// 檔名對應 src/sim/elements.ts 的 Element 型別(metal/wood/water/fire/earth)。
+// GameScene.ts 已經接好讀取邏輯(this.textures.exists() 判斷有沒有載入成功,沒圖才退回
+// 幾何圖形畫法)——在這裡生新圖存檔、或用 scripts/generate-*.mjs 重跑,存好重整遊戲就會換圖。
 // 每個項目:[檔名, 遊戲內名稱, 生圖用英文外觀描述(照 src/game/GameScene.ts 的 ELEMENT_COLORS 配色寫)]
+// 2026-07-15:五個元素的描述文字改成 Q 版可愛語氣(圓滾滾、討喜),取代原本偏暗黑奇幻的措辭,
+// 跟 scripts/generate-tower-monster-assets.mjs、scripts/generate-terrain-assets.mjs 的 prompt 同步。
 const GAME_ASSETS = [
-  { dir: 'assets/towers/', note: '五行塔 — 遊戲尚未讀取,先分類備存', files: [
-    ['metal.png', '金塔', 'ornate golden metal spire tower with sharp blade-like finials and polished bronze armor plating, small defensive turret, faint magical shimmer'],
-    ['wood.png', '木塔', 'living wooden watchtower entwined with green vines and glowing leaves, organic bark texture, small defensive turret'],
-    ['water.png', '水塔', 'crystalline deep-blue tower with flowing water motifs and a translucent aqua crystal spire, small defensive turret'],
-    ['fire.png', '火塔', 'volcanic obsidian tower with glowing orange lava cracks and small flame bursts at the top, small defensive turret'],
-    ['earth.png', '土塔', 'sturdy brown stone and clay tower with mossy boulders and earthen rune carvings, small squat defensive turret'],
+  { dir: 'assets/towers/', note: '五行塔 — 已接進 GameScene.ts,重新生成存檔後重整遊戲就會換圖', files: [
+    ['metal.png', '金塔', 'cute chunky golden metal tower with a round dome roof and shiny gear decorations, small friendly defensive turret'],
+    ['wood.png', '木塔', 'cute chunky wooden watchtower with a thatched roof, wrapped in cheerful green vines and leaves, small friendly defensive turret'],
+    ['water.png', '水塔', 'cute chunky deep-blue crystal tower with a round bubbly water droplet on top, small friendly defensive turret'],
+    ['fire.png', '火塔', 'cute chunky orange stone tower with a small round bonfire crackling on top, small friendly defensive turret'],
+    ['earth.png', '土塔', 'cute chunky brown stone and clay tower with round mossy boulders and a squat friendly shape, small defensive turret'],
   ] },
-  { dir: 'assets/monsters/', note: '五行怪物 — 遊戲尚未讀取,先分類備存', files: [
-    ['metal.png', '金怪', 'small mechanical golem creature made of gleaming gold and bronze plates, sharp metallic claws, glowing amber eyes, single creature'],
-    ['wood.png', '木怪', 'small forest treant sprite creature covered in green leaves and vines, bark-like skin, glowing green eyes, single creature'],
-    ['water.png', '水怪', 'small serpentine water elemental creature made of flowing translucent blue water, fin-like limbs, glowing cyan eyes, single creature'],
-    ['fire.png', '火怪', 'small fiery imp creature wreathed in orange flames, charcoal-black skin with glowing cracks, glowing red eyes, single creature'],
-    ['earth.png', '土怪', 'small rocky golem creature made of brown clay and stone chunks with mossy patches, glowing yellow eyes, single creature'],
+  { dir: 'assets/monsters/', note: '五行怪物 — 已接進 GameScene.ts,重新生成存檔後重整遊戲就會換圖', files: [
+    ['metal.png', '金怪', 'cute chubby mechanical golem creature made of round gold and bronze plates, tiny stubby arms, big round amber eyes, single creature'],
+    ['wood.png', '木怪', 'cute chubby forest treant sprite creature covered in round green leaves and vines, big round green eyes, single creature'],
+    ['water.png', '水怪', 'cute chubby water elemental creature made of round translucent blue water droplets, big round cyan eyes, single creature'],
+    ['fire.png', '火怪', 'cute chubby fiery imp creature made of round orange flame puffs, big round red eyes, single creature'],
+    ['earth.png', '土怪', 'cute chubby rocky golem creature made of round brown clay and stone chunks with mossy patches, big round yellow eyes, single creature'],
   ] },
-  { dir: 'assets/tiles/', note: '地圖材質 — 遊戲尚未讀取,先分類備存,整格材質不去背', files: [
-    ['floor.png', '可蓋塔地面', 'plain grassy ground, muted green, minimal detail'],
-    ['path.png', '怪物行走路徑', 'worn packed dirt path, muted brown, minimal detail'],
+  { dir: 'assets/tiles/', note: '地圖材質 — 已接進 GameScene.ts(TileSprite 整片鋪滿+路徑遮罩),整格材質不去背', files: [
+    ['floor.png', '可蓋塔地面', 'plain lush green cartoon grass ground surface, only small blades of grass and subtle color variation, absolutely no crates, no sheep, no animals, no creatures, no props, no icons, no items'],
+    ['path.png', '怪物行走路徑', 'plain warm tan cartoon dirt path surface, only small pebbles and subtle color variation, absolutely no crates, no animals, no creatures, no props, no icons, no items'],
   ] },
 ];
 let saveTarget = null; // 目前選定的「存入遊戲」目標 {dir:'monsters', file:'imp.png'}
@@ -1140,13 +1144,15 @@ async function saveToGame(src, target, ow) {
 // v2 貼紙卡通風:與生物/物品同風格家族(圓潤平塗),「fills the entire square」是 applySpec 特徵字,務必保留
 // 「few large simple shapes / reads clearly at very small scale」是關鍵:遊戲一格只有 40px,
 // 細節太多縮下去會變成高頻雜訊(2026-07-12 教訓,渲染端另有 2×2 攤開補救,但源頭就該低細節)
-const MASTER_TILE = 'Seamless top-down terrain tile texture for a fantasy RTS game, viewed from directly above, few large simple shapes in the pattern, minimal fine detail, reads clearly at very small scale (grid tile is small on screen), painterly flat shading, rich saturated colors, fills the entire square, evenly distributed pattern, uniform lighting, no border, no single centered object, game-ready.';
-const NEG_TILE = 'isometric,3D,realistic,photo,single object,character,creature,border,frame,vignette,text,watermark,logo,busy pattern,high detail,noisy texture,small intricate details';
+// 2026-07-15:美術方向從魔獸爭霸暗黑奇幻改成 Q 版可愛(參考 Kingdom Rush 系列)
+const MASTER_TILE = 'Cute chibi cartoon terrain tile texture for a tower defense game in the visual spirit of Kingdom Rush, warm saturated colors, seamless top-down texture, viewed from directly above, few large simple shapes in the pattern, minimal fine detail, reads clearly at very small scale (grid tile is small on screen), painterly flat shading, fills the entire square, evenly distributed pattern, uniform lighting, no border, no single centered object, game-ready.';
+const NEG_TILE = 'isometric,3D,realistic,photo,dark,scary,grim,single object,character,creature,border,frame,vignette,text,watermark,logo,busy pattern,high detail,noisy texture,small intricate details';
 // 生物(怪物/動物)用:90° 正俯視只會看到背,AI 又愛只畫一顆頭;
 // 改用「全身 + 站姿 + 3/4 俯視 RPG 視角」,負面詞把頭像/半身/裁切都擋掉
 // v2 貼紙卡通風:「full body from head to feet」是 applySpec 特徵字,務必保留
-const MASTER_CREATURE = 'Stylized fantasy RTS game creature sprite in the visual spirit of Warcraft III, three-quarter top-down RPG view (not directly overhead), full body from head to feet visible, entire body visible including all legs, standing pose, bold clean readable silhouette, painterly cel-shaded rendering, rich saturated elemental colors, moderate fantasy detail without photorealism, transparent background, centered, game-ready PNG.';
-const NEG_CREATURE = 'portrait,face only,head only,headshot,bust,cropped,close-up,half body,isometric,3D,realistic,photo,chibi,cute,pastel,anime,background,text,watermark,logo,multiple subjects';
+// negative 把 chibi/cute/pastel 拿掉(以前是要避免,現在反過來是目標風格)
+const MASTER_CREATURE = 'Cute chibi cartoon tower defense game creature in the visual spirit of Kingdom Rush, chunky rounded proportions, big expressive eyes, thick clean outlines, warm saturated colors, whimsical and friendly (not scary), three-quarter top-down RPG view (not directly overhead), full body from head to feet visible, entire body visible including all legs, standing pose, bold clean readable silhouette, painterly cel-shaded rendering, transparent background, centered, game-ready PNG.';
+const NEG_CREATURE = 'portrait,face only,head only,headshot,bust,cropped,close-up,half body,isometric,3D,realistic,photo,photorealistic,dark,scary,grim,anime,background,text,watermark,logo,multiple subjects';
 // 判斷這個目標是不是「整格材質」:地形都是,唯獨圍籬/軌道是透明物件(要去背、疊在地板上)
 function isTileTexture(target) { return !!target && target.dir === 'tiles'; }
 // 依目標決定 Prompt 模板種類:地形=整格材質、怪物/動物/NPC=全身生物、其餘=置中物件

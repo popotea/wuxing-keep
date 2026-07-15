@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.local
 .DS_Store
+
+# 別的遊戲截圖,純美術方向參考用,不是本專案素材,不進版控(版權考量)
+其他遊戲UI參考/

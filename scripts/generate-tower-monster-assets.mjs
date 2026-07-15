@@ -21,29 +21,29 @@ const { PNG } = pngjsPkg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ASSETS_DIR = path.join(__dirname, '..', 'public', 'assets');
 
-// 跟 tools/ai-hub/index.html 的 MASTER/MASTER_CREATURE 模板同個方向(魔獸爭霸風格、
-// 單一主體置中),額外要求「純白色平面背景、沒有地面/場景/陰影」——這樣才有一片
-// 顏色統一的背景可以讓下面的 flood fill 乾淨地挖掉。
+// 參考「其他遊戲UI參考/」資料夾裡蒐集的 Kingdom Rush 系列跟同類手遊塔防截圖,抓出的共同
+// 調性:圓潤厚實的 Q 版卡通造型、粗描邊、飽和暖色調、討喜不嚇人。取代原本魔獸爭霸式的
+// 暗黑奇幻風格。額外要求「純白色平面背景、沒有地面/場景/陰影」——這樣才有一片顏色統一
+// 的背景可以讓下面的 flood fill 乾淨地挖掉。
 const TOWER_STYLE =
-  'Stylized fantasy RTS game building asset in the visual spirit of Warcraft III, true top-down 90-degree overhead view, single centered structure, bold clean readable silhouette, painterly cel-shaded rendering, rich saturated elemental colors, standing alone on a flat solid white background, no ground, no scenery, no shadow, no text, no watermark, simple game-ready art';
+  'Cute chibi cartoon tower defense game asset in the visual spirit of Kingdom Rush, chunky rounded proportions, thick clean outlines, warm saturated colors, soft painterly cel-shaded rendering, whimsical and friendly (not scary), true top-down 90-degree overhead view, single centered structure, bold clean readable silhouette, standing alone on a flat solid white background, no ground, no scenery, no shadow, no text, no watermark, simple game-ready art';
 const MONSTER_STYLE =
-  'Stylized fantasy RTS game creature sprite in the visual spirit of Warcraft III, three-quarter top-down view, full body visible standing pose, single centered creature, bold clean readable silhouette, painterly cel-shaded rendering, rich saturated elemental colors, standing alone on a flat solid white background, no ground, no scenery, no shadow, no text, no watermark, simple game-ready art';
+  'Cute chibi cartoon tower defense game creature in the visual spirit of Kingdom Rush, chunky rounded proportions, big expressive eyes, thick clean outlines, warm saturated colors, soft painterly cel-shaded rendering, whimsical and friendly (not scary), three-quarter top-down view, full body visible standing pose, single centered creature, bold clean readable silhouette, standing alone on a flat solid white background, no ground, no scenery, no shadow, no text, no watermark, simple game-ready art';
 
-// 五個元素各自的主體描述,取自 tools/ai-hub/index.html 的 GAME_ASSETS 清單(已經調過的
-// prompt 措辭),保持跟 AI Hub 手動生圖版本一致的風格。
+// 五個元素各自的主體描述,語氣改成 Q 版可愛(圓滾滾、討喜),取代原本偏暗黑奇幻的措辭。
 const TOWER_ASSETS = [
-  { element: 'metal', seed: 1101, prompt: 'ornate golden metal spire tower with sharp blade-like finials and polished bronze armor plating, small defensive turret, faint magical shimmer' },
-  { element: 'wood', seed: 1102, prompt: 'living wooden watchtower entwined with green vines and glowing leaves, organic bark texture, small defensive turret' },
-  { element: 'water', seed: 1103, prompt: 'crystalline deep-blue tower with flowing water motifs and a translucent aqua crystal spire, small defensive turret' },
-  { element: 'fire', seed: 1104, prompt: 'volcanic obsidian tower with glowing orange lava cracks and small flame bursts at the top, small defensive turret' },
-  { element: 'earth', seed: 1105, prompt: 'sturdy brown stone and clay tower with mossy boulders and earthen rune carvings, small squat defensive turret' },
+  { element: 'metal', seed: 1101, prompt: 'cute chunky golden metal tower with a round dome roof and shiny gear decorations, small friendly defensive turret' },
+  { element: 'wood', seed: 1102, prompt: 'cute chunky wooden watchtower with a thatched roof, wrapped in cheerful green vines and leaves, small friendly defensive turret' },
+  { element: 'water', seed: 1103, prompt: 'cute chunky deep-blue crystal tower with a round bubbly water droplet on top, small friendly defensive turret' },
+  { element: 'fire', seed: 1104, prompt: 'cute chunky orange stone tower with a small round bonfire crackling on top, small friendly defensive turret' },
+  { element: 'earth', seed: 1105, prompt: 'cute chunky brown stone and clay tower with round mossy boulders and a squat friendly shape, small defensive turret' },
 ];
 const MONSTER_ASSETS = [
-  { element: 'metal', seed: 1201, prompt: 'small mechanical golem creature made of gleaming gold and bronze plates, sharp metallic claws, glowing amber eyes, single creature' },
-  { element: 'wood', seed: 1202, prompt: 'small forest treant sprite creature covered in green leaves and vines, bark-like skin, glowing green eyes, single creature' },
-  { element: 'water', seed: 1203, prompt: 'small serpentine water elemental creature made of flowing translucent blue water, fin-like limbs, glowing cyan eyes, single creature' },
-  { element: 'fire', seed: 1204, prompt: 'small fiery imp creature wreathed in orange flames, charcoal-black skin with glowing cracks, glowing red eyes, single creature' },
-  { element: 'earth', seed: 1205, prompt: 'small rocky golem creature made of brown clay and stone chunks with mossy patches, glowing yellow eyes, single creature' },
+  { element: 'metal', seed: 1201, prompt: 'cute chubby mechanical golem creature made of round gold and bronze plates, tiny stubby arms, big round amber eyes, single creature' },
+  { element: 'wood', seed: 1202, prompt: 'cute chubby forest treant sprite creature covered in round green leaves and vines, big round green eyes, single creature' },
+  { element: 'water', seed: 1203, prompt: 'cute chubby water elemental creature made of round translucent blue water droplets, big round cyan eyes, single creature' },
+  { element: 'fire', seed: 1204, prompt: 'cute chubby fiery imp creature made of round orange flame puffs, big round red eyes, single creature' },
+  { element: 'earth', seed: 1205, prompt: 'cute chubby rocky golem creature made of round brown clay and stone chunks with mossy patches, big round yellow eyes, single creature' },
 ];
 
 const TOWER_SIZE = 256;

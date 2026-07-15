@@ -74,6 +74,12 @@ function monsterTextureKey(element: Element): string {
   return `monster-${element}`;
 }
 
+// scripts/generate-terrain-assets.mjs 產出的地板/路徑材質(見 docs/ART_PIPELINE.md),
+// 已經做過 seamless tiling 後處理,可以用 TileSprite 整片鋪滿不會有格線接縫。
+// 缺檔/載入失敗會自動退回下面 drawStaticLayer() 原本的純色畫法。
+const TILE_FLOOR_KEY = 'tile-floor';
+const TILE_PATH_KEY = 'tile-path';
+
 /** 純視覺用的簡單雜湊(不是密碼學等級),只用來決定哪幾格灑裝飾物、灑哪一種,裝飾物不是模擬狀態不用管跨機器一不一致。 */
 function tileHash(x: number, y: number): number {
   let h = (x * 374761393 + y * 668265263) ^ 0x9e3779b9;
@@ -114,6 +120,8 @@ export class GameScene extends Phaser.Scene {
     for (const element of Object.keys(MONSTER_IMAGE_FILES) as Element[]) {
       this.load.image(monsterTextureKey(element), `/assets/monsters/${MONSTER_IMAGE_FILES[element]}`);
     }
+    this.load.image(TILE_FLOOR_KEY, '/assets/tiles/floor.png');
+    this.load.image(TILE_PATH_KEY, '/assets/tiles/path.png');
   }
 
   create(): void {
@@ -323,22 +331,42 @@ export class GameScene extends Phaser.Scene {
 
   private drawStaticLayer(): void {
     const g = this.add.graphics();
+    const mapWidthPx = GRID_WIDTH * TILE_PX;
+    const mapHeightPx = GRID_HEIGHT * TILE_PX;
 
-    // 草地用棋盤式雙色交錯,打破整片同色的單調感(還沒有真正的地板材質前,這是最便宜的立體感來源)
-    for (let x = 0; x < GRID_WIDTH; x++) {
-      for (let y = 0; y < GRID_HEIGHT; y++) {
-        if (isOnPath(x, y)) continue;
-        g.fillStyle((x + y) % 2 === 0 ? 0x2f4d33 : 0x355a3a, 1);
-        g.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+    // 有正式地板材質就整片鋪滿(材質已經做過 seamless tiling,TileSprite 重複貼不會有接縫);
+    // 沒有就退回棋盤式雙色交錯畫法。地板先整片蓋住全部格子(含路徑格),路徑材質等等疊上去蓋掉。
+    if (this.textures.exists(TILE_FLOOR_KEY)) {
+      this.add.tileSprite(0, 0, mapWidthPx, mapHeightPx, TILE_FLOOR_KEY).setOrigin(0, 0);
+    } else {
+      for (let x = 0; x < GRID_WIDTH; x++) {
+        for (let y = 0; y < GRID_HEIGHT; y++) {
+          if (isOnPath(x, y)) continue;
+          g.fillStyle((x + y) % 2 === 0 ? 0x2f4d33 : 0x355a3a, 1);
+          g.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+        }
       }
     }
 
-    // 路徑整格塗滿(不是只畫一條細線穿過格子中心)——這樣「這格到底算不算路徑」
-    // 一眼就看得出來,不會再跟格線混在一起分不清楚可不可以蓋。
-    g.fillStyle(0x6b5541, 1);
-    for (let x = 0; x < GRID_WIDTH; x++) {
-      for (let y = 0; y < GRID_HEIGHT; y++) {
-        if (isOnPath(x, y)) g.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+    // 路徑材質同樣整片鋪滿,再用只蓋路徑格形狀的遮罩裁掉非路徑的部分——
+    // 這樣路徑材質不用真的切成一格一格貼,鋪滿+裁形狀比較簡單。
+    if (this.textures.exists(TILE_PATH_KEY)) {
+      const pathSprite = this.add.tileSprite(0, 0, mapWidthPx, mapHeightPx, TILE_PATH_KEY).setOrigin(0, 0);
+      const maskShape = this.make.graphics({}).fillStyle(0xffffff, 1);
+      for (let x = 0; x < GRID_WIDTH; x++) {
+        for (let y = 0; y < GRID_HEIGHT; y++) {
+          if (isOnPath(x, y)) maskShape.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+        }
+      }
+      pathSprite.setMask(maskShape.createGeometryMask());
+    } else {
+      // 路徑整格塗滿(不是只畫一條細線穿過格子中心)——這樣「這格到底算不算路徑」
+      // 一眼就看得出來,不會再跟格線混在一起分不清楚可不可以蓋。
+      g.fillStyle(0x6b5541, 1);
+      for (let x = 0; x < GRID_WIDTH; x++) {
+        for (let y = 0; y < GRID_HEIGHT; y++) {
+          if (isOnPath(x, y)) g.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+        }
       }
     }
 
