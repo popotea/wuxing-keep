@@ -372,6 +372,51 @@
         text-align: right;
       }
       #bonusWave:empty { display: none; }
+
+      /* 精簡檢視模式切換鈕:#hud 整個 pointer-events:none 是為了不擋地圖點擊,
+         這顆按鈕要單獨蓋回 auto 才能真的點得到。 */
+      .hud-compact-toggle {
+        pointer-events: auto;
+        align-self: flex-end;
+        background: rgba(15, 18, 24, 0.6);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 3px 10px;
+        font-size: 11px;
+        color: var(--muted);
+        cursor: pointer;
+        transition: color 0.15s, border-color 0.15s;
+      }
+      .hud-compact-toggle:hover { color: var(--text); border-color: var(--accent); }
+      /* 精簡模式:拿掉每個 hud-stat 的膠囊底色/邊框,只留純文字漂在畫面上(靠文字陰影維持可讀性)。 */
+      body.hud-compact .hud-stat {
+        background: none;
+        border: none;
+        box-shadow: none;
+        padding: 2px 4px;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.7);
+      }
+      body.hud-compact .lives-bar-outer { background: rgba(51, 51, 51, 0.6); }
+      .hud-toggle-row { display: flex; gap: 6px; }
+
+      /* ---- 記分板(參考 WC3):按鈕切換常顯,不像 choice-modal 那樣擋住地圖操作 ---- */
+      .scoreboard-overlay {
+        display: none;
+        position: fixed;
+        top: 60px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 15;
+        pointer-events: none;
+      }
+      .scoreboard-overlay.show { display: block; }
+      .scoreboard-panel { padding: 14px 20px; min-width: 340px; pointer-events: auto; }
+      .scoreboard-panel h3 { margin: 0 0 10px; text-align: center; }
+      .scoreboard-panel table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .scoreboard-panel th, .scoreboard-panel td { padding: 5px 10px; text-align: right; }
+      .scoreboard-panel th:first-child, .scoreboard-panel td:first-child { text-align: left; }
+      .scoreboard-panel th { color: var(--muted); font-weight: normal; border-bottom: 1px solid var(--border); }
+      .scoreboard-panel tr.scoreboard-me { color: var(--accent); font-weight: bold; }
       #gameCanvas {
         border: 2px solid var(--border);
         border-radius: 6px;
@@ -727,6 +772,10 @@
     <section id="gameScreen" hidden>
       <!-- 浮動貼在右上角,不佔用畫面區塊(2026-07-15 改的,原本是滿版寬度的實體面板)。 -->
       <div id="hud">
+        <div class="hud-toggle-row">
+          <button id="scoreboardBtn" class="hud-compact-toggle" type="button">記分板</button>
+          <button id="hudCompactBtn" class="hud-compact-toggle" type="button">精簡檢視</button>
+        </div>
         <div class="hud-stat">
           <svg class="icon" style="color: var(--accent)"><use href="#icon-coin" /></svg> <span id="gold">-</span>
         </div>
@@ -741,6 +790,19 @@
       </div>
       <div id="gameCanvas"></div>
       <div id="toast"></div>
+
+      <!-- 記分板(參考 WC3):按鈕切換常顯/隱藏,不像 choice-modal 那樣擋住地圖,可以邊玩邊看。 -->
+      <div id="scoreboardOverlay" class="scoreboard-overlay">
+        <div class="scoreboard-panel panel-frame">
+          <h3>記分板</h3>
+          <table>
+            <thead>
+              <tr><th>玩家</th><th>金幣</th><th>塔</th><th>擊殺</th><th>傷害</th></tr>
+            </thead>
+            <tbody id="scoreboardBody"></tbody>
+          </table>
+        </div>
+      </div>
 
       <!-- 蓋塔改成點地圖上的格子才浮現(main.ts 的 showFloatingBuildMenu()),不是固定佔用底部一整塊。
            floatingBuildBackdrop 是透明的,純粹用來接「點別處關掉選單」的點擊,不會讓畫面變暗。 -->

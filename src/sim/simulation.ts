@@ -39,6 +39,12 @@ import {
   type UpgradePath,
 } from './towers';
 
+/** 記分板用的每人累計數據(參考 WC3 記分板),純顯示用,不影響任何經濟/戰鬥判定。 */
+export interface PlayerStats {
+  damageDealt: number;
+  kills: number;
+}
+
 export interface SimulationState {
   tick: number;
   /** 團隊模式:每個玩家自己一份、彼此獨立的金幣。塔可以互相幫忙升級,但花的是升級者自己的錢。 */
@@ -69,6 +75,8 @@ export interface SimulationState {
   playerCountScalePercent: number;
   /** 每個玩家開局前選好、整局固定的可蓋屬性集合;沒有對應項目代表不限制(單人用預設值時走這條)。 */
   playerElements: Record<PlayerId, Element[]>;
+  /** 記分板用:每個玩家累計造成的傷害/擊殺數,依塔的 ownerId 歸戶。純顯示用,跟團隊經濟(賞金全員均分)是分開的兩件事。 */
+  playerStats: Record<PlayerId, PlayerStats>;
   /** 這個 tick 發生的攻擊事件,只給 UI 顯示飄動傷害數字用,每個 tick 開始都會清空重算,不是累積狀態。 */
   combatEvents: CombatEvent[];
   /** 除錯用:多台機器互相比對,一旦不一致就代表跑飛了 */
@@ -84,7 +92,11 @@ export function createInitialState(
   playerElements: Record<PlayerId, Element[]> = {},
 ): SimulationState {
   const gold: Record<PlayerId, number> = {};
-  for (const playerId of Object.keys(playerElements)) gold[playerId] = STARTING_GOLD;
+  const playerStats: Record<PlayerId, PlayerStats> = {};
+  for (const playerId of Object.keys(playerElements)) {
+    gold[playerId] = STARTING_GOLD;
+    playerStats[playerId] = { damageDealt: 0, kills: 0 };
+  }
 
   const playerCount = Math.max(1, Object.keys(playerElements).length);
   // 每多一個玩家 +20% 血量/速度,單人(playerCount=1)固定是 100%,不影響既有單人平衡。
@@ -108,6 +120,7 @@ export function createInitialState(
     difficultyPercent,
     playerCountScalePercent,
     playerElements,
+    playerStats,
     combatEvents: [],
     checksum: seed.toString(16),
   };
@@ -137,6 +150,8 @@ function grantGoldToAllPlayers(state: SimulationState, amount: number): void {
 }
 
 function cloneState(state: SimulationState): SimulationState {
+  const playerStats: Record<PlayerId, PlayerStats> = {};
+  for (const playerId of Object.keys(state.playerStats)) playerStats[playerId] = { ...state.playerStats[playerId] };
   return {
     ...state,
     gold: { ...state.gold },
@@ -145,6 +160,7 @@ function cloneState(state: SimulationState): SimulationState {
     traps: state.traps.map((t) => ({ ...t })),
     resourceBuildings: state.resourceBuildings.map((r) => ({ ...r })),
     bonusAwarded: [...state.bonusAwarded],
+    playerStats,
   };
 }
 
@@ -300,8 +316,12 @@ function computeChecksum(state: SimulationState): string {
     .map((r) => `${r.id}:${r.x}:${r.y}:${r.ticksSinceLastIncome}`)
     .join(';');
   const bonusPart = state.bonusAwarded.map((b) => (b ? '1' : '0')).join('');
+  const statsPart = Object.keys(state.playerStats)
+    .sort()
+    .map((id) => `${id}:${state.playerStats[id].damageDealt}:${state.playerStats[id].kills}`)
+    .join(',');
   return simpleHash(
-    `${state.tick}|${goldPart}|${state.lives}|${towerPart}|${monsterPart}|${trapPart}|${resourceBuildingPart}|${bonusPart}`,
+    `${state.tick}|${goldPart}|${state.lives}|${towerPart}|${monsterPart}|${trapPart}|${resourceBuildingPart}|${bonusPart}|${statsPart}`,
   );
 }
 
@@ -367,8 +387,23 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   }
   next.monsters = survivors;
 
+  // 記分板統計:傷害依塔的 ownerId 歸戶;擊殺數只算一次,同一隻怪這個 tick 被好幾座塔
+  // 一起打死(常見於 splash 路線)只算給第一個把牠打進 0 血以下的塔主人,不會重複計算。
+  const killedMonsterIdsThisTick = new Set<number>();
   for (const tower of next.towers) {
-    next.combatEvents.push(...tryAttack(tower, next.monsters));
+    const events = tryAttack(tower, next.monsters);
+    const stats = next.playerStats[tower.ownerId];
+    for (const event of events) {
+      next.combatEvents.push(event);
+      if (!stats) continue;
+      stats.damageDealt += event.damage;
+      if (killedMonsterIdsThisTick.has(event.monsterId)) continue;
+      const monster = next.monsters.find((m) => m.id === event.monsterId);
+      if (monster && monster.hp <= 0) {
+        stats.kills += 1;
+        killedMonsterIdsThisTick.add(event.monsterId);
+      }
+    }
   }
 
   const dead = next.monsters.filter((m) => m.hp <= 0);

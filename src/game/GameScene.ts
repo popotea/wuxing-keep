@@ -11,6 +11,9 @@ import { MAX_TOWER_LEVEL, TOWER_DEFS, UPGRADE_PATH_LEVEL, type CombatEvent, type
 export const TILE_PX = 40;
 // 塔/怪物的造型尺寸都是照 TILE_PX=32 時的手感調的,乘這個比例就能跟著 TILE_PX 一起放大,不用重調數字。
 const SCALE = TILE_PX / 32;
+// 裝飾物(樹/草叢/石頭/花/小動物)原本的幾何圖形尺寸太小、不容易看清楚,額外加一個倍率放大——
+// 只用在 drawDecor*() 這幾個函式,不影響塔/怪物/HP 條等其他用到 SCALE 的地方。
+const DECOR_SCALE = SCALE * 1.6;
 
 // 世紀帝國式邊緣平移:滑鼠移到畫面邊緣這麼多 px 以內,鏡頭就朝該方向捲動。
 const EDGE_PAN_MARGIN_PX = 32;
@@ -180,15 +183,9 @@ export class GameScene extends Phaser.Scene {
         this.setSelectedTower(this.selectedTowerId === tower.id ? null : tower.id);
         return;
       }
-      // 陷阱/資源建築目前沒有選取面板(v1 先不做賣出/升級),點到就當空白處理,
-      // 但至少不要誤送一個注定失敗的建造指令(那格已經被佔用了)。
-      const occupied =
-        this.pendingState?.traps.some((t) => t.x === x && t.y === y) ||
-        this.pendingState?.resourceBuildings.some((r) => r.x === x && r.y === y);
-      if (occupied) {
-        this.setSelectedTower(null);
-        return;
-      }
+      // 陷阱/資源建築目前沒有選取面板(v1 先不做賣出/升級),但「這格已經被佔用」要交給
+      // main.ts 判斷並跳提示——不要在這裡直接吞掉靜默不做事,不然玩家會搞不清楚到底是
+      // 裝飾物(純視覺,不影響蓋塔)擋住了,還是這格真的已經有陷阱/資源建築。
       this.setSelectedTower(null);
       this.onTilePlaced?.(x, y, pointer.x, pointer.y);
     });
@@ -522,7 +519,7 @@ export class GameScene extends Phaser.Scene {
 
   /** AI 生圖沒有去背(方形草地背景),用圓形遮罩裁掉方角,看起來比較像貼在地上的裝飾物而不是一張照片。 */
   private placeDecorImage(key: string, cx: number, cy: number): void {
-    const size = TILE_PX * 0.72;
+    const size = TILE_PX * 0.95; // 加大到接近整格,原本 0.72 太小不容易看清楚
     const image = this.add.image(cx, cy, key).setDisplaySize(size, size);
     const maskShape = this.make.graphics({}).fillStyle(0xffffff, 1).fillCircle(cx, cy, size / 2);
     image.setMask(maskShape.createGeometryMask());
@@ -530,53 +527,53 @@ export class GameScene extends Phaser.Scene {
 
   private drawDecorTree(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
     g.fillStyle(0x000000, 0.15);
-    g.fillEllipse(cx, cy + 6 * SCALE, 14 * SCALE, 4 * SCALE);
+    g.fillEllipse(cx, cy + 6 * DECOR_SCALE, 14 * DECOR_SCALE, 4 * DECOR_SCALE);
     g.fillStyle(0x5b3a22, 1);
-    g.fillRect(cx - 2 * SCALE, cy, 4 * SCALE, 7 * SCALE);
+    g.fillRect(cx - 2 * DECOR_SCALE, cy, 4 * DECOR_SCALE, 7 * DECOR_SCALE);
     g.fillStyle(0x2e6b3e, 1);
-    g.fillCircle(cx, cy - 4 * SCALE, 7 * SCALE);
+    g.fillCircle(cx, cy - 4 * DECOR_SCALE, 7 * DECOR_SCALE);
     g.fillStyle(0x3f8a52, 1);
-    g.fillCircle(cx - 2 * SCALE, cy - 6 * SCALE, 4 * SCALE);
+    g.fillCircle(cx - 2 * DECOR_SCALE, cy - 6 * DECOR_SCALE, 4 * DECOR_SCALE);
   }
 
   private drawDecorBush(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
     g.fillStyle(0x000000, 0.15);
-    g.fillEllipse(cx, cy + 4 * SCALE, 14 * SCALE, 4 * SCALE);
+    g.fillEllipse(cx, cy + 4 * DECOR_SCALE, 14 * DECOR_SCALE, 4 * DECOR_SCALE);
     g.fillStyle(0x336b3a, 1);
-    g.fillCircle(cx - 4 * SCALE, cy, 5 * SCALE);
-    g.fillCircle(cx + 4 * SCALE, cy, 5 * SCALE);
-    g.fillCircle(cx, cy - 3 * SCALE, 5.5 * SCALE);
+    g.fillCircle(cx - 4 * DECOR_SCALE, cy, 5 * DECOR_SCALE);
+    g.fillCircle(cx + 4 * DECOR_SCALE, cy, 5 * DECOR_SCALE);
+    g.fillCircle(cx, cy - 3 * DECOR_SCALE, 5.5 * DECOR_SCALE);
   }
 
   private drawDecorRock(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
     g.fillStyle(0x000000, 0.15);
-    g.fillEllipse(cx, cy + 4 * SCALE, 12 * SCALE, 3 * SCALE);
+    g.fillEllipse(cx, cy + 4 * DECOR_SCALE, 12 * DECOR_SCALE, 3 * DECOR_SCALE);
     g.fillStyle(0x6b6b6b, 1);
     g.fillPoints(
       [
-        new Phaser.Math.Vector2(cx - 6 * SCALE, cy + 2 * SCALE),
-        new Phaser.Math.Vector2(cx - 4 * SCALE, cy - 4 * SCALE),
-        new Phaser.Math.Vector2(cx + 2 * SCALE, cy - 5 * SCALE),
-        new Phaser.Math.Vector2(cx + 6 * SCALE, cy),
-        new Phaser.Math.Vector2(cx + 3 * SCALE, cy + 4 * SCALE),
-        new Phaser.Math.Vector2(cx - 2 * SCALE, cy + 5 * SCALE),
+        new Phaser.Math.Vector2(cx - 6 * DECOR_SCALE, cy + 2 * DECOR_SCALE),
+        new Phaser.Math.Vector2(cx - 4 * DECOR_SCALE, cy - 4 * DECOR_SCALE),
+        new Phaser.Math.Vector2(cx + 2 * DECOR_SCALE, cy - 5 * DECOR_SCALE),
+        new Phaser.Math.Vector2(cx + 6 * DECOR_SCALE, cy),
+        new Phaser.Math.Vector2(cx + 3 * DECOR_SCALE, cy + 4 * DECOR_SCALE),
+        new Phaser.Math.Vector2(cx - 2 * DECOR_SCALE, cy + 5 * DECOR_SCALE),
       ],
       true,
     );
     g.fillStyle(0x4a7a52, 0.5);
-    g.fillCircle(cx - 2 * SCALE, cy - 3 * SCALE, 2 * SCALE);
+    g.fillCircle(cx - 2 * DECOR_SCALE, cy - 3 * DECOR_SCALE, 2 * DECOR_SCALE);
   }
 
   private drawDecorFlowers(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
     g.fillStyle(0x000000, 0.12);
-    g.fillEllipse(cx, cy + 3 * SCALE, 10 * SCALE, 3 * SCALE);
+    g.fillEllipse(cx, cy + 3 * DECOR_SCALE, 10 * DECOR_SCALE, 3 * DECOR_SCALE);
     g.fillStyle(0x3a7d3a, 1);
-    g.fillCircle(cx, cy, 4 * SCALE);
+    g.fillCircle(cx, cy, 4 * DECOR_SCALE);
     const petalColors = [0xe86b9b, 0xf2d13d, 0xffffff];
     for (let i = 0; i < petalColors.length; i++) {
       const angle = (i / petalColors.length) * Math.PI * 2;
       g.fillStyle(petalColors[i], 1);
-      g.fillCircle(cx + Math.cos(angle) * 4 * SCALE, cy + Math.sin(angle) * 4 * SCALE, 2 * SCALE);
+      g.fillCircle(cx + Math.cos(angle) * 4 * DECOR_SCALE, cy + Math.sin(angle) * 4 * DECOR_SCALE, 2 * DECOR_SCALE);
     }
   }
 
@@ -585,20 +582,20 @@ export class GameScene extends Phaser.Scene {
     const flip = seed % 2 === 0 ? 1 : -1; // 用雜湊決定面朝左或右,不會整張地圖的小動物都朝同一邊
     const color = 0x8a6f4d;
     g.fillStyle(0x000000, 0.15);
-    g.fillEllipse(cx, cy + 4 * SCALE, 10 * SCALE, 3 * SCALE);
+    g.fillEllipse(cx, cy + 4 * DECOR_SCALE, 10 * DECOR_SCALE, 3 * DECOR_SCALE);
     g.fillStyle(color, 1);
-    g.fillCircle(cx, cy + 1 * SCALE, 4 * SCALE);
-    g.fillCircle(cx + flip * 4 * SCALE, cy - 2 * SCALE, 2.6 * SCALE);
+    g.fillCircle(cx, cy + 1 * DECOR_SCALE, 4 * DECOR_SCALE);
+    g.fillCircle(cx + flip * 4 * DECOR_SCALE, cy - 2 * DECOR_SCALE, 2.6 * DECOR_SCALE);
     g.fillTriangle(
-      cx + flip * 3 * SCALE,
-      cy - 4 * SCALE,
-      cx + flip * 4 * SCALE,
-      cy - 7 * SCALE,
-      cx + flip * 5 * SCALE,
-      cy - 4 * SCALE,
+      cx + flip * 3 * DECOR_SCALE,
+      cy - 4 * DECOR_SCALE,
+      cx + flip * 4 * DECOR_SCALE,
+      cy - 7 * DECOR_SCALE,
+      cx + flip * 5 * DECOR_SCALE,
+      cy - 4 * DECOR_SCALE,
     );
     g.fillStyle(0x1a1a1a, 1);
-    g.fillCircle(cx + flip * 5.5 * SCALE, cy - 2.5 * SCALE, 0.8 * SCALE);
+    g.fillCircle(cx + flip * 5.5 * DECOR_SCALE, cy - 2.5 * DECOR_SCALE, 0.8 * DECOR_SCALE);
   }
 
   /** 綠=可以蓋塔、金=已有塔(點下去是選取,不是直接升級)、紅=路徑格不能蓋,滑鼠移過去就先知道結果。 */

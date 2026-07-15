@@ -89,6 +89,10 @@ const nextWaveEl = $<HTMLSpanElement>('nextWave');
 const waveNumberEl = $<HTMLSpanElement>('waveNumber');
 const nextWaveElementEl = $<HTMLSpanElement>('nextWaveElement');
 const bonusWaveEl = $<HTMLDivElement>('bonusWave');
+const hudCompactBtn = $<HTMLButtonElement>('hudCompactBtn');
+const scoreboardBtn = $<HTMLButtonElement>('scoreboardBtn');
+const scoreboardOverlayEl = $<HTMLDivElement>('scoreboardOverlay');
+const scoreboardBodyEl = $<HTMLTableSectionElement>('scoreboardBody');
 const bestRecordEl = $<HTMLSpanElement>('bestRecord');
 const dailyBestEl = $<HTMLSpanElement>('dailyBest');
 const achievementsEl = $<HTMLDivElement>('achievements');
@@ -120,6 +124,46 @@ function displayNameFor(playerId: string): string {
   if (playerId === myPlayerId()) return '你';
   return room?.getRoster().find((p) => p.playerId === playerId)?.name ?? playerId;
 }
+
+/** 記分板(參考 WC3):按傷害由高到低排序,只有按鈕開著時才畫,tick 更新時才不用每次都算。 */
+function renderScoreboard(): void {
+  if (!latestState) return;
+  const state = latestState;
+  const rows = Object.keys(state.gold)
+    .map((playerId) => {
+      const stats = state.playerStats[playerId] ?? { damageDealt: 0, kills: 0 };
+      const towerCount = state.towers.filter((t) => t.ownerId === playerId).length;
+      return {
+        playerId,
+        name: displayNameFor(playerId),
+        gold: state.gold[playerId] ?? 0,
+        towerCount,
+        kills: stats.kills,
+        damage: stats.damageDealt,
+      };
+    })
+    .sort((a, b) => b.damage - a.damage);
+
+  scoreboardBodyEl.innerHTML = rows
+    .map(
+      (r) => `
+        <tr class="${r.playerId === myPlayerId() ? 'scoreboard-me' : ''}">
+          <td>${escapeHtml(r.name)}</td>
+          <td>${r.gold}</td>
+          <td>${r.towerCount}</td>
+          <td>${r.kills}</td>
+          <td>${r.damage}</td>
+        </tr>
+      `,
+    )
+    .join('');
+}
+
+scoreboardBtn.addEventListener('click', () => {
+  const showing = scoreboardOverlayEl.classList.toggle('show');
+  scoreboardBtn.textContent = showing ? '關閉記分板' : '記分板';
+  if (showing) renderScoreboard();
+});
 
 /** 依玩家自己選的屬性算出這次要隨機提供哪些蓋塔選項(WC3 英雄選擇式),最多 3 個。 */
 function randomTowerOffer(): Element[] {
@@ -223,8 +267,21 @@ floatingBuildBackdropEl.addEventListener('click', hideFloatingBuildMenu);
 const gameRenderer = createGameRenderer(
   'gameCanvas',
   (x, y, screenX, screenY) => {
-    // GameScene 只有點到「空地」才會呼叫這裡——點到已經有塔的格子是選取,見下面 onTowerSelected。
+    // GameScene 只有點到「已經有塔」的格子才會走 onTowerSelected 那條路;這裡收到的
+    // 點擊可能是真的空地,也可能是已經有陷阱/資源建築的格子——先判斷清楚再決定要不要
+    // 跳建造選單,不然玩家搞不清楚「這格不能蓋」到底是裝飾物(純視覺不影響蓋塔)擋住了,
+    // 還是這格真的已經有陷阱/資源建築。
     if (!matchActive || (!room && !localEngine)) return;
+    const occupiedByTrap = latestState?.traps.some((t) => t.x === x && t.y === y);
+    const occupiedByResource = latestState?.resourceBuildings.some((r) => r.x === x && r.y === y);
+    if (occupiedByTrap) {
+      showToast('這格已經有陷阱了');
+      return;
+    }
+    if (occupiedByResource) {
+      showToast('這格已經有資源建築了');
+      return;
+    }
     const myGold = latestState?.gold[myPlayerId()] ?? 0;
     const options: ChoiceOption[] = [];
 
@@ -537,6 +594,22 @@ function selectedDifficulty(container: HTMLElement): number {
   return Number(checked?.value) || 100;
 }
 
+// HUD 精簡檢視模式:拿掉每個 hud-stat 的膠囊底色,只留浮動文字——偏好存 localStorage,
+// 跟對局/房間無關,重開遊戲也記得上次選的模式。
+const HUD_COMPACT_KEY = 'wuxing-keep:hudCompact';
+
+function applyHudCompact(compact: boolean): void {
+  document.body.classList.toggle('hud-compact', compact);
+  hudCompactBtn.textContent = compact ? '詳細檢視' : '精簡檢視';
+  localStorage.setItem(HUD_COMPACT_KEY, compact ? '1' : '0');
+}
+
+hudCompactBtn.addEventListener('click', () => {
+  applyHudCompact(!document.body.classList.contains('hud-compact'));
+});
+
+applyHudCompact(localStorage.getItem(HUD_COMPACT_KEY) === '1');
+
 // 單人/連線都通用的「最佳紀錄」——存在這台瀏覽器的 localStorage,跟房間/連線無關。
 interface BestRecord {
   wave: number;
@@ -758,6 +831,7 @@ const lockstepHandlers: LockstepHandlers = {
     renderWaveHud(state.tick);
     gameRenderer.renderState(state);
     renderTowerPanel();
+    if (scoreboardOverlayEl.classList.contains('show')) renderScoreboard();
     if (state.gameOver) {
       showResult('守備失敗(生命歸零)', 'defeat');
       saveBestRecordIfBetter({ wave: currentWaveNumber(state.tick), cleared: false });
