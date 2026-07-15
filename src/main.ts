@@ -6,6 +6,7 @@ import { HostLockstepEngine, ClientLockstepEngine, type LockstepHandlers } from 
 import { Room, type RoomHandlers } from './net/room';
 import type { Action, PlayerInfo } from './net/protocol';
 import { createGameRenderer } from './game/PhaserGame';
+import { isMultiplayer, ownerColorCss } from './game/playerColors';
 import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
 import { LOCAL_PLAYER_ID, LocalEngine } from './sim/localEngine';
 import { FP_SCALE, isOnPath } from './sim/map';
@@ -155,11 +156,15 @@ function renderScoreboard(): void {
     })
     .sort((a, b) => b.damage - a.damage);
 
+  // 多人才需要用顏色點區分「這是誰」——單人只有自己一列,不用畫。跟塔/陷阱/資源建築底部
+  // 的識別色是同一套配色(ownerColorCss()),同一個玩家在小地圖、塔、記分板上看到的顏色一致。
+  const multiplayer = isMultiplayer(state);
   scoreboardBodyEl.innerHTML = rows
     .map(
-      (r) => `
+      (r, i) => `
         <tr class="${r.playerId === myPlayerId() ? 'scoreboard-me' : ''}">
-          <td>${escapeHtml(r.name)}</td>
+          <td><span class="scoreboard-rank ${i === 0 ? 'rank-1' : ''}">${i + 1}</span></td>
+          <td>${multiplayer ? `<span class="scoreboard-dot" style="background:${ownerColorCss(state, r.playerId)}"></span>` : ''}${escapeHtml(r.name)}</td>
           <td>${r.gold}</td>
           <td>${r.towerCount}</td>
           <td>${r.kills}</td>

@@ -3,10 +3,21 @@
 
 import Phaser from 'phaser';
 import type { Element } from '../sim/elements';
-import { FP_SCALE, GRID_HEIGHT, GRID_WIDTH, inBounds, isOnPath, PATHS, worldPositionFp } from '../sim/map';
+import {
+  FP_SCALE,
+  GRID_HEIGHT,
+  GRID_WIDTH,
+  inBounds,
+  isOnPath,
+  PATHS,
+  VIEWPORT_TILES_H,
+  VIEWPORT_TILES_W,
+  worldPositionFp,
+} from '../sim/map';
 import type { Monster } from '../sim/monsters';
 import type { SimulationState } from '../sim/simulation';
 import { MAX_TOWER_LEVEL, TOWER_DEFS, UPGRADE_PATH_LEVEL, type CombatEvent, type Tower, type UpgradePath } from '../sim/towers';
+import { isMultiplayer, ownerColorHex } from './playerColors';
 
 export const TILE_PX = 40;
 // 塔/怪物的造型尺寸都是照 TILE_PX=32 時的手感調的,乘這個比例就能跟著 TILE_PX 一起放大,不用重調數字。
@@ -156,12 +167,14 @@ export class GameScene extends Phaser.Scene {
     this.minimapLayer = this.add.graphics().setScrollFactor(0).setDepth(4); // 固定貼在螢幕上,不隨鏡頭捲動
     // 世界(地圖)比畫布視窗大很多,鏡頭預設從左上角開始,靠邊緣平移才看得到其他區域。
     this.cameras.main.setBounds(0, 0, GRID_WIDTH * TILE_PX, GRID_HEIGHT * TILE_PX);
+    this.applyViewportZoom();
 
     // PhaserGame.ts 用 Scale.RESIZE,畫布會跟著 #gameCanvas 的實際版面尺寸動態變動
     // (例如視窗縮放、或 CSS 版面調整撐滿可視空間)——鏡頭的可視範圍(viewport)要跟著更新,
     // 不然畫布變大了但鏡頭還是舊尺寸,會出現只畫在左上角一小塊、其餘留白的狀況。
     this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
       this.cameras.main.setViewport(0, 0, gameSize.width, gameSize.height);
+      this.applyViewportZoom();
     });
 
     this.input.on('gameover', () => {
@@ -195,6 +208,19 @@ export class GameScene extends Phaser.Scene {
     if (this.pendingState) this.drawDynamicLayer(this.pendingState);
   }
 
+  /**
+   * 畫布跟著視窗尺寸滿版(Scale.RESIZE),大螢幕上畫布的實際像素會遠大於原本設計的 880x560,
+   * 若鏡頭一路維持 zoom=1(1 格固定 TILE_PX 像素),大螢幕會一次看到遠超過 VIEWPORT_TILES_W/H
+   * 的格數,塔/怪物相對畫面就顯得很小。改成動態算 zoom,讓畫面固定大約只看得到
+   * VIEWPORT_TILES_W x VIEWPORT_TILES_H 這麼多格(取寬高比例較保守的那一邊),不管螢幕多大,
+   * 物件在畫面上的相對大小都維持一致觀感,而不是螢幕越大東西看起來越小。
+   */
+  private applyViewportZoom(): void {
+    const zoomX = this.scale.width / (VIEWPORT_TILES_W * TILE_PX);
+    const zoomY = this.scale.height / (VIEWPORT_TILES_H * TILE_PX);
+    this.cameras.main.setZoom(Math.max(1, Math.min(zoomX, zoomY)));
+  }
+
   /** 小地圖左上角在螢幕座標系(scrollFactor=0)裡的位置,固定貼在畫布右下角。 */
   private minimapOrigin(): { x: number; y: number } {
     const w = GRID_WIDTH * TILE_PX * MINIMAP_SCALE;
@@ -212,10 +238,14 @@ export class GameScene extends Phaser.Scene {
     const worldX = (pointer.x - ox) / MINIMAP_SCALE;
     const worldY = (pointer.y - oy) / MINIMAP_SCALE;
     const cam = this.cameras.main;
-    const maxScrollX = Math.max(0, GRID_WIDTH * TILE_PX - cam.width);
-    const maxScrollY = Math.max(0, GRID_HEIGHT * TILE_PX - cam.height);
-    cam.scrollX = Phaser.Math.Clamp(worldX - cam.width / 2, 0, maxScrollX);
-    cam.scrollY = Phaser.Math.Clamp(worldY - cam.height / 2, 0, maxScrollY);
+    // 鏡頭有 zoom 時,螢幕實際看得到的世界範圍是 cam.worldView(已經把 zoom 算進去),
+    // 不能直接用 cam.width/height(那是螢幕像素,zoom!=1 時跟世界座標範圍不一樣)。
+    const viewW = cam.worldView.width;
+    const viewH = cam.worldView.height;
+    const maxScrollX = Math.max(0, GRID_WIDTH * TILE_PX - viewW);
+    const maxScrollY = Math.max(0, GRID_HEIGHT * TILE_PX - viewH);
+    cam.scrollX = Phaser.Math.Clamp(worldX - viewW / 2, 0, maxScrollX);
+    cam.scrollY = Phaser.Math.Clamp(worldY - viewH / 2, 0, maxScrollY);
     return true;
   }
 
@@ -277,7 +307,13 @@ export class GameScene extends Phaser.Scene {
 
     const cam = this.cameras.main;
     g.lineStyle(1.5, 0xffffff, 0.9);
-    g.strokeRect(ox + cam.scrollX * MINIMAP_SCALE, oy + cam.scrollY * MINIMAP_SCALE, cam.width * MINIMAP_SCALE, cam.height * MINIMAP_SCALE);
+    // 白框要標示「世界座標裡實際看得到的範圍」,zoom!=1 時得用 worldView,不能直接用 cam.width/height。
+    g.strokeRect(
+      ox + cam.scrollX * MINIMAP_SCALE,
+      oy + cam.scrollY * MINIMAP_SCALE,
+      cam.worldView.width * MINIMAP_SCALE,
+      cam.worldView.height * MINIMAP_SCALE,
+    );
   }
 
   /**
@@ -311,8 +347,9 @@ export class GameScene extends Phaser.Scene {
     if (dx === 0 && dy === 0) return;
 
     const dtSec = delta / 1000;
-    const maxScrollX = Math.max(0, GRID_WIDTH * TILE_PX - cam.width);
-    const maxScrollY = Math.max(0, GRID_HEIGHT * TILE_PX - cam.height);
+    // 同上,zoom!=1 時要用 worldView(世界座標範圍)而不是 cam.width/height(螢幕像素)。
+    const maxScrollX = Math.max(0, GRID_WIDTH * TILE_PX - cam.worldView.width);
+    const maxScrollY = Math.max(0, GRID_HEIGHT * TILE_PX - cam.worldView.height);
     cam.scrollX = Phaser.Math.Clamp(cam.scrollX + dx * EDGE_PAN_SPEED_PX_PER_SEC * dtSec, 0, maxScrollX);
     cam.scrollY = Phaser.Math.Clamp(cam.scrollY + dy * EDGE_PAN_SPEED_PX_PER_SEC * dtSec, 0, maxScrollY);
   }
@@ -413,6 +450,17 @@ export class GameScene extends Phaser.Scene {
           if (isOnPath(x, y)) g.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
         }
       }
+    }
+
+    // AI 生的地板/路徑材質色調偏亮、飽和度偏高,長時間盯著玩容易不舒服——疊一層半透明灰卡其色
+    // 壓暗降飽和(Graphics 沒有原生調 HSL 的 API,疊色是最簡單有效的做法)。這個 Graphics 物件
+    // 刻意在地板/路徑圖片都貼完之後才建立:同深度(預設 0)時疊放順序看加入順序,晚加入的蓋在
+    // 上面,才不會反而被蓋在圖片底下變成完全看不到。只有真的載入了材質圖才需要壓,棋盤格/純色
+    // 填滿的備援畫法本來配色就偏暗,不用再疊一次。
+    if (this.textures.exists(TILE_FLOOR_KEY) || this.textures.exists(TILE_PATH_KEY)) {
+      const terrainTint = this.add.graphics();
+      terrainTint.fillStyle(0x4a4f3a, 0.3);
+      terrainTint.fillRect(0, 0, mapWidthPx, mapHeightPx);
     }
 
     // 路徑邊緣加一圈深色描邊(只描跟草地交界的那幾條邊),看起來像被踩出來的土路,不是一塊生硬的色塊
@@ -670,16 +718,24 @@ export class GameScene extends Phaser.Scene {
     const g = this.dynamicLayer;
     g.clear();
 
+    // 單人模式只有自己,不需要標示「誰蓋的」;多人才需要,顏色取 ownerColorHex()(依 state.gold
+    // 的 key 排序決定,所有機器算出來的顏色都一樣)。
+    const multiplayer = isMultiplayer(state);
+
     const liveTowerIds = new Set<number>();
     for (const t of state.towers) {
       liveTowerIds.add(t.id);
-      this.renderTower(g, t);
+      this.renderTower(g, t, multiplayer ? ownerColorHex(state, t.ownerId) : null);
     }
     this.pruneStaleSprites(this.towerSprites, liveTowerIds);
 
     // 陷阱/資源建築目前還沒有正式美術,先畫簡單佔位圖形(跟塔/怪物當初上正式美術前一樣的做法)。
-    for (const trap of state.traps) this.drawTrap(g, trap.x, trap.y);
-    for (const building of state.resourceBuildings) this.drawResourceBuilding(g, building.x, building.y);
+    for (const trap of state.traps) {
+      this.drawTrap(g, trap.x, trap.y, multiplayer ? ownerColorHex(state, trap.ownerId) : null);
+    }
+    for (const building of state.resourceBuildings) {
+      this.drawResourceBuilding(g, building.x, building.y, multiplayer ? ownerColorHex(state, building.ownerId) : null);
+    }
 
     if (this.selectedTowerId !== null) {
       const selected = state.towers.find((t) => t.id === this.selectedTowerId);
@@ -727,13 +783,16 @@ export class GameScene extends Phaser.Scene {
     return this.textures.exists(baseKey) ? baseKey : null;
   }
 
-  /** 有正式美術圖就用 Image 顯示(位置不變,只需要更新等級光點/強化造型);沒有就退回原本的幾何圖形畫法。 */
-  private renderTower(g: Phaser.GameObjects.Graphics, t: Tower): void {
+  /**
+   * 有正式美術圖就用 Image 顯示(位置不變,只需要更新等級光點/強化造型);沒有就退回原本的幾何圖形畫法。
+   * ownerMark 是多人模式下這座塔主人配到的識別色(單人模式傳 null,不畫)。
+   */
+  private renderTower(g: Phaser.GameObjects.Graphics, t: Tower, ownerMark: number | null): void {
     const key = this.resolveTowerTextureKey(t);
     if (!key) {
       this.towerSprites.get(t.id)?.destroy();
       this.towerSprites.delete(t.id);
-      this.drawTower(g, t.x, t.y, t.element, t.level);
+      this.drawTower(g, t.x, t.y, t.element, t.level, ownerMark);
       return;
     }
     const cx = t.x * TILE_PX + TILE_PX / 2;
@@ -747,7 +806,15 @@ export class GameScene extends Phaser.Scene {
       this.towerSprites.set(t.id, sprite);
     }
     sprite.setTexture(key).setPosition(cx, cy).setDisplaySize(displaySize, displaySize);
+    this.drawOwnerMark(g, cx, cy, ownerMark);
     this.drawTowerLevelPips(g, cx, cy, t.level);
+  }
+
+  /** 多人模式下在建築底部畫一圈識別色橢圓,一眼看出這是誰蓋的;單人模式/顏色為 null 時不畫。 */
+  private drawOwnerMark(g: Phaser.GameObjects.Graphics, cx: number, cy: number, ownerMark: number | null): void {
+    if (ownerMark === null) return;
+    g.lineStyle(2.5 * SCALE, ownerMark, 0.95);
+    g.strokeEllipse(cx, cy + 9 * SCALE, 22 * SCALE, 6 * SCALE);
   }
 
   /** 塔上方一排小白點表示等級,圖片版跟幾何圖形版共用同一個畫法。 */
@@ -814,7 +881,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** 陷阱目前沒有正式美術,先畫一排小尖刺(壓力板/地刺的感覺),蓋在路徑格材質上面。 */
-  private drawTrap(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number): void {
+  private drawTrap(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number, ownerMark: number | null): void {
     const cx = gridX * TILE_PX + TILE_PX / 2;
     const cy = gridY * TILE_PX + TILE_PX / 2;
     g.fillStyle(0x000000, 0.25);
@@ -826,10 +893,11 @@ export class GameScene extends Phaser.Scene {
     }
     g.lineStyle(1 * SCALE, 0x000000, 0.4);
     g.strokeCircle(cx, cy, 15 * SCALE);
+    this.drawOwnerMark(g, cx, cy + 4 * SCALE, ownerMark);
   }
 
   /** 資源建築目前沒有正式美術,先畫一個金色屋頂的小房子造型。 */
-  private drawResourceBuilding(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number): void {
+  private drawResourceBuilding(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number, ownerMark: number | null): void {
     const cx = gridX * TILE_PX + TILE_PX / 2;
     const cy = gridY * TILE_PX + TILE_PX / 2;
     g.fillStyle(0x000000, 0.25);
@@ -840,10 +908,18 @@ export class GameScene extends Phaser.Scene {
     g.fillTriangle(cx - 11 * SCALE, cy - 2 * SCALE, cx, cy - 14 * SCALE, cx + 11 * SCALE, cy - 2 * SCALE);
     g.lineStyle(1 * SCALE, 0x000000, 0.35);
     g.strokeTriangle(cx - 11 * SCALE, cy - 2 * SCALE, cx, cy - 14 * SCALE, cx + 11 * SCALE, cy - 2 * SCALE);
+    this.drawOwnerMark(g, cx, cy, ownerMark);
   }
 
   /** 底座 + 尖塔的簡易造型,比純色圓形更有辨識度;等級用塔尖上方的一排小點表示。沒有正式美術圖時的備援畫法。 */
-  private drawTower(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number, element: Element, level: number): void {
+  private drawTower(
+    g: Phaser.GameObjects.Graphics,
+    gridX: number,
+    gridY: number,
+    element: Element,
+    level: number,
+    ownerMark: number | null,
+  ): void {
     const cx = gridX * TILE_PX + TILE_PX / 2;
     const cy = gridY * TILE_PX + TILE_PX / 2;
     const color = ELEMENT_COLORS[element];
@@ -875,6 +951,7 @@ export class GameScene extends Phaser.Scene {
       g.fillStyle(0xffffff, 1);
       g.fillCircle(cx - pipsWidth / 2 + i * pipSpacing, cy - 17 * SCALE, 1.5 * SCALE);
     }
+    this.drawOwnerMark(g, cx, cy, ownerMark);
   }
 
   /** 圓身 + 小眼睛 + 頭上血條。首領怪(isBoss)整隻放大 1.8 倍再加一圈金框。沒有正式美術圖時的備援畫法。 */
