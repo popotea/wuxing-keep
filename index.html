@@ -42,6 +42,10 @@
         align-items: center;
         padding: 16px;
       }
+      /* 對局中要像真的裝了一套遊戲那樣滿版,不能整頁還能上下左右拖曳/滾動——
+         #gameScreen 底下的 #advancedPanel(除錯用)在對局中因此會被裁掉看不到,
+         這是刻意的,除錯資訊本來就設計成不佔主畫面,選單畫面才需要看得到它。 */
+      body.game-active { overflow: hidden; }
       h1 {
         margin: 12px 0 4px;
         letter-spacing: 6px;
@@ -51,6 +55,9 @@
       h1 span { color: var(--accent); text-shadow: 0 0 18px rgba(212, 175, 55, 0.55); }
       .element-strip { display: flex; gap: 8px; margin-bottom: 20px; }
       .element-strip span { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 8px 1px currentColor; }
+      /* 遊戲畫面滿版:標題/元素小圓點是選單專用的裝飾,佔掉的高度先前沒扣掉,
+         導致 #gameScreen 的 calc(100vh - 32px) 一直對不準、畫面看起來沒有真的滿版。 */
+      body.game-active h1, body.game-active .element-strip { display: none; }
       h3 { margin: 16px 0 6px; font-size: 14px; color: var(--muted); text-align: left; }
       .icon { width: 1em; height: 1em; display: inline-block; vertical-align: -0.15em; flex-shrink: 0; }
 
@@ -107,6 +114,32 @@
       label.element-water { color: var(--water); }
       label.element-fire { color: var(--fire); }
       label.element-earth { color: var(--earth); }
+      label.build-trap { color: var(--muted); }
+      label.build-resource { color: var(--accent); }
+
+      /* ---- 建造花費提示 + 金幣不足的訊息提示(toast) ---- */
+      #buildCostHint { text-align: center; font-size: 13px; color: var(--muted); min-height: 1.4em; margin: -6px 0 4px; }
+      #buildCostHint.cost-insufficient { color: var(--fire); font-weight: bold; }
+      /* 不用 hidden 屬性控制顯示(opacity 淡入淡出需要一直是 display:block 才能轉場),
+         預設 opacity:0 藏起來,JS 加上 .show class 才淡入,對照 #gameScreen 那個
+         [hidden] 被蓋掉的教訓,這裡乾脆不混用 hidden 屬性。 */
+      #toast {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%) translateY(8px);
+        background: var(--fire);
+        color: #fff;
+        font-weight: bold;
+        padding: 10px 20px;
+        border-radius: 8px;
+        box-shadow: var(--shadow-soft);
+        z-index: 20;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s ease-out, transform 0.25s ease-out;
+      }
+      #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
       .primary-btn {
         font-size: 18px;
         padding: 12px 28px;
@@ -626,6 +659,8 @@
       <div id="bonusWave"></div>
       <div id="gameCanvas"></div>
       <div class="choice-row" id="buildBar"></div>
+      <div id="buildCostHint"></div>
+      <div id="toast"></div>
 
       <div id="towerPanel" class="tower-panel panel-frame" hidden>
         <div class="tower-panel-header">

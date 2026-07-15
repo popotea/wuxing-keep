@@ -161,6 +161,15 @@ export class GameScene extends Phaser.Scene {
         this.setSelectedTower(this.selectedTowerId === tower.id ? null : tower.id);
         return;
       }
+      // 陷阱/資源建築目前沒有選取面板(v1 先不做賣出/升級),點到就當空白處理,
+      // 但至少不要誤送一個注定失敗的建造指令(那格已經被佔用了)。
+      const occupied =
+        this.pendingState?.traps.some((t) => t.x === x && t.y === y) ||
+        this.pendingState?.resourceBuildings.some((r) => r.x === x && r.y === y);
+      if (occupied) {
+        this.setSelectedTower(null);
+        return;
+      }
       this.setSelectedTower(null);
       this.onTilePlaced?.(x, y);
     });
@@ -223,6 +232,18 @@ export class GameScene extends Phaser.Scene {
       for (const t of this.pendingState.towers) {
         g.fillStyle(ELEMENT_COLORS[t.element], 1);
         g.fillCircle(ox + (t.x + 0.5) * TILE_PX * MINIMAP_SCALE, oy + (t.y + 0.5) * TILE_PX * MINIMAP_SCALE, 2);
+      }
+      g.fillStyle(0x8a8a8a, 1);
+      for (const trap of this.pendingState.traps) {
+        g.fillCircle(ox + (trap.x + 0.5) * TILE_PX * MINIMAP_SCALE, oy + (trap.y + 0.5) * TILE_PX * MINIMAP_SCALE, 1.5);
+      }
+      g.fillStyle(0xd4af37, 1);
+      for (const building of this.pendingState.resourceBuildings) {
+        g.fillCircle(
+          ox + (building.x + 0.5) * TILE_PX * MINIMAP_SCALE,
+          oy + (building.y + 0.5) * TILE_PX * MINIMAP_SCALE,
+          2,
+        );
       }
       for (const m of this.pendingState.monsters) {
         const { xFp, yFp } = worldPositionFp(m.pos);
@@ -591,6 +612,10 @@ export class GameScene extends Phaser.Scene {
     }
     this.pruneStaleSprites(this.towerSprites, liveTowerIds);
 
+    // 陷阱/資源建築目前還沒有正式美術,先畫簡單佔位圖形(跟塔/怪物當初上正式美術前一樣的做法)。
+    for (const trap of state.traps) this.drawTrap(g, trap.x, trap.y);
+    for (const building of state.resourceBuildings) this.drawResourceBuilding(g, building.x, building.y);
+
     if (this.selectedTowerId !== null) {
       const selected = state.towers.find((t) => t.id === this.selectedTowerId);
       if (selected) {
@@ -700,6 +725,35 @@ export class GameScene extends Phaser.Scene {
     g.fillRect(px - barW / 2, py - 12 * SCALE * bossMul, barW, barH);
     g.fillStyle(barColor, 1);
     g.fillRect(px - barW / 2, py - 12 * SCALE * bossMul, barW * ratio, barH);
+  }
+
+  /** 陷阱目前沒有正式美術,先畫一排小尖刺(壓力板/地刺的感覺),蓋在路徑格材質上面。 */
+  private drawTrap(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number): void {
+    const cx = gridX * TILE_PX + TILE_PX / 2;
+    const cy = gridY * TILE_PX + TILE_PX / 2;
+    g.fillStyle(0x000000, 0.25);
+    g.fillEllipse(cx, cy + 4 * SCALE, 24 * SCALE, 8 * SCALE);
+    g.fillStyle(0x8a8a8a, 1);
+    for (let i = -1; i <= 1; i++) {
+      const spikeX = cx + i * 8 * SCALE;
+      g.fillTriangle(spikeX - 4 * SCALE, cy + 6 * SCALE, spikeX, cy - 8 * SCALE, spikeX + 4 * SCALE, cy + 6 * SCALE);
+    }
+    g.lineStyle(1 * SCALE, 0x000000, 0.4);
+    g.strokeCircle(cx, cy, 15 * SCALE);
+  }
+
+  /** 資源建築目前沒有正式美術,先畫一個金色屋頂的小房子造型。 */
+  private drawResourceBuilding(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number): void {
+    const cx = gridX * TILE_PX + TILE_PX / 2;
+    const cy = gridY * TILE_PX + TILE_PX / 2;
+    g.fillStyle(0x000000, 0.25);
+    g.fillEllipse(cx, cy + 9 * SCALE, 22 * SCALE, 6 * SCALE);
+    g.fillStyle(0x3a6b4a, 1);
+    g.fillRect(cx - 9 * SCALE, cy - 2 * SCALE, 18 * SCALE, 10 * SCALE);
+    g.fillStyle(0xd4af37, 1);
+    g.fillTriangle(cx - 11 * SCALE, cy - 2 * SCALE, cx, cy - 14 * SCALE, cx + 11 * SCALE, cy - 2 * SCALE);
+    g.lineStyle(1 * SCALE, 0x000000, 0.35);
+    g.strokeTriangle(cx - 11 * SCALE, cy - 2 * SCALE, cx, cy - 14 * SCALE, cx + 11 * SCALE, cy - 2 * SCALE);
   }
 
   /** 底座 + 尖塔的簡易造型,比純色圓形更有辨識度;等級用塔尖上方的一排小點表示。沒有正式美術圖時的備援畫法。 */

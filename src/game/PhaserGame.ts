@@ -11,6 +11,12 @@ export interface GameRenderer {
   setSelectedTower(towerId: number | null): void;
   /** 新對局開始時呼叫:Phaser.Game 整個網頁只建立一次、跨對局重複使用,鏡頭捲動位置不會自己歸零。 */
   resetCamera(): void;
+  /**
+   * #gameCanvas 從 display:none 變成可見時呼叫:Scale.RESIZE 模式平常靠瀏覽器 resize
+   * 事件量測容器尺寸,但 display:none↔可見這種切換不會觸發 resize 事件,不主動叫它
+   * 重新量測的話畫布會卡在建立當下(容器還是 0x0)量到的尺寸。
+   */
+  refreshSize(): void;
   destroy(): void;
 }
 
@@ -42,6 +48,7 @@ export function createGameRenderer(
     renderState: (state) => scene.renderState(state),
     setSelectedTower: (towerId) => scene.setSelectedTower(towerId),
     resetCamera: () => scene.resetCamera(),
+    refreshSize: () => game.scale.refresh(),
     destroy: () => game.destroy(true),
   };
 }

@@ -10,8 +10,9 @@ import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
 import { LOCAL_PLAYER_ID, LocalEngine } from './sim/localEngine';
 import { FP_SCALE } from './sim/map';
 import { activeBonusWaveInfo, currentWaveNumber, ticksUntilNextWave, upcomingWaveDef } from './sim/monsters';
+import { RESOURCE_BUILDING_COST, TRAP_COST } from './sim/placements';
 import { STARTING_LIVES, type SimulationState } from './sim/simulation';
-import { describeTower } from './sim/towers';
+import { describeTower, TOWER_DEFS } from './sim/towers';
 
 const BASE_MATCH_CONFIG = {
   tickRateMs: 50,
@@ -52,6 +53,8 @@ const startBtn = $<HTMLButtonElement>('startBtn');
 const startHintEl = $<HTMLParagraphElement>('startHint');
 const leaveRoomBtn = $<HTMLButtonElement>('leaveRoomBtn');
 const buildBarEl = $<HTMLDivElement>('buildBar');
+const buildCostHintEl = $<HTMLDivElement>('buildCostHint');
+const toastEl = $<HTMLDivElement>('toast');
 const towerPanelEl = $<HTMLDivElement>('towerPanel');
 const towerPanelElementEl = $<HTMLSpanElement>('towerPanelElement');
 const towerPanelOwnerEl = $<HTMLSpanElement>('towerPanelOwner');
@@ -105,12 +108,56 @@ function displayNameFor(playerId: string): string {
   return room?.getRoster().find((p) => p.playerId === playerId)?.name ?? playerId;
 }
 
+/** 建塔列現在不只選屬性,還可以選「陷阱」「資源建築」這兩種非攻擊型放置物。 */
+type BuildMode = Element | 'trap' | 'resource';
+
+function buildModeCost(mode: BuildMode): number {
+  if (mode === 'trap') return TRAP_COST;
+  if (mode === 'resource') return RESOURCE_BUILDING_COST;
+  return TOWER_DEFS[mode].cost;
+}
+
+function buildModeLabel(mode: BuildMode): string {
+  if (mode === 'trap') return '陷阱';
+  if (mode === 'resource') return '資源建築';
+  return `${ELEMENT_NAMES[mode]}塔`;
+}
+
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 短暫浮現的訊息提示(例如金幣不足),淡入後停留一下再淡出,再次呼叫會重新計時。 */
+function showToast(message: string): void {
+  toastEl.textContent = message;
+  toastEl.classList.add('show');
+  if (toastTimer !== null) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+}
+
+/** 建塔列下方的花費提示,金幣不夠時變色——跟著目前選的建造模式 + 自己的金幣即時更新。 */
+function renderBuildCostHint(): void {
+  const mode = currentBuildMode();
+  const cost = buildModeCost(mode);
+  const myGold = latestState?.gold[myPlayerId()] ?? 0;
+  const insufficient = myGold < cost;
+  buildCostHintEl.textContent = `建造${buildModeLabel(mode)}花費:${cost} 金幣${insufficient ? '(金幣不足)' : ''}`;
+  buildCostHintEl.classList.toggle('cost-insufficient', insufficient);
+}
+
 const gameRenderer = createGameRenderer(
   'gameCanvas',
   (x, y) => {
     // GameScene 只有點到「空地」才會呼叫這裡——點到已經有塔的格子是選取,見下面 onTowerSelected。
     if (!matchActive || (!room && !localEngine)) return;
-    submitAction({ kind: 'build_tower', params: { x, y, element: currentBuildElement() } });
+    const mode = currentBuildMode();
+    const cost = buildModeCost(mode);
+    const myGold = latestState?.gold[myPlayerId()] ?? 0;
+    if (myGold < cost) {
+      showToast(`金幣不足!建造${buildModeLabel(mode)}需要 ${cost} 金幣`);
+      return;
+    }
+    if (mode === 'trap') submitAction({ kind: 'build_trap', params: { x, y } });
+    else if (mode === 'resource') submitAction({ kind: 'build_resource_building', params: { x, y } });
+    else submitAction({ kind: 'build_tower', params: { x, y, element: mode } });
   },
   (towerId) => {
     selectedTowerId = towerId;
@@ -172,8 +219,8 @@ towerPanelStrategySelect.addEventListener('change', () => {
   });
 });
 
-// 快捷鍵:1~5 切建塔屬性、Delete/Backspace 賣掉選中的塔、Esc 取消選取。只在對局畫面生效,
-// 且游標在任何輸入框裡(暱稱/房號等)時整個忽略,不然打字會被誤判成快捷鍵。
+// 快捷鍵:數字鍵切建塔列選項(屬性+陷阱+資源建築,最多到 7)、Delete/Backspace 賣掉選中的塔、
+// Esc 取消選取。只在對局畫面生效,且游標在任何輸入框裡(暱稱/房號等)時整個忽略,不然打字會被誤判成快捷鍵。
 window.addEventListener('keydown', (ev) => {
   if (gameScreenEl.hidden) return;
   const activeTag = document.activeElement?.tagName;
@@ -190,10 +237,13 @@ window.addEventListener('keydown', (ev) => {
     return;
   }
   const slot = Number(ev.key);
-  if (Number.isInteger(slot) && slot >= 1 && slot <= 5) {
+  if (Number.isInteger(slot) && slot >= 1 && slot <= 7) {
     const radios = buildBarEl.querySelectorAll<HTMLInputElement>('input[name="element"]');
     const radio = radios[slot - 1];
-    if (radio) radio.checked = true;
+    if (radio) {
+      radio.checked = true;
+      renderBuildCostHint();
+    }
   }
 });
 
@@ -225,7 +275,15 @@ if (roomCodeFromUrl) {
 function showGameScreen(show: boolean): void {
   menuScreenEl.hidden = show;
   gameScreenEl.hidden = !show;
-  if (show) backToMenuBtn.style.display = 'none';
+  // 選單的標題/元素小圓點只在選單畫面才需要,遊戲畫面要滿版顯示,把這塊空間讓出來。
+  document.body.classList.toggle('game-active', show);
+  if (show) {
+    backToMenuBtn.style.display = 'none';
+    // #gameCanvas 從 display:none 切換成可見時不會觸發瀏覽器的 resize 事件,Phaser 的
+    // Scale.RESIZE 模式量不到新的容器尺寸——等這一輪 layout 真的套用後手動叫它重新量測,
+    // 不然畫布會卡在建立當下(容器還是 0x0)量到的舊尺寸,看起來完全沒有變滿版。
+    requestAnimationFrame(() => gameRenderer.refreshSize());
+  }
 }
 
 function setMode(mode: 'solo' | 'multi'): void {
@@ -334,15 +392,15 @@ function selectedDifficulty(container: HTMLElement): number {
   return Number(checked?.value) || 100;
 }
 
-/** 目前建塔列選到的屬性(對局中,建塔列已經被 populateBuildBar 依玩家自己的選擇動態產生過)。 */
-function currentBuildElement(): Element {
+/** 目前建塔列選到的模式(對局中,建塔列已經被 populateBuildBar 依玩家自己的選擇動態產生過)。 */
+function currentBuildMode(): BuildMode {
   const checked = buildBarEl.querySelector<HTMLInputElement>('input[name="element"]:checked');
-  return (checked?.value as Element | undefined) ?? 'metal';
+  return (checked?.value as BuildMode | undefined) ?? 'metal';
 }
 
-/** 對局開始後,建塔列只顯示玩家自己選好的屬性,不是每次都五選一。 */
+/** 對局開始後,建塔列只顯示玩家自己選好的屬性,不是每次都五選一;陷阱/資源建築不分屬性,固定都有。 */
 function populateBuildBar(elements: Element[]): void {
-  buildBarEl.innerHTML = elements
+  const elementButtons = elements
     .map(
       (el, i) => `
         <input type="radio" id="build-${el}" name="element" value="${el}" ${i === 0 ? 'checked' : ''} />
@@ -350,6 +408,17 @@ function populateBuildBar(elements: Element[]): void {
       `,
     )
     .join('');
+  const placementButtons = `
+    <input type="radio" id="build-trap" name="element" value="trap" />
+    <label for="build-trap" class="build-trap">陷阱</label>
+    <input type="radio" id="build-resource" name="element" value="resource" />
+    <label for="build-resource" class="build-resource">資源建築</label>
+  `;
+  buildBarEl.innerHTML = elementButtons + placementButtons;
+  buildBarEl.querySelectorAll<HTMLInputElement>('input[name="element"]').forEach((input) => {
+    input.addEventListener('change', renderBuildCostHint);
+  });
+  renderBuildCostHint();
 }
 
 // 單人/連線都通用的「最佳紀錄」——存在這台瀏覽器的 localStorage,跟房間/連線無關。
@@ -558,6 +627,7 @@ const lockstepHandlers: LockstepHandlers = {
     tickEl.textContent = String(state.tick);
     checksumEl.textContent = state.checksum;
     goldEl.textContent = String(state.gold[myPlayerId()] ?? 0);
+    renderBuildCostHint();
     livesEl.textContent = String(state.lives);
     renderLivesBar(state.lives);
     renderWaveHud(state.tick);

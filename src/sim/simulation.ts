@@ -6,7 +6,7 @@
 
 import type { Action, PlayerId, TimedCommand } from '../net/protocol';
 import { isElement, type Element } from './elements';
-import { advanceAlongPath, inBounds, isOnPath } from './map';
+import { advanceAlongPath, FP_SCALE, inBounds, isOnPath, worldPositionFp } from './map';
 import {
   createMonster,
   getSpawnEventsForTick,
@@ -17,6 +17,15 @@ import {
   type Monster,
   type SpawnEvent,
 } from './monsters';
+import {
+  RESOURCE_BUILDING_COST,
+  RESOURCE_BUILDING_INCOME,
+  RESOURCE_BUILDING_INTERVAL_TICKS,
+  TRAP_COST,
+  TRAP_SLOW_PERCENT,
+  type ResourceBuilding,
+  type Trap,
+} from './placements';
 import {
   sellValue,
   TARGET_STRATEGIES,
@@ -36,8 +45,13 @@ export interface SimulationState {
   lives: number;
   towers: Tower[];
   monsters: Monster[];
+  /** 非攻擊型放置物:陷阱只能蓋在路徑格,踩到會減速;資源建築規則跟塔一樣蓋在非路徑格,定期給 owner 被動金幣。 */
+  traps: Trap[];
+  resourceBuildings: ResourceBuilding[];
   nextTowerId: number;
   nextMonsterId: number;
+  nextTrapId: number;
+  nextResourceBuildingId: number;
   gameOver: boolean;
   victory: boolean;
   /** 第 i 波的加碼獎勵是否已經判定過(不管有沒有趕上時限),避免重複發放 */
@@ -80,8 +94,12 @@ export function createInitialState(
     lives: STARTING_LIVES,
     towers: [],
     monsters: [],
+    traps: [],
+    resourceBuildings: [],
     nextTowerId: 1,
     nextMonsterId: 1,
+    nextTrapId: 1,
+    nextResourceBuildingId: 1,
     gameOver: false,
     victory: false,
     bonusAwarded: WAVES.map(() => false),
@@ -122,8 +140,17 @@ function cloneState(state: SimulationState): SimulationState {
     gold: { ...state.gold },
     towers: state.towers.map((t) => ({ ...t })),
     monsters: state.monsters.map((m) => ({ ...m, pos: { ...m.pos } })),
+    traps: state.traps.map((t) => ({ ...t })),
+    resourceBuildings: state.resourceBuildings.map((r) => ({ ...r })),
     bonusAwarded: [...state.bonusAwarded],
   };
+}
+
+/** 塔/資源建築都只能蓋在非路徑格,而且彼此不能疊在同一格上。 */
+function isBuildableTileFree(state: SimulationState, x: number, y: number): boolean {
+  if (state.towers.some((t) => t.x === x && t.y === y)) return false;
+  if (state.resourceBuildings.some((r) => r.x === x && r.y === y)) return false;
+  return true;
 }
 
 // 朋友間連線,採信任制:不合法的操作(格子被佔用、錢不夠、id 不存在)一律安全地當no-op,
@@ -134,7 +161,7 @@ function applyBuildTower(state: SimulationState, playerId: PlayerId, action: Act
   const element = action.params.element;
   if (x === null || y === null || !isElement(element)) return;
   if (!inBounds(x, y) || isOnPath(x, y)) return;
-  if (state.towers.some((t) => t.x === x && t.y === y)) return;
+  if (!isBuildableTileFree(state, x, y)) return;
   const allowed = state.playerElements[playerId];
   if (allowed && !allowed.includes(element)) return; // 不是這個玩家選好的屬性,安全忽略
   const def = TOWER_DEFS[element as Element];
@@ -189,11 +216,45 @@ function applySetTargetStrategy(state: SimulationState, action: Action): void {
   tower.targetStrategy = strategy as TargetStrategy;
 }
 
+/** 陷阱只能蓋在路徑格(跟塔相反),踩到的怪物會被減速,見 step() 裡的移動計算。 */
+function applyBuildTrap(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const x = asFiniteInt(action.params.x);
+  const y = asFiniteInt(action.params.y);
+  if (x === null || y === null) return;
+  if (!inBounds(x, y) || !isOnPath(x, y)) return;
+  if (state.traps.some((t) => t.x === x && t.y === y)) return;
+  const gold = state.gold[playerId] ?? 0;
+  if (gold < TRAP_COST) return;
+  state.gold[playerId] = gold - TRAP_COST;
+  state.traps.push({ id: state.nextTrapId++, x, y, ownerId: playerId });
+}
+
+/** 資源建築規則跟塔一樣蓋在非路徑格,定期(見 step())只給建造者自己被動金幣,不是全員均分。 */
+function applyBuildResourceBuilding(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const x = asFiniteInt(action.params.x);
+  const y = asFiniteInt(action.params.y);
+  if (x === null || y === null) return;
+  if (!inBounds(x, y) || isOnPath(x, y)) return;
+  if (!isBuildableTileFree(state, x, y)) return;
+  const gold = state.gold[playerId] ?? 0;
+  if (gold < RESOURCE_BUILDING_COST) return;
+  state.gold[playerId] = gold - RESOURCE_BUILDING_COST;
+  state.resourceBuildings.push({
+    id: state.nextResourceBuildingId++,
+    x,
+    y,
+    ownerId: playerId,
+    ticksSinceLastIncome: 0,
+  });
+}
+
 function applyCommand(state: SimulationState, playerId: PlayerId, action: Action): void {
   if (action.kind === 'build_tower') applyBuildTower(state, playerId, action);
   else if (action.kind === 'sell_tower') applySellTower(state, playerId, action);
   else if (action.kind === 'upgrade_tower') applyUpgradeTower(state, playerId, action);
   else if (action.kind === 'set_target_strategy') applySetTargetStrategy(state, action);
+  else if (action.kind === 'build_trap') applyBuildTrap(state, playerId, action);
+  else if (action.kind === 'build_resource_building') applyBuildResourceBuilding(state, playerId, action);
   // 其他/未知 kind 一律安全忽略
 }
 
@@ -217,8 +278,14 @@ function computeChecksum(state: SimulationState): string {
   const monsterPart = state.monsters
     .map((m) => `${m.id}:${m.hp}:${m.pos.pathId}:${m.pos.segmentIndex}:${m.pos.distanceIntoSegmentFp}`)
     .join(';');
+  const trapPart = state.traps.map((t) => `${t.id}:${t.x}:${t.y}`).join(';');
+  const resourceBuildingPart = state.resourceBuildings
+    .map((r) => `${r.id}:${r.x}:${r.y}:${r.ticksSinceLastIncome}`)
+    .join(';');
   const bonusPart = state.bonusAwarded.map((b) => (b ? '1' : '0')).join('');
-  return simpleHash(`${state.tick}|${goldPart}|${state.lives}|${towerPart}|${monsterPart}|${bonusPart}`);
+  return simpleHash(
+    `${state.tick}|${goldPart}|${state.lives}|${towerPart}|${monsterPart}|${trapPart}|${resourceBuildingPart}|${bonusPart}`,
+  );
 }
 
 /** 加碼波判定:限時內把整波怪物清光,發放額外金幣;不管有沒有趕上時限,都只判定一次。 */
@@ -266,10 +333,14 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
     next.monsters.push(createMonster(next.nextMonsterId++, scaled));
   }
 
-  // 怪物移動,漏怪扣生命
+  // 怪物移動,漏怪扣生命——站在陷阱格上的怪物這個 tick 的移動速度打折扣。
+  const trapTiles = new Set(next.traps.map((t) => `${t.x},${t.y}`));
   const survivors: Monster[] = [];
   for (const m of next.monsters) {
-    const { pos, leaked } = advanceAlongPath(m.pos, m.speedFp);
+    const { xFp, yFp } = worldPositionFp(m.pos);
+    const onTrap = trapTiles.has(`${Math.floor(xFp / FP_SCALE)},${Math.floor(yFp / FP_SCALE)}`);
+    const speedFp = onTrap ? Math.floor((m.speedFp * (100 - TRAP_SLOW_PERCENT)) / 100) : m.speedFp;
+    const { pos, leaked } = advanceAlongPath(m.pos, speedFp);
     if (leaked) {
       next.lives -= 1;
       continue;
@@ -288,6 +359,15 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   // 擊殺賞金:不追蹤是誰的塔打死的(多座塔常常一起打中同一隻),每個現存玩家都各自拿全額。
   for (const m of dead) grantGoldToAllPlayers(next, m.bounty);
   next.monsters = next.monsters.filter((m) => m.hp > 0);
+
+  // 資源建築定期產生被動金幣,只給建造者自己(不是全員均分,這是個人投資報酬)。
+  for (const building of next.resourceBuildings) {
+    building.ticksSinceLastIncome += 1;
+    if (building.ticksSinceLastIncome >= RESOURCE_BUILDING_INTERVAL_TICKS) {
+      building.ticksSinceLastIncome = 0;
+      next.gold[building.ownerId] = (next.gold[building.ownerId] ?? 0) + RESOURCE_BUILDING_INCOME;
+    }
+  }
 
   applyBonusWaveRewards(next, tick);
 
