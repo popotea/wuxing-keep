@@ -67,7 +67,7 @@ export const WAVES: readonly WaveDef[] = [
   { element: 'metal', count: 10, hp: 110, speedFp: 60, bounty: 18, moveType: 'air' },
   { element: 'fire', count: 12, hp: 130, speedFp: 70, bounty: 22 },
   // 最終首領波:單隻厚血慢速的收尾挑戰,賞金給得比較多當作全破獎勵的一部分。
-  { element: 'earth', count: 1, hp: 1200, speedFp: 45, bounty: 150, isBoss: true },
+  { element: 'earth', count: 1, hp: 1200, speedFp: 35, bounty: 150, isBoss: true },
 ];
 
 export function totalWaveTicks(): number {

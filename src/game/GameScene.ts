@@ -128,6 +128,9 @@ export class GameScene extends Phaser.Scene {
   private monsterSprites = new Map<number, Phaser.GameObjects.Image>();
   /** 塔上方「Lv.N」文字,不管有沒有正式美術圖都會顯示(文字沒辦法用 Graphics 畫,Graphics 只能畫幾何圖形)。 */
   private towerLevelTexts = new Map<number, Phaser.GameObjects.Text>();
+  /** 陷阱上方「Lv.N」文字,獨立一個 Map——塔跟陷阱的 id 是各自獨立的計數器,兩邊都從 1 開始編號,
+   * 共用同一個 Map 依 id 存取的話會撞號互相覆蓋/誤刪。 */
+  private trapLevelTexts = new Map<number, Phaser.GameObjects.Text>();
   private pendingState: SimulationState | null = null;
   private hoverX: number | null = null;
   private hoverY: number | null = null;
@@ -764,9 +767,12 @@ export class GameScene extends Phaser.Scene {
     this.pruneStaleSprites(this.towerLevelTexts, liveTowerIds);
 
     // 陷阱/資源建築目前還沒有正式美術,先畫簡單佔位圖形(跟塔/怪物當初上正式美術前一樣的做法)。
+    const liveTrapIds = new Set<number>();
     for (const trap of state.traps) {
-      this.drawTrap(g, trap.x, trap.y, multiplayer ? ownerColorHex(state, trap.ownerId) : null);
+      liveTrapIds.add(trap.id);
+      this.drawTrap(g, trap.id, trap.x, trap.y, trap.level, multiplayer ? ownerColorHex(state, trap.ownerId) : null);
     }
+    this.pruneStaleSprites(this.trapLevelTexts, liveTrapIds);
     for (const building of state.resourceBuildings) {
       this.drawResourceBuilding(g, building.x, building.y, multiplayer ? ownerColorHex(state, building.ownerId) : null);
     }
@@ -841,7 +847,7 @@ export class GameScene extends Phaser.Scene {
     }
     sprite.setTexture(key).setPosition(cx, cy).setDisplaySize(displaySize, displaySize);
     this.drawOwnerMark(g, cx, cy, ownerMark);
-    this.drawTowerLevelLabel(t.id, cx, cy, t.level);
+    this.drawLevelLabel(this.towerLevelTexts, t.id, cx, cy, t.level);
   }
 
   /** 多人模式下在建築底部畫一圈識別色橢圓,一眼看出這是誰蓋的;單人模式/顏色為 null 時不畫。 */
@@ -852,13 +858,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * 塔正上方的「Lv.N」文字,取代原本純點狀的等級指示——文字比數點數直接好讀,尤其升到
-   * 高等級之後一排點也不好一眼數清楚。文字沒辦法用 Graphics 畫(Graphics 只能畫幾何圖形),
-   * 所以用 Phaser.GameObjects.Text,依 id 建立/更新/銷毀,跟 towerSprites 走同一套模式。
+   * 正上方的「Lv.N」文字,塔/陷阱共用同一套畫法,取代原本塔身上純點狀的等級指示——文字比
+   * 數點數直接好讀,尤其升到高等級之後一排點也不好一眼數清楚。文字沒辦法用 Graphics 畫
+   * (Graphics 只能畫幾何圖形),所以用 Phaser.GameObjects.Text,依 id 建立/更新/銷毀,
+   * 跟 towerSprites 走同一套模式。store 由呼叫端傳入(塔跟陷阱的 id 是各自獨立的計數器,
+   * 不能共用同一個 Map,否則會撞號)。
    */
-  private drawTowerLevelLabel(id: number, cx: number, cy: number, level: number): void {
+  private drawLevelLabel(store: Map<number, Phaser.GameObjects.Text>, id: number, cx: number, cy: number, level: number): void {
     const y = cy - TILE_PX / 2 - 4 * SCALE;
-    let label = this.towerLevelTexts.get(id);
+    let label = store.get(id);
     if (!label) {
       label = this.add
         .text(cx, y, '', {
@@ -870,7 +878,7 @@ export class GameScene extends Phaser.Scene {
         })
         .setOrigin(0.5, 1)
         .setDepth(2);
-      this.towerLevelTexts.set(id, label);
+      store.set(id, label);
     }
     label.setPosition(cx, y).setText(`Lv.${level}`);
   }
@@ -928,8 +936,8 @@ export class GameScene extends Phaser.Scene {
     g.fillRect(px - barW / 2, py - 12 * SCALE * bossMul, barW * ratio, barH);
   }
 
-  /** 陷阱目前沒有正式美術,先畫一排小尖刺(壓力板/地刺的感覺),蓋在路徑格材質上面。 */
-  private drawTrap(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number, ownerMark: number | null): void {
+  /** 陷阱目前沒有正式美術,先畫一排小尖刺(壓力板/地刺的感覺),蓋在路徑格材質上面。等級可升級(見 placements.ts),正上方顯示「Lv.N」。 */
+  private drawTrap(g: Phaser.GameObjects.Graphics, id: number, gridX: number, gridY: number, level: number, ownerMark: number | null): void {
     const cx = gridX * TILE_PX + TILE_PX / 2;
     const cy = gridY * TILE_PX + TILE_PX / 2;
     g.fillStyle(0x000000, 0.25);
@@ -942,6 +950,7 @@ export class GameScene extends Phaser.Scene {
     g.lineStyle(1 * SCALE, 0x000000, 0.4);
     g.strokeCircle(cx, cy, 15 * SCALE);
     this.drawOwnerMark(g, cx, cy + 4 * SCALE, ownerMark);
+    this.drawLevelLabel(this.trapLevelTexts, id, cx, cy, level);
   }
 
   /** 資源建築目前沒有正式美術,先畫一個金色屋頂的小房子造型。 */
@@ -995,7 +1004,7 @@ export class GameScene extends Phaser.Scene {
     g.lineBetween(cx, cy - 12 * SCALE, cx - 10 * SCALE, cy + 6 * SCALE);
 
     this.drawOwnerMark(g, cx, cy, ownerMark);
-    this.drawTowerLevelLabel(id, cx, cy, level);
+    this.drawLevelLabel(this.towerLevelTexts, id, cx, cy, level);
   }
 
   /** 圓身 + 小眼睛 + 頭上血條。首領怪(isBoss)整隻放大 1.8 倍再加一圈金框。沒有正式美術圖時的備援畫法。 */

@@ -22,7 +22,8 @@ import {
   RESOURCE_BUILDING_INCOME,
   RESOURCE_BUILDING_INTERVAL_TICKS,
   TRAP_COST,
-  TRAP_SLOW_PERCENT,
+  TRAP_SLOW_PERCENT_BY_LEVEL,
+  trapUpgradeCost,
   type ResourceBuilding,
   type Trap,
 } from './placements';
@@ -259,7 +260,20 @@ function applyBuildTrap(state: SimulationState, playerId: PlayerId, action: Acti
   const gold = state.gold[playerId] ?? 0;
   if (gold < TRAP_COST) return;
   state.gold[playerId] = gold - TRAP_COST;
-  state.traps.push({ id: state.nextTrapId++, x, y, ownerId: playerId });
+  state.traps.push({ id: state.nextTrapId++, x, y, ownerId: playerId, level: 1 });
+}
+
+/** 陷阱升級不分誰蓋的,誰都能出錢升級(跟塔升級同一套慣例),只加強減速幅度,已封頂安全忽略。 */
+function applyUpgradeTrap(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const trapId = asFiniteInt(action.params.trapId);
+  if (trapId === null) return;
+  const trap = state.traps.find((t) => t.id === trapId);
+  if (!trap) return;
+  const cost = trapUpgradeCost(trap);
+  const gold = state.gold[playerId] ?? 0;
+  if (cost === null || gold < cost) return;
+  state.gold[playerId] = gold - cost;
+  trap.level += 1;
 }
 
 /** 資源建築規則跟塔一樣蓋在非路徑格,定期(見 step())只給建造者自己被動金幣,不是全員均分。 */
@@ -287,6 +301,7 @@ function applyCommand(state: SimulationState, playerId: PlayerId, action: Action
   else if (action.kind === 'upgrade_tower') applyUpgradeTower(state, playerId, action);
   else if (action.kind === 'set_target_strategy') applySetTargetStrategy(state, action);
   else if (action.kind === 'build_trap') applyBuildTrap(state, playerId, action);
+  else if (action.kind === 'upgrade_trap') applyUpgradeTrap(state, playerId, action);
   else if (action.kind === 'build_resource_building') applyBuildResourceBuilding(state, playerId, action);
   // 其他/未知 kind 一律安全忽略
 }
@@ -311,7 +326,7 @@ function computeChecksum(state: SimulationState): string {
   const monsterPart = state.monsters
     .map((m) => `${m.id}:${m.hp}:${m.pos.pathId}:${m.pos.segmentIndex}:${m.pos.distanceIntoSegmentFp}`)
     .join(';');
-  const trapPart = state.traps.map((t) => `${t.id}:${t.x}:${t.y}`).join(';');
+  const trapPart = state.traps.map((t) => `${t.id}:${t.x}:${t.y}:${t.level}`).join(';');
   const resourceBuildingPart = state.resourceBuildings
     .map((r) => `${r.id}:${r.x}:${r.y}:${r.ticksSinceLastIncome}`)
     .join(';');
@@ -370,13 +385,15 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
     next.monsters.push(createMonster(next.nextMonsterId++, scaled));
   }
 
-  // 怪物移動,漏怪扣生命——站在陷阱格上的怪物這個 tick 的移動速度打折扣(飛行怪飛在空中,陷阱打不到)。
-  const trapTiles = new Set(next.traps.map((t) => `${t.x},${t.y}`));
+  // 怪物移動,漏怪扣生命——站在陷阱格上的怪物這個 tick 的移動速度打折扣(飛行怪飛在空中,陷阱打不到),
+  // 折扣幅度依陷阱等級查表(TRAP_SLOW_PERCENT_BY_LEVEL),陷阱格用 Map 存等級,不是只存在不在。
+  const trapLevelByTile = new Map(next.traps.map((t) => [`${t.x},${t.y}`, t.level]));
   const survivors: Monster[] = [];
   for (const m of next.monsters) {
     const { xFp, yFp } = worldPositionFp(m.pos);
-    const onTrap = m.moveType !== 'air' && trapTiles.has(`${Math.floor(xFp / FP_SCALE)},${Math.floor(yFp / FP_SCALE)}`);
-    const speedFp = onTrap ? Math.floor((m.speedFp * (100 - TRAP_SLOW_PERCENT)) / 100) : m.speedFp;
+    const trapLevel = m.moveType === 'air' ? undefined : trapLevelByTile.get(`${Math.floor(xFp / FP_SCALE)},${Math.floor(yFp / FP_SCALE)}`);
+    const slowPercent = trapLevel !== undefined ? (TRAP_SLOW_PERCENT_BY_LEVEL[trapLevel] ?? 0) : 0;
+    const speedFp = slowPercent > 0 ? Math.floor((m.speedFp * (100 - slowPercent)) / 100) : m.speedFp;
     const { pos, leaked } = advanceAlongPath(m.pos, speedFp);
     if (leaked) {
       next.lives -= 1;

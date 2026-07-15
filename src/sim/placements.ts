@@ -9,11 +9,23 @@ export interface Trap {
   x: number;
   y: number;
   ownerId: PlayerId;
+  /** 陷阱等級,新蓋是 1,封頂 MAX_TRAP_LEVEL——只加強減速幅度,不像塔有分岐路線,故意保持單純。 */
+  level: number;
 }
 
 export const TRAP_COST = 30;
-/** 怪物只要站在陷阱格上,這個 tick 的移動速度打這個折扣(百分比)。持續生效,不是只觸發一次就消失。 */
-export const TRAP_SLOW_PERCENT = 50;
+export const MAX_TRAP_LEVEL = 3;
+/**
+ * 怪物只要站在陷阱格上,這個 tick 的移動速度打這個折扣(百分比,依陷阱等級查表)。持續生效,
+ * 不是只觸發一次就消失(v1 刻意不做「用幾次就壞掉」,升級只影響減速幅度)。
+ */
+export const TRAP_SLOW_PERCENT_BY_LEVEL: Record<number, number> = { 1: 50, 2: 65, 3: 80 };
+
+/** 陷阱升級花費,跟塔的升級公式(cost * level)同一套慣例;已經封頂回傳 null。 */
+export function trapUpgradeCost(trap: Trap): number | null {
+  if (trap.level >= MAX_TRAP_LEVEL) return null;
+  return TRAP_COST * trap.level;
+}
 
 export interface ResourceBuilding {
   id: number;

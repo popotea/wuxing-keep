@@ -11,7 +11,7 @@ import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
 import { LOCAL_PLAYER_ID, LocalEngine } from './sim/localEngine';
 import { FP_SCALE, isOnPath } from './sim/map';
 import { activeBonusWaveInfo, currentWaveNumber, ticksUntilNextWave, upcomingWaveDef } from './sim/monsters';
-import { RESOURCE_BUILDING_COST, TRAP_COST } from './sim/placements';
+import { RESOURCE_BUILDING_COST, TRAP_COST, TRAP_SLOW_PERCENT_BY_LEVEL, trapUpgradeCost } from './sim/placements';
 import { STARTING_LIVES, type SimulationState } from './sim/simulation';
 import {
   describeTower,
@@ -289,17 +289,38 @@ const gameRenderer = createGameRenderer(
     // 跳建造選單,不然玩家搞不清楚「這格不能蓋」到底是裝飾物(純視覺不影響蓋塔)擋住了,
     // 還是這格真的已經有陷阱/資源建築。
     if (!matchActive || (!room && !localEngine)) return;
-    const occupiedByTrap = latestState?.traps.some((t) => t.x === x && t.y === y);
+    const myGold = latestState?.gold[myPlayerId()] ?? 0;
+    const existingTrap = latestState?.traps.find((t) => t.x === x && t.y === y);
     const occupiedByResource = latestState?.resourceBuildings.some((r) => r.x === x && r.y === y);
-    if (occupiedByTrap) {
-      showToast('這格已經有陷阱了');
+    // 已經有陷阱的格子改成跳「升級陷阱」選單(不分誰蓋的,誰都能出錢升級,跟塔升級同一套慣例),
+    // 只有真的封頂了才單純跳提示,不會讓玩家搞不清楚這格到底能不能再做點什麼。
+    if (existingTrap) {
+      const cost = trapUpgradeCost(existingTrap);
+      if (cost === null) {
+        showToast('陷阱已經滿級了');
+        return;
+      }
+      const nextLevel = existingTrap.level + 1;
+      showFloatingBuildMenu(screenX, screenY, [
+        {
+          label: `升級陷阱(Lv.${existingTrap.level} → ${nextLevel})`,
+          sublabel: `${cost} 金幣 · 減速 ${TRAP_SLOW_PERCENT_BY_LEVEL[existingTrap.level]}% → ${TRAP_SLOW_PERCENT_BY_LEVEL[nextLevel]}%`,
+          disabled: myGold < cost,
+          onChoose: () => {
+            if ((latestState?.gold[myPlayerId()] ?? 0) < cost) {
+              showToast(`金幣不足!升級陷阱需要 ${cost} 金幣`);
+              return;
+            }
+            submitAction({ kind: 'upgrade_trap', params: { trapId: existingTrap.id } });
+          },
+        },
+      ]);
       return;
     }
     if (occupiedByResource) {
       showToast('這格已經有資源建築了');
       return;
     }
-    const myGold = latestState?.gold[myPlayerId()] ?? 0;
     const options: ChoiceOption[] = [];
 
     if (isOnPath(x, y)) {
