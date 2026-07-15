@@ -27,6 +27,8 @@
 
 `src/game/GameScene.ts` 的 `preload()` 載入 `public/assets/towers/<element>.png`、`public/assets/monsters/<element>.png`(5 種元素各 1 張)、`public/assets/tiles/floor.png`、`public/assets/tiles/path.png`——`renderTower()`/`renderMonster()` 用 `this.textures.exists()` 判斷載入成功沒,**有圖就用 `Image` 顯示,沒圖或載入失敗就退回原本的 Phaser Graphics 幾何圖形畫法**(塔=底座+尖塔、怪物=圓身+眼睛,留著當保險),不會整格空白。地板/路徑材質則是用 `Phaser.GameObjects.TileSprite` 整片鋪滿(材質已經做過 seamless tiling 後處理,重複貼不會有格線接縫),路徑材質再疊一層只蓋路徑格形狀的 `GeometryMask` 裁掉非路徑部分;同樣沒圖就退回原本的純色棋盤格/純色填滿畫法。
 
+**`preload()` 裡所有素材路徑務必用相對路徑(`assets/...`),不要加開頭的 `/`**——這個專案部署到 GitHub Pages 的專案子路徑(`https://popotea.github.io/wuxing-keep/`),絕對路徑 `/assets/...` 會從網域根目錄解析,變成 404(`https://popotea.github.io/assets/...`,少了 `/wuxing-keep/`)。這個 bug 在本地 `npm run dev` 完全測不出來,因為 dev server 是從根目錄服務,`/assets/...` 剛好也對。2026-07-15 修過一次(6 處都在 `preload()`),之後新增素材載入程式碼要記得延續這個慣例。
+
 **美術風格是 Q 版可愛(參考 Kingdom Rush 系列),不是魔獸爭霸暗黑奇幻**(2026-07-15 定案,舊版本的暗黑奇幻風格圖已經整批換掉)——使用者提供了「其他遊戲UI參考/」資料夾裡蒐集的多款塔防截圖當參考,共同調性是圓潤厚實的卡通造型、粗描邊、飽和暖色調、討喜不嚇人。
 
 這批圖是用兩支獨立腳本產的,不是透過下面「怎麼用」的 AI Hub 手動流程:
