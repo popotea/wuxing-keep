@@ -135,6 +135,13 @@ export class GameScene extends Phaser.Scene {
     // 世界(地圖)比畫布視窗大很多,鏡頭預設從左上角開始,靠邊緣平移才看得到其他區域。
     this.cameras.main.setBounds(0, 0, GRID_WIDTH * TILE_PX, GRID_HEIGHT * TILE_PX);
 
+    // PhaserGame.ts 用 Scale.RESIZE,畫布會跟著 #gameCanvas 的實際版面尺寸動態變動
+    // (例如視窗縮放、或 CSS 版面調整撐滿可視空間)——鏡頭的可視範圍(viewport)要跟著更新,
+    // 不然畫布變大了但鏡頭還是舊尺寸,會出現只畫在左上角一小塊、其餘留白的狀況。
+    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+      this.cameras.main.setViewport(0, 0, gameSize.width, gameSize.height);
+    });
+
     this.input.on('gameover', () => {
       this.pointerInsideCanvas = true;
     });
@@ -348,17 +355,18 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // 路徑材質同樣整片鋪滿,再用只蓋路徑格形狀的遮罩裁掉非路徑的部分——
-    // 這樣路徑材質不用真的切成一格一格貼,鋪滿+裁形狀比較簡單。
+    // 路徑格各自貼一張材質圖(不是整片 TileSprite 疊 GeometryMask)——mask 每影格都要重新
+    // 運算合成,路徑格一多(百來格)會拖影格率,滑鼠移動時邊緣平移/預覽格跟著卡頓。
+    // 材質已經做過 seamless tiling,同一張圖照格子排就會自然接起來,靜態貼一次完全不用 mask。
     if (this.textures.exists(TILE_PATH_KEY)) {
-      const pathSprite = this.add.tileSprite(0, 0, mapWidthPx, mapHeightPx, TILE_PATH_KEY).setOrigin(0, 0);
-      const maskShape = this.make.graphics({}).fillStyle(0xffffff, 1);
       for (let x = 0; x < GRID_WIDTH; x++) {
         for (let y = 0; y < GRID_HEIGHT; y++) {
-          if (isOnPath(x, y)) maskShape.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+          if (!isOnPath(x, y)) continue;
+          this.add
+            .image(x * TILE_PX + TILE_PX / 2, y * TILE_PX + TILE_PX / 2, TILE_PATH_KEY)
+            .setDisplaySize(TILE_PX, TILE_PX);
         }
       }
-      pathSprite.setMask(maskShape.createGeometryMask());
     } else {
       // 路徑整格塗滿(不是只畫一條細線穿過格子中心)——這樣「這格到底算不算路徑」
       // 一眼就看得出來,不會再跟格線混在一起分不清楚可不可以蓋。

@@ -25,10 +25,15 @@ export function createGameRenderer(
 
   const game = new Phaser.Game({
     type: Phaser.AUTO,
-    parent: parentId,
-    // 畫布維持原本的可視大小(視窗),地圖(世界)本身比這個大很多,超出的部分靠 GameScene 的邊緣平移看到。
-    width: VIEWPORT_TILES_W * TILE_PX,
-    height: VIEWPORT_TILES_H * TILE_PX,
+    // RESIZE 模式:畫布跟著 parent(#gameCanvas,CSS 撐滿版面)的實際尺寸動態調整,
+    // 不是寫死的固定視窗——地圖(世界)本身還是比畫布大,超出的部分一樣靠邊緣平移看到,
+    // 畫布變大只是一次能看到更多地圖、操作區域更寬敞。
+    scale: {
+      mode: Phaser.Scale.RESIZE,
+      parent: parentId,
+      width: VIEWPORT_TILES_W * TILE_PX,
+      height: VIEWPORT_TILES_H * TILE_PX,
+    },
     backgroundColor: '#1e1e1e',
     scene,
   });

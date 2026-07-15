@@ -238,7 +238,15 @@
       /* ---- 遊戲畫面 ---- */
       /* #gameScreen 的 display:flex 是 ID 選擇器,權重比瀏覽器內建的 [hidden]{display:none} 高,
          沒有這條 [hidden] 規則的話 hidden 屬性會被蓋掉、遊戲畫面永遠跟選單同時顯示。 */
-      #gameScreen { display: flex; flex-direction: column; align-items: center; gap: 10px; animation: fade-in-up 0.3s ease-out; }
+      #gameScreen {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        height: calc(100vh - 32px); /* 扣掉 body 上下各 16px padding,撐滿可視高度 */
+        animation: fade-in-up 0.3s ease-out;
+      }
       #gameScreen[hidden] { display: none; }
       #hud {
         display: flex;
@@ -269,6 +277,11 @@
         overflow: hidden;
         line-height: 0;
         box-shadow: var(--shadow-soft);
+        /* 滿版:寬度用滿、高度吃掉 #gameScreen 這個 flex column 裡除了 HUD/建塔列/塔面板以外
+           的剩餘空間。PhaserGame.ts 用 Scale.RESIZE,畫布會自動跟著這個容器的實際尺寸調整。 */
+        width: 100%;
+        flex: 1 1 auto;
+        min-height: 0;
       }
       #resultBanner { font-size: 22px; font-weight: bold; min-height: 1.4em; }
       #resultBanner.result-victory {
