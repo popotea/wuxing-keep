@@ -114,8 +114,47 @@
       label.element-water { color: var(--water); }
       label.element-fire { color: var(--fire); }
       label.element-earth { color: var(--earth); }
+      label.build-tower { color: var(--text); }
       label.build-trap { color: var(--muted); }
       label.build-resource { color: var(--accent); }
+
+      /* ---- 選擇彈窗:隨機英雄選擇(蓋塔)、升級選路線都共用 ---- */
+      .choice-modal-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 30;
+        align-items: center;
+        justify-content: center;
+      }
+      .choice-modal-overlay.show { display: flex; }
+      .choice-modal-panel { padding: 24px 28px; text-align: center; min-width: 320px; max-width: 90vw; }
+      .choice-modal-panel h3 { margin: 0 0 14px; }
+      .choice-modal-panel .choice-row { margin-bottom: 14px; flex-wrap: wrap; }
+      .choice-modal-panel button.choice-option {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 110px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 16px;
+        background: var(--panel-2);
+        color: inherit;
+        font-weight: bold;
+        cursor: pointer;
+        transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+      }
+      .choice-modal-panel button.choice-option:hover:not(:disabled) {
+        border-color: currentColor;
+        transform: translateY(-1px);
+        box-shadow: 0 0 14px -3px currentColor;
+      }
+      .choice-modal-panel button.choice-option:disabled { opacity: 0.4; cursor: default; }
+      .choice-modal-panel button.choice-option small { font-weight: normal; color: var(--muted); font-size: 11px; }
+      #choiceModalCancelBtn { background: transparent; border-color: var(--border); color: var(--muted); }
+      #choiceModalCancelBtn:hover { border-color: var(--fire); color: var(--fire); }
 
       /* ---- 建造花費提示 + 金幣不足的訊息提示(toast) ---- */
       #buildCostHint { text-align: center; font-size: 13px; color: var(--muted); min-height: 1.4em; margin: -6px 0 4px; }
@@ -672,6 +711,7 @@
           <div><svg class="icon"><use href="#icon-sword" /></svg> 攻擊力 <span id="towerPanelDamage">-</span></div>
           <div><svg class="icon"><use href="#icon-target" /></svg> 範圍 <span id="towerPanelRange">-</span> 格</div>
           <div><svg class="icon"><use href="#icon-clock" /></svg> 攻速 <span id="towerPanelCooldown">-</span>s</div>
+          <div id="towerPanelPathRow" hidden><svg class="icon"><use href="#icon-star" /></svg> <span id="towerPanelPath">-</span></div>
         </div>
         <label class="tower-panel-strategy">
           集火:
@@ -694,6 +734,16 @@
 
       <div id="resultBanner"></div>
       <button id="backToMenuBtn">回到選單</button>
+
+      <!-- 通用選擇彈窗:蓋塔時隨機英雄選擇、升級到分岐級選路線,都共用這個(main.ts 的 showChoiceModal())。
+           不用 hidden 屬性控制顯示(教訓見 body.game-active 那條規則的註解),改用 .show class 切換。 -->
+      <div id="choiceModalOverlay" class="choice-modal-overlay">
+        <div class="choice-modal-panel panel-frame">
+          <h3 id="choiceModalTitle"></h3>
+          <div class="choice-row" id="choiceModalOptions"></div>
+          <button id="choiceModalCancelBtn" class="btn">取消</button>
+        </div>
+      </div>
     </section>
 
     <details id="advancedPanel">

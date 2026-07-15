@@ -12,7 +12,14 @@ import { FP_SCALE } from './sim/map';
 import { activeBonusWaveInfo, currentWaveNumber, ticksUntilNextWave, upcomingWaveDef } from './sim/monsters';
 import { RESOURCE_BUILDING_COST, TRAP_COST } from './sim/placements';
 import { STARTING_LIVES, type SimulationState } from './sim/simulation';
-import { describeTower, TOWER_DEFS } from './sim/towers';
+import {
+  describeTower,
+  TOWER_CHARACTER_NAMES,
+  TOWER_DEFS,
+  UPGRADE_PATH_LEVEL,
+  UPGRADE_PATH_NAMES,
+  type UpgradePath,
+} from './sim/towers';
 
 const BASE_MATCH_CONFIG = {
   tickRateMs: 50,
@@ -55,6 +62,10 @@ const leaveRoomBtn = $<HTMLButtonElement>('leaveRoomBtn');
 const buildBarEl = $<HTMLDivElement>('buildBar');
 const buildCostHintEl = $<HTMLDivElement>('buildCostHint');
 const toastEl = $<HTMLDivElement>('toast');
+const choiceModalOverlayEl = $<HTMLDivElement>('choiceModalOverlay');
+const choiceModalTitleEl = $<HTMLHeadingElement>('choiceModalTitle');
+const choiceModalOptionsEl = $<HTMLDivElement>('choiceModalOptions');
+const choiceModalCancelBtn = $<HTMLButtonElement>('choiceModalCancelBtn');
 const towerPanelEl = $<HTMLDivElement>('towerPanel');
 const towerPanelElementEl = $<HTMLSpanElement>('towerPanelElement');
 const towerPanelOwnerEl = $<HTMLSpanElement>('towerPanelOwner');
@@ -62,6 +73,8 @@ const towerPanelLevelEl = $<HTMLSpanElement>('towerPanelLevel');
 const towerPanelDamageEl = $<HTMLSpanElement>('towerPanelDamage');
 const towerPanelRangeEl = $<HTMLSpanElement>('towerPanelRange');
 const towerPanelCooldownEl = $<HTMLSpanElement>('towerPanelCooldown');
+const towerPanelPathRowEl = $<HTMLDivElement>('towerPanelPathRow');
+const towerPanelPathEl = $<HTMLSpanElement>('towerPanelPath');
 const towerPanelStrategySelect = $<HTMLSelectElement>('towerPanelStrategy');
 const towerUpgradeBtn = $<HTMLButtonElement>('towerUpgradeBtn');
 const towerUpgradeCostEl = $<HTMLSpanElement>('towerUpgradeCost');
@@ -108,19 +121,33 @@ function displayNameFor(playerId: string): string {
   return room?.getRoster().find((p) => p.playerId === playerId)?.name ?? playerId;
 }
 
-/** 建塔列現在不只選屬性,還可以選「陷阱」「資源建築」這兩種非攻擊型放置物。 */
-type BuildMode = Element | 'trap' | 'resource';
+/** 建塔列現在是「蓋塔(隨機英雄選擇)/陷阱/資源建築」三選一模式,不再直接選屬性。 */
+type BuildMode = 'tower' | 'trap' | 'resource';
 
-function buildModeCost(mode: BuildMode): number {
-  if (mode === 'trap') return TRAP_COST;
-  if (mode === 'resource') return RESOURCE_BUILDING_COST;
-  return TOWER_DEFS[mode].cost;
+/** 蓋塔模式下,依玩家自己選的屬性算出這次要隨機提供哪些選項(WC3 英雄選擇式);
+ * 只有 1 個允許屬性就沒有真的選擇可言,直接回傳那 1 個,不用跳彈窗。 */
+function randomTowerOffer(): Element[] {
+  const allowed = latestState?.playerElements[myPlayerId()] ?? ALL_ELEMENTS;
+  const shuffled = [...allowed];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled.slice(0, Math.min(3, shuffled.length));
 }
 
 function buildModeLabel(mode: BuildMode): string {
   if (mode === 'trap') return '陷阱';
   if (mode === 'resource') return '資源建築';
-  return `${ELEMENT_NAMES[mode]}塔`;
+  return '塔';
+}
+
+/** 蓋塔列下方的花費提示用:蓋塔模式沒有固定花費(隨機英雄選擇,每個屬性都一樣是塔的基礎價),
+ * 這裡用任一屬性的造價當代表值即可,陷阱/資源建築本來就是固定價。 */
+function buildModeCost(mode: BuildMode): number {
+  if (mode === 'trap') return TRAP_COST;
+  if (mode === 'resource') return RESOURCE_BUILDING_COST;
+  return Math.min(...ALL_ELEMENTS.map((el) => TOWER_DEFS[el].cost));
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -133,6 +160,40 @@ function showToast(message: string): void {
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
 }
 
+interface ChoiceOption {
+  label: string;
+  sublabel?: string;
+  disabled?: boolean;
+  onChoose: () => void;
+}
+
+/** 通用選擇彈窗:蓋塔的隨機英雄選擇、升級到分岐級選路線都共用這個。點取消或背景不會做任何事。 */
+function showChoiceModal(title: string, options: ChoiceOption[]): void {
+  choiceModalTitleEl.textContent = title;
+  choiceModalOptionsEl.innerHTML = '';
+  for (const opt of options) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'choice-option';
+    btn.disabled = opt.disabled ?? false;
+    btn.innerHTML = opt.sublabel
+      ? `${escapeHtml(opt.label)}<small>${escapeHtml(opt.sublabel)}</small>`
+      : escapeHtml(opt.label);
+    btn.addEventListener('click', () => {
+      hideChoiceModal();
+      opt.onChoose();
+    });
+    choiceModalOptionsEl.appendChild(btn);
+  }
+  choiceModalOverlayEl.classList.add('show');
+}
+
+function hideChoiceModal(): void {
+  choiceModalOverlayEl.classList.remove('show');
+}
+
+choiceModalCancelBtn.addEventListener('click', hideChoiceModal);
+
 /** 建塔列下方的花費提示,金幣不夠時變色——跟著目前選的建造模式 + 自己的金幣即時更新。 */
 function renderBuildCostHint(): void {
   const mode = currentBuildMode();
@@ -143,12 +204,52 @@ function renderBuildCostHint(): void {
   buildCostHintEl.classList.toggle('cost-insufficient', insufficient);
 }
 
+/** 蓋塔模式:隨機提供最多 3 個屬性選項給玩家挑(WC3 英雄選擇式),只有 1 個允許屬性就直接蓋不跳彈窗。 */
+function tryBuildTowerAt(x: number, y: number): void {
+  const offer = randomTowerOffer();
+  const myGold = latestState?.gold[myPlayerId()] ?? 0;
+
+  if (offer.length <= 1) {
+    const element = offer[0] ?? 'metal';
+    const cost = TOWER_DEFS[element].cost;
+    if (myGold < cost) {
+      showToast(`金幣不足!建造${ELEMENT_NAMES[element]}塔需要 ${cost} 金幣`);
+      return;
+    }
+    submitAction({ kind: 'build_tower', params: { x, y, element } });
+    return;
+  }
+
+  showChoiceModal(
+    '選擇要蓋的塔(隨機提供)',
+    offer.map((element) => {
+      const cost = TOWER_DEFS[element].cost;
+      return {
+        label: `${TOWER_CHARACTER_NAMES[element]}`,
+        sublabel: `${ELEMENT_NAMES[element]}塔 · ${cost} 金幣`,
+        disabled: myGold < cost,
+        onChoose: () => {
+          if ((latestState?.gold[myPlayerId()] ?? 0) < cost) {
+            showToast(`金幣不足!建造${ELEMENT_NAMES[element]}塔需要 ${cost} 金幣`);
+            return;
+          }
+          submitAction({ kind: 'build_tower', params: { x, y, element } });
+        },
+      };
+    }),
+  );
+}
+
 const gameRenderer = createGameRenderer(
   'gameCanvas',
   (x, y) => {
     // GameScene 只有點到「空地」才會呼叫這裡——點到已經有塔的格子是選取,見下面 onTowerSelected。
     if (!matchActive || (!room && !localEngine)) return;
     const mode = currentBuildMode();
+    if (mode === 'tower') {
+      tryBuildTowerAt(x, y);
+      return;
+    }
     const cost = buildModeCost(mode);
     const myGold = latestState?.gold[myPlayerId()] ?? 0;
     if (myGold < cost) {
@@ -156,8 +257,7 @@ const gameRenderer = createGameRenderer(
       return;
     }
     if (mode === 'trap') submitAction({ kind: 'build_trap', params: { x, y } });
-    else if (mode === 'resource') submitAction({ kind: 'build_resource_building', params: { x, y } });
-    else submitAction({ kind: 'build_tower', params: { x, y, element: mode } });
+    else submitAction({ kind: 'build_resource_building', params: { x, y } });
   },
   (towerId) => {
     selectedTowerId = towerId;
@@ -173,7 +273,7 @@ function renderTowerPanel(): void {
 
   const stats = describeTower(tower);
   const myGold = latestState?.gold[myPlayerId()] ?? 0;
-  towerPanelElementEl.textContent = `${ELEMENT_NAMES[tower.element]}塔`;
+  towerPanelElementEl.textContent = `${TOWER_CHARACTER_NAMES[tower.element]}(${ELEMENT_NAMES[tower.element]}塔)`;
   towerPanelElementEl.className = `element-${tower.element}`;
   towerPanelOwnerEl.textContent = displayNameFor(tower.ownerId);
   towerPanelLevelEl.textContent = String(tower.level);
@@ -182,6 +282,10 @@ function renderTowerPanel(): void {
   towerPanelCooldownEl.textContent = ((stats.cooldownTicks * currentTickRateMs) / 1000).toFixed(2);
   towerSellValueEl.textContent = String(stats.sellValue);
   towerPanelStrategySelect.value = tower.targetStrategy;
+
+  // 分岐路線一旦選定(到 UPGRADE_PATH_LEVEL 之後)才顯示這行,選之前不用佔面板版面。
+  towerPanelPathRowEl.hidden = tower.upgradePath === 'none';
+  if (tower.upgradePath !== 'none') towerPanelPathEl.textContent = UPGRADE_PATH_NAMES[tower.upgradePath];
 
   // 升級不分誰的塔,誰都能幫忙出錢升級;賣塔限本人,避免動到別人的投資。
   if (stats.upgradeCost === null) {
@@ -194,9 +298,26 @@ function renderTowerPanel(): void {
   towerSellBtn.disabled = tower.ownerId !== myPlayerId();
 }
 
+/** 升到 UPGRADE_PATH_LEVEL(分岐級)一定要先選路線,選完才送出真正的升級指令;其他級數直接升級。 */
 towerUpgradeBtn.addEventListener('click', () => {
   if (selectedTowerId === null) return;
-  submitAction({ kind: 'upgrade_tower', params: { towerId: selectedTowerId } });
+  const towerId = selectedTowerId;
+  const tower = latestState?.towers.find((t) => t.id === towerId);
+  if (!tower) return;
+
+  if (tower.level + 1 === UPGRADE_PATH_LEVEL) {
+    const paths: UpgradePath[] = ['burst', 'splash'];
+    showChoiceModal(
+      '選擇升級路線(選定後無法更改)',
+      paths.map((path) => ({
+        label: UPGRADE_PATH_NAMES[path],
+        sublabel: path === 'burst' ? '傷害比一般線性升級更高,沒有範圍效果' : '攻擊會波及主目標周圍的怪物,單體傷害不額外加成',
+        onChoose: () => submitAction({ kind: 'upgrade_tower', params: { towerId, path } }),
+      })),
+    );
+    return;
+  }
+  submitAction({ kind: 'upgrade_tower', params: { towerId } });
 });
 
 towerSellBtn.addEventListener('click', () => {
@@ -219,14 +340,19 @@ towerPanelStrategySelect.addEventListener('change', () => {
   });
 });
 
-// 快捷鍵:數字鍵切建塔列選項(屬性+陷阱+資源建築,最多到 7)、Delete/Backspace 賣掉選中的塔、
-// Esc 取消選取。只在對局畫面生效,且游標在任何輸入框裡(暱稱/房號等)時整個忽略,不然打字會被誤判成快捷鍵。
+// 快捷鍵:數字鍵 1~3 切建塔列模式(蓋塔/陷阱/資源建築)、Delete/Backspace 賣掉選中的塔、
+// Esc 取消選取(或關掉選擇彈窗)。只在對局畫面生效,且游標在任何輸入框裡(暱稱/房號等)時整個忽略,
+// 不然打字會被誤判成快捷鍵。
 window.addEventListener('keydown', (ev) => {
   if (gameScreenEl.hidden) return;
   const activeTag = document.activeElement?.tagName;
   if (activeTag === 'INPUT' || activeTag === 'SELECT' || activeTag === 'TEXTAREA') return;
 
   if (ev.key === 'Escape') {
+    if (choiceModalOverlayEl.classList.contains('show')) {
+      hideChoiceModal();
+      return;
+    }
     gameRenderer.setSelectedTower(null);
     return;
   }
@@ -237,7 +363,7 @@ window.addEventListener('keydown', (ev) => {
     return;
   }
   const slot = Number(ev.key);
-  if (Number.isInteger(slot) && slot >= 1 && slot <= 7) {
+  if (Number.isInteger(slot) && slot >= 1 && slot <= 3) {
     const radios = buildBarEl.querySelectorAll<HTMLInputElement>('input[name="element"]');
     const radio = radios[slot - 1];
     if (radio) {
@@ -392,29 +518,23 @@ function selectedDifficulty(container: HTMLElement): number {
   return Number(checked?.value) || 100;
 }
 
-/** 目前建塔列選到的模式(對局中,建塔列已經被 populateBuildBar 依玩家自己的選擇動態產生過)。 */
+/** 目前建塔列選到的模式(對局中,建塔列已經被 populateBuildBar 產生過)。 */
 function currentBuildMode(): BuildMode {
   const checked = buildBarEl.querySelector<HTMLInputElement>('input[name="element"]:checked');
-  return (checked?.value as BuildMode | undefined) ?? 'metal';
+  return (checked?.value as BuildMode | undefined) ?? 'tower';
 }
 
-/** 對局開始後,建塔列只顯示玩家自己選好的屬性,不是每次都五選一;陷阱/資源建築不分屬性,固定都有。 */
-function populateBuildBar(elements: Element[]): void {
-  const elementButtons = elements
-    .map(
-      (el, i) => `
-        <input type="radio" id="build-${el}" name="element" value="${el}" ${i === 0 ? 'checked' : ''} />
-        <label for="build-${el}" class="element-${el}">${ELEMENT_NAMES[el]}</label>
-      `,
-    )
-    .join('');
-  const placementButtons = `
+/** 建塔列固定是「蓋塔(隨機英雄選擇)/陷阱/資源建築」三個模式,不再逐屬性列出——
+ * 蓋塔要蓋哪個屬性改成點地圖時才隨機提供選項(見 tryBuildTowerAt),不受這裡影響。 */
+function populateBuildBar(): void {
+  buildBarEl.innerHTML = `
+    <input type="radio" id="build-tower" name="element" value="tower" checked />
+    <label for="build-tower" class="build-tower">蓋塔</label>
     <input type="radio" id="build-trap" name="element" value="trap" />
     <label for="build-trap" class="build-trap">陷阱</label>
     <input type="radio" id="build-resource" name="element" value="resource" />
     <label for="build-resource" class="build-resource">資源建築</label>
   `;
-  buildBarEl.innerHTML = elementButtons + placementButtons;
   buildBarEl.querySelectorAll<HTMLInputElement>('input[name="element"]').forEach((input) => {
     input.addEventListener('change', renderBuildCostHint);
   });
@@ -674,7 +794,7 @@ const roomHandlers: RoomHandlers = {
     if (!room) return;
     const me = payload.roster.find((p) => p.playerId === room?.getMyPlayerId());
     myElementCountThisMatch = me?.elements.length ?? 5;
-    populateBuildBar(me?.elements ?? ['metal']);
+    populateBuildBar();
     if (room.getRole() === 'host') {
       hostEngine = new HostLockstepEngine(
         room,
@@ -730,7 +850,7 @@ soloBtn.addEventListener('click', () => {
   gameRenderer.resetCamera();
   everSoldTowerThisMatch = false;
   myElementCountThisMatch = elements.length;
-  populateBuildBar(elements);
+  populateBuildBar();
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   localEngine = new LocalEngine(
     seed,

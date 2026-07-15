@@ -32,9 +32,11 @@ import {
   TOWER_DEFS,
   tryAttack,
   upgradeCost,
+  UPGRADE_PATH_LEVEL,
   type CombatEvent,
   type TargetStrategy,
   type Tower,
+  type UpgradePath,
 } from './towers';
 
 export interface SimulationState {
@@ -177,6 +179,7 @@ function applyBuildTower(state: SimulationState, playerId: PlayerId, action: Act
     ticksSinceLastAttack: 0,
     ownerId: playerId,
     targetStrategy: 'first',
+    upgradePath: 'none',
   });
 }
 
@@ -192,7 +195,11 @@ function applySellTower(state: SimulationState, playerId: PlayerId, action: Acti
   state.towers.splice(idx, 1);
 }
 
-/** 升級不分誰的塔,誰都能幫忙出錢升級,但花的是出手升級這個人自己的錢。 */
+/**
+ * 升級不分誰的塔,誰都能幫忙出錢升級,但花的是出手升級這個人自己的錢。
+ * 升到 UPGRADE_PATH_LEVEL(分岐級)一定要在 action.params.path 指定 'burst' 或 'splash',
+ * 沒指定或指定無效值就整個升級安全忽略(不會半途扣錢卻沒選到路線)。選過的路線之後不能改。
+ */
 function applyUpgradeTower(state: SimulationState, playerId: PlayerId, action: Action): void {
   const towerId = asFiniteInt(action.params.towerId);
   if (towerId === null) return;
@@ -201,8 +208,18 @@ function applyUpgradeTower(state: SimulationState, playerId: PlayerId, action: A
   const cost = upgradeCost(tower);
   const gold = state.gold[playerId] ?? 0;
   if (cost === null || gold < cost) return;
+
+  const nextLevel = tower.level + 1;
+  let path: UpgradePath | null = null;
+  if (nextLevel === UPGRADE_PATH_LEVEL) {
+    const requestedPath = action.params.path;
+    if (requestedPath !== 'burst' && requestedPath !== 'splash') return;
+    path = requestedPath;
+  }
+
   state.gold[playerId] = gold - cost;
-  tower.level += 1;
+  tower.level = nextLevel;
+  if (path) tower.upgradePath = path;
 }
 
 /** 集火策略不分誰的塔,任何隊友都能改(跟升級一樣),不花錢、純戰術選擇。 */
@@ -273,7 +290,7 @@ function computeChecksum(state: SimulationState): string {
     .map((id) => `${id}:${state.gold[id]}`)
     .join(',');
   const towerPart = state.towers
-    .map((t) => `${t.id}:${t.x}:${t.y}:${t.element}:${t.level}:${t.targetStrategy}`)
+    .map((t) => `${t.id}:${t.x}:${t.y}:${t.element}:${t.level}:${t.targetStrategy}:${t.upgradePath}`)
     .join(';');
   const monsterPart = state.monsters
     .map((m) => `${m.id}:${m.hp}:${m.pos.pathId}:${m.pos.segmentIndex}:${m.pos.distanceIntoSegmentFp}`)
@@ -351,8 +368,7 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   next.monsters = survivors;
 
   for (const tower of next.towers) {
-    const event = tryAttack(tower, next.monsters);
-    if (event) next.combatEvents.push(event);
+    next.combatEvents.push(...tryAttack(tower, next.monsters));
   }
 
   const dead = next.monsters.filter((m) => m.hp <= 0);

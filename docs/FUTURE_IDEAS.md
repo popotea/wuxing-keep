@@ -18,7 +18,15 @@
 
 新增可放置物件種類(非攻擊型,例如減速陷阱、資源建築),加上既有塔的升級系統(花金幣把已蓋好的塔升級,提升傷害/範圍/冷卻)。
 
-**✅ 塔升級初版已完成**(`src/sim/towers.ts` 的 `Tower.level`/`upgradeCost`/`MAX_TOWER_LEVEL`,`src/sim/simulation.ts` 的 `upgrade_tower` action):目前只有傷害隨等級線性增加(`TOWER_DEFS[element].damage * level`),範圍/冷卻不受影響,漲價曲線是 `cost * level`,封頂 5 級。這是刻意先求「能玩」的簡化版,之後平衡調整可以再改成非線性曲線,或讓範圍/冷卻也一起變化。
+**✅ 塔升級初版已完成**(`src/sim/towers.ts` 的 `Tower.level`/`upgradeCost`/`MAX_TOWER_LEVEL`,`src/sim/simulation.ts` 的 `upgrade_tower` action):範圍/冷卻不受等級影響,漲價曲線是 `cost * level`,封頂 5 級。之後平衡調整可以再改成非線性曲線,或讓範圍/冷卻也一起變化。
+
+**✅ 升級分岐路線已完成(參考 WC3 TD 手塔技能)**:1~2 級是共通線性升級(`TOWER_DEFS[element].damage * level`,跟以前一樣),到 `UPGRADE_PATH_LEVEL=3`(`src/sim/towers.ts`)這一級必須二選一、選定後 3~5 級都沿著這條路線走,不能反悔:
+- **burst(路線:單體強化)**:傷害是線性公式的 `BURST_DAMAGE_PERCENT=150%`(1.5 倍),沒有範圍效果,適合打單一高血量目標(例如首領波)。
+- **splash(路線:範圍擴散)**:傷害維持原本線性(沒有額外加成),但 `tryAttack()` 打中主目標後,`SPLASH_RANGE_FP=700` 定點數距離內的其他怪物也各自挨一下 `SPLASH_DAMAGE_PERCENT=50%` 折扣傷害(用距離平方比較,不用 sqrt,一樣是決定性計算)。適合同時清一群小怪。
+
+實作上 `tryAttack()` 的回傳型別從 `CombatEvent | null` 改成 `CombatEvent[]`(空陣列代表沒打中),`simulation.ts` 的 `applyUpgradeTower` 在**恰好**升到 `UPGRADE_PATH_LEVEL` 那一次呼叫時,`action.params.path` 必須是 `'burst'` 或 `'splash'` 其中之一,不是就整個升級安全忽略(不會扣了錢卻沒定案路線)。`computeChecksum` 的塔序列化把 `upgradePath` 也算進去。UI 上 `main.ts` 的升級按鈕在偵測到「這次升級剛好會到分岐級」時,會先跳選擇彈窗(`showChoiceModal()`)讓玩家選路線,選完才送出真正的 `upgrade_tower` 指令;`#towerPanel` 選到分岐後的塔會多顯示一行目前路線。
+
+**✅ 隨機英雄選擇已完成(參考 WC3 TD 手塔選擇)**:蓋塔不再是「建塔列直接選屬性」,而是點空地時 `main.ts` 的 `randomTowerOffer()` 從玩家自己允許的屬性清單裡隨機抽最多 3 個(用 `Math.random()`,純本地 UI 用,不影響模擬層決定性——最終選了哪個屬性還是透過正常的 `build_tower` action 決定性送出),跳 `showChoiceModal()` 讓玩家從隨機提供的選項裡挑一個蓋;只允許 1 個屬性時沒有真的選擇可言,直接蓋不跳彈窗。每個屬性額外配了一個角色名(`TOWER_CHARACTER_NAMES`,例如金塔叫「黃金衛士」)顯示在選項按鈕上,加強「英雄選擇」的風味,純顯示用不影響任何數值。建塔列(`#buildBar`)因此簡化成「蓋塔/陷阱/資源建築」三個固定模式,不再逐屬性列出,數字鍵快捷鍵範圍也跟著改回 1~3。
 
 **✅ WC3 式選取面板已完成**:點空地蓋塔;點已經有塔的格子是**選取**(不是直接升級),`src/game/GameScene.ts` 用白色框線標示選到誰,畫面下方 `#towerPanel` 顯示即時屬性(攻擊力/範圍/攻速)跟「升級/賣出/取消選取」三顆按鈕,升級/賣出才是真的送出指令。`src/sim/towers.ts` 的 `describeTower()` 統一算這些顯示用數值,`sellValue()` 跟 `simulation.ts` 的 `applySellTower` 共用同一個公式避免兩邊算法各改各的漂掉。
 
@@ -27,7 +35,7 @@
 - **資源建築**(`RESOURCE_BUILDING_COST=80`):規則跟塔一樣蓋在非路徑格,`ticksSinceLastIncome` 每 `RESOURCE_BUILDING_INTERVAL_TICKS=200`(10 秒)給建造者自己 `RESOURCE_BUILDING_INCOME=15` 金幣——**只給 owner 自己,不是全員均分**(呼應團隊經濟「賣塔限本人」的精神:這是個人投資報酬,不是團隊共同資源)。
 - **v1 刻意不支援賣出/升級**:選到陷阱/資源建築的格子目前沒有選取面板,`GameScene.ts` 只是擋掉「點到已佔用格子誤送建造指令」,沒有真的做選取互動。之後要補的話,`towerPanel` 那套 WC3 式選取面板可以參考,但陷阱/資源建築目前沒有等級/集火策略,面板會比塔面板簡單很多(大概只需要一個賣出按鈕)。
 - **視覺**:兩者都還沒有正式美術,`GameScene.ts` 的 `drawTrap()`(一排小尖刺)/`drawResourceBuilding()`(金頂小房子)是佔位幾何圖形,跟塔/怪物當初上正式美術前走的是同一套「先求能玩」路線;小地圖上也各配一個小點。
-- **建造 UI**:建塔列(`#buildBar`)在五行屬性後面固定加了「陷阱」「資源建築」兩個選項(不受玩家選的屬性限制,任何人都能蓋),數字鍵快捷鍵範圍從 1~5 延伸到 1~7 涵蓋這兩個新選項。順便新增了建造花費提示(`#buildCostHint`,金幣不夠會變色)跟金幣不足時的浮動訊息提示(`#toast`),這兩個是通用機制,以後別的地方需要「錢不夠彈提示」也能直接複用 `showToast()`。
+- **建造 UI**:建塔列(`#buildBar`)是「蓋塔/陷阱/資源建築」三個固定模式(蓋塔要選哪個屬性改成隨機英雄選擇彈窗決定,見上面「隨機英雄選擇」),陷阱/資源建築不受玩家選的屬性限制、任何人都能蓋,數字鍵快捷鍵範圍是 1~3。順便新增了建造花費提示(`#buildCostHint`,金幣不夠會變色)跟金幣不足時的浮動訊息提示(`#toast`),這兩個是通用機制,以後別的地方需要「錢不夠彈提示」也能直接複用 `showToast()`。
 
 ## 元素組合玩法延伸
 
