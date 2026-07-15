@@ -35,19 +35,26 @@ const HF_MODEL = 'black-forest-labs/FLUX.1-schnell';
 const HF_URL = `https://router.huggingface.co/hf-inference/models/${HF_MODEL}`;
 const SIZE = 256;
 
-// 參考「其他遊戲UI參考/」資料夾裡的 Kingdom Rush 系列截圖調性:飽和暖色調的卡通地面材質,
-// 不是寫實照片風格,跟塔/怪物的 Q 版可愛方向一致。
+// 參考「其他遊戲UI參考/」資料夾裡的 Kingdom Rush 系列截圖調性,但色調改成柔和低飽和——
+// 2026-07-15 實測發現原本「飽和暖色調」生出來的地板是螢光綠、路徑是亮橘,長時間盯著玩不舒服
+// (當時先在 GameScene.ts 疊一層半透明灰卡其色壓暗降飽和頂著),這次重生產順便從源頭調淡,
+// 不用完全靠遊戲內疊色遮蓋。
 const STYLE_SUFFIX =
-  'cute chibi cartoon tower defense game texture in the visual spirit of Kingdom Rush, warm saturated colors, painterly style, top-down seamless tileable texture, flat even lighting, no objects, no shadows, no characters, no text, no watermark, subtle natural variation';
+  'cute chibi cartoon tower defense game texture in the visual spirit of Kingdom Rush, soft muted low-saturation colors, gentle pastel-leaning palette, painterly style, top-down seamless tileable texture, flat even lighting, no objects, no shadows, no characters, no text, no watermark, subtle natural variation';
 
+// 同樣的 prompt 這個 API 端點會回傳一模一樣的圖(沒有內建隨機性),重跑要換 seed 才會拿到
+// 不同結果——2026-07-15 第一次重生產時 floor/path 都跑出「草地上有木箱」,跟先前已經修過的
+// crates 問題一樣又冒出來,加重負面提示詞 + 給個 seed 讓下次重跑至少不會拿到同一張。
 const TERRAIN_ASSETS = [
   {
     name: 'floor',
-    prompt: `plain lush green cartoon grass ground surface, like a video game level base terrain paint, only small blades of grass and subtle color variation, absolutely no crates, no sheep, no animals, no creatures, no props, no icons, no items, ${STYLE_SUFFIX}`,
+    seed: 4821,
+    prompt: `plain muted sage green cartoon grass ground surface, soft desaturated tone (not neon or bright), like a video game level base terrain paint, only small blades of grass and subtle color variation, EMPTY ground with nothing on it, absolutely no crates, no boxes, no wooden containers, no baskets, no sheep, no animals, no creatures, no props, no icons, no items, ${STYLE_SUFFIX}`,
   },
   {
     name: 'path',
-    prompt: `plain warm tan cartoon dirt path surface, like a video game level base terrain paint, only small pebbles and subtle color variation, absolutely no crates, no animals, no creatures, no props, no icons, no items, ${STYLE_SUFFIX}`,
+    seed: 7734,
+    prompt: `plain muted tan cartoon dirt path surface, soft desaturated tone (not bright or saturated orange), like a video game level base terrain paint, only small pebbles and subtle color variation, EMPTY ground with nothing on it, absolutely no crates, no boxes, no wooden containers, no baskets, no animals, no creatures, no props, no icons, no items, ${STYLE_SUFFIX}`,
   },
 ];
 
@@ -56,13 +63,13 @@ function sleep(ms) {
 }
 
 /** HF 免費額度的模型偶爾要「冷啟動」,會回一段 JSON 說還在載入、要等幾秒,不是圖檔內容。 */
-async function fetchFromHf(prompt) {
+async function fetchFromHf(prompt, seed) {
   const maxAttempts = 6;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const res = await fetch(HF_URL, {
       method: 'POST',
       headers: { Authorization: `Bearer ${HF_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ inputs: prompt, parameters: { width: SIZE, height: SIZE } }),
+      body: JSON.stringify({ inputs: prompt, parameters: { width: SIZE, height: SIZE, seed } }),
     });
     const contentType = res.headers.get('content-type') ?? '';
     if (res.ok && contentType.startsWith('image/')) {
@@ -133,7 +140,7 @@ function makeSeamlessTile(data, width, height) {
 
 async function generateOne(asset) {
   console.log(`產生中: tiles/${asset.name}.png ...`);
-  const jpegBuf = await fetchFromHf(asset.prompt);
+  const jpegBuf = await fetchFromHf(asset.prompt, asset.seed);
   const decoded = jpeg.decode(jpegBuf, { useTArray: true, formatAsRGBA: true });
   const seamless = makeSeamlessTile(decoded.data, decoded.width, decoded.height);
   const pngBuffer = PNG.sync.write({ width: decoded.width, height: decoded.height, data: Buffer.from(seamless) });
