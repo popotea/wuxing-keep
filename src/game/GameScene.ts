@@ -16,7 +16,7 @@ import {
 } from '../sim/map';
 import type { Monster } from '../sim/monsters';
 import type { SimulationState } from '../sim/simulation';
-import { MAX_TOWER_LEVEL, TOWER_DEFS, UPGRADE_PATH_LEVEL, type CombatEvent, type Tower, type UpgradePath } from '../sim/towers';
+import { TOWER_DEFS, UPGRADE_PATH_LEVEL, type CombatEvent, type Tower, type UpgradePath } from '../sim/towers';
 import { isMultiplayer, ownerColorHex } from './playerColors';
 
 export const TILE_PX = 40;
@@ -126,6 +126,8 @@ export class GameScene extends Phaser.Scene {
   /** 有正式美術圖時才會用到:塔/怪物各自的 Image,依 id 持久保留(不像 Graphics 每 tick 清掉重畫)。 */
   private towerSprites = new Map<number, Phaser.GameObjects.Image>();
   private monsterSprites = new Map<number, Phaser.GameObjects.Image>();
+  /** 塔上方「Lv.N」文字,不管有沒有正式美術圖都會顯示(文字沒辦法用 Graphics 畫,Graphics 只能畫幾何圖形)。 */
+  private towerLevelTexts = new Map<number, Phaser.GameObjects.Text>();
   private pendingState: SimulationState | null = null;
   private hoverX: number | null = null;
   private hoverY: number | null = null;
@@ -728,6 +730,7 @@ export class GameScene extends Phaser.Scene {
       this.renderTower(g, t, multiplayer ? ownerColorHex(state, t.ownerId) : null);
     }
     this.pruneStaleSprites(this.towerSprites, liveTowerIds);
+    this.pruneStaleSprites(this.towerLevelTexts, liveTowerIds);
 
     // 陷阱/資源建築目前還沒有正式美術,先畫簡單佔位圖形(跟塔/怪物當初上正式美術前一樣的做法)。
     for (const trap of state.traps) {
@@ -760,8 +763,8 @@ export class GameScene extends Phaser.Scene {
     this.pruneStaleSprites(this.monsterSprites, liveMonsterIds);
   }
 
-  /** state 裡已經不存在的 id(賣掉的塔、死掉/走出地圖的怪物)要把對應的 Image 銷毀,不然會一直留在畫面上。 */
-  private pruneStaleSprites(sprites: Map<number, Phaser.GameObjects.Image>, liveIds: Set<number>): void {
+  /** state 裡已經不存在的 id(賣掉的塔、死掉/走出地圖的怪物)要把對應的 GameObject 銷毀,不然會一直留在畫面上。 */
+  private pruneStaleSprites<T extends { destroy(): void }>(sprites: Map<number, T>, liveIds: Set<number>): void {
     for (const [id, sprite] of sprites) {
       if (liveIds.has(id)) continue;
       sprite.destroy();
@@ -792,7 +795,7 @@ export class GameScene extends Phaser.Scene {
     if (!key) {
       this.towerSprites.get(t.id)?.destroy();
       this.towerSprites.delete(t.id);
-      this.drawTower(g, t.x, t.y, t.element, t.level, ownerMark);
+      this.drawTower(g, t.id, t.x, t.y, t.element, t.level, ownerMark);
       return;
     }
     const cx = t.x * TILE_PX + TILE_PX / 2;
@@ -807,7 +810,7 @@ export class GameScene extends Phaser.Scene {
     }
     sprite.setTexture(key).setPosition(cx, cy).setDisplaySize(displaySize, displaySize);
     this.drawOwnerMark(g, cx, cy, ownerMark);
-    this.drawTowerLevelPips(g, cx, cy, t.level);
+    this.drawTowerLevelLabel(t.id, cx, cy, t.level);
   }
 
   /** 多人模式下在建築底部畫一圈識別色橢圓,一眼看出這是誰蓋的;單人模式/顏色為 null 時不畫。 */
@@ -817,14 +820,28 @@ export class GameScene extends Phaser.Scene {
     g.strokeEllipse(cx, cy + 9 * SCALE, 22 * SCALE, 6 * SCALE);
   }
 
-  /** 塔上方一排小白點表示等級,圖片版跟幾何圖形版共用同一個畫法。 */
-  private drawTowerLevelPips(g: Phaser.GameObjects.Graphics, cx: number, cy: number, level: number): void {
-    const pipSpacing = 5 * SCALE;
-    const pipsWidth = (Math.min(level, MAX_TOWER_LEVEL) - 1) * pipSpacing;
-    for (let i = 0; i < level; i++) {
-      g.fillStyle(0xffffff, 1);
-      g.fillCircle(cx - pipsWidth / 2 + i * pipSpacing, cy - TILE_PX / 2 + 3 * SCALE, 1.5 * SCALE);
+  /**
+   * 塔正上方的「Lv.N」文字,取代原本純點狀的等級指示——文字比數點數直接好讀,尤其升到
+   * 高等級之後一排點也不好一眼數清楚。文字沒辦法用 Graphics 畫(Graphics 只能畫幾何圖形),
+   * 所以用 Phaser.GameObjects.Text,依 id 建立/更新/銷毀,跟 towerSprites 走同一套模式。
+   */
+  private drawTowerLevelLabel(id: number, cx: number, cy: number, level: number): void {
+    const y = cy - TILE_PX / 2 - 4 * SCALE;
+    let label = this.towerLevelTexts.get(id);
+    if (!label) {
+      label = this.add
+        .text(cx, y, '', {
+          fontSize: `${11 * SCALE}px`,
+          fontFamily: '"Microsoft JhengHei", sans-serif',
+          color: '#ffffff',
+          stroke: '#000000',
+          strokeThickness: 2 * SCALE,
+        })
+        .setOrigin(0.5, 1)
+        .setDepth(2);
+      this.towerLevelTexts.set(id, label);
     }
+    label.setPosition(cx, y).setText(`Lv.${level}`);
   }
 
   /**
@@ -911,9 +928,10 @@ export class GameScene extends Phaser.Scene {
     this.drawOwnerMark(g, cx, cy, ownerMark);
   }
 
-  /** 底座 + 尖塔的簡易造型,比純色圓形更有辨識度;等級用塔尖上方的一排小點表示。沒有正式美術圖時的備援畫法。 */
+  /** 底座 + 尖塔的簡易造型,比純色圓形更有辨識度;等級用塔尖上方的「Lv.N」文字表示。沒有正式美術圖時的備援畫法。 */
   private drawTower(
     g: Phaser.GameObjects.Graphics,
+    id: number,
     gridX: number,
     gridY: number,
     element: Element,
@@ -945,13 +963,8 @@ export class GameScene extends Phaser.Scene {
     g.lineStyle(1 * SCALE, 0xffffff, 0.35);
     g.lineBetween(cx, cy - 12 * SCALE, cx - 10 * SCALE, cy + 6 * SCALE);
 
-    const pipSpacing = 5 * SCALE;
-    const pipsWidth = (Math.min(level, MAX_TOWER_LEVEL) - 1) * pipSpacing;
-    for (let i = 0; i < level; i++) {
-      g.fillStyle(0xffffff, 1);
-      g.fillCircle(cx - pipsWidth / 2 + i * pipSpacing, cy - 17 * SCALE, 1.5 * SCALE);
-    }
     this.drawOwnerMark(g, cx, cy, ownerMark);
+    this.drawTowerLevelLabel(id, cx, cy, level);
   }
 
   /** 圓身 + 小眼睛 + 頭上血條。首領怪(isBoss)整隻放大 1.8 倍再加一圈金框。沒有正式美術圖時的備援畫法。 */
