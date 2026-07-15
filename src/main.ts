@@ -93,6 +93,7 @@ const hudCompactBtn = $<HTMLButtonElement>('hudCompactBtn');
 const scoreboardBtn = $<HTMLButtonElement>('scoreboardBtn');
 const scoreboardOverlayEl = $<HTMLDivElement>('scoreboardOverlay');
 const scoreboardBodyEl = $<HTMLTableSectionElement>('scoreboardBody');
+const scoreboardMetaEl = $<HTMLDivElement>('scoreboardMeta');
 const bestRecordEl = $<HTMLSpanElement>('bestRecord');
 const dailyBestEl = $<HTMLSpanElement>('dailyBest');
 const achievementsEl = $<HTMLDivElement>('achievements');
@@ -125,10 +126,20 @@ function displayNameFor(playerId: string): string {
   return room?.getRoster().find((p) => p.playerId === playerId)?.name ?? playerId;
 }
 
-/** 記分板(參考 WC3):按傷害由高到低排序,只有按鈕開著時才畫,tick 更新時才不用每次都算。 */
+/** mm:ss 格式,記分板的「已進行時間」用。 */
+function formatElapsed(tick: number): string {
+  const totalSeconds = Math.floor((tick * currentTickRateMs) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+/** 記分板(參考 WC3):按傷害由高到低排序,只有按鈕開著時才畫,tick 更新時才不用每次都算。
+ * 波次/已進行時間跟玩家列表寫在同一塊,不用另外切去看 HUD。 */
 function renderScoreboard(): void {
   if (!latestState) return;
   const state = latestState;
+  scoreboardMetaEl.textContent = `第 ${currentWaveNumber(state.tick)} 波 · 已進行 ${formatElapsed(state.tick)}`;
   const rows = Object.keys(state.gold)
     .map((playerId) => {
       const stats = state.playerStats[playerId] ?? { damageDealt: 0, kills: 0 };

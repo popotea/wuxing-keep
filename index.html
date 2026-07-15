@@ -411,7 +411,8 @@
       }
       .scoreboard-overlay.show { display: block; }
       .scoreboard-panel { padding: 14px 20px; min-width: 340px; pointer-events: auto; }
-      .scoreboard-panel h3 { margin: 0 0 10px; text-align: center; }
+      .scoreboard-panel h3 { margin: 0 0 4px; text-align: center; }
+      .scoreboard-meta { text-align: center; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
       .scoreboard-panel table { width: 100%; border-collapse: collapse; font-size: 13px; }
       .scoreboard-panel th, .scoreboard-panel td { padding: 5px 10px; text-align: right; }
       .scoreboard-panel th:first-child, .scoreboard-panel td:first-child { text-align: left; }
@@ -795,6 +796,7 @@
       <div id="scoreboardOverlay" class="scoreboard-overlay">
         <div class="scoreboard-panel panel-frame">
           <h3>記分板</h3>
+          <div id="scoreboardMeta" class="scoreboard-meta"></div>
           <table>
             <thead>
               <tr><th>玩家</th><th>金幣</th><th>塔</th><th>擊殺</th><th>傷害</th></tr>
