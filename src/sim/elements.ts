@@ -21,6 +21,17 @@ const BEATS: Record<Element, Element> = {
   fire: 'metal',
 };
 
+// 五行相生(木生火→火生土→土生金→金生水→水生木→回到木),故意跟上面的「相克」是不同循環順序
+// (正統五行本來就有相生/相克兩套獨立關係)——塔的鄰接加成(towers.ts 的 hasGeneratingNeighbor())
+// 用這套「生」的關係,才不會跟怪物傷害倍率用的「克」關係混在一起變成同一套規則的兩種說法。
+export const GENERATED_BY: Record<Element, Element> = {
+  fire: 'wood',
+  earth: 'fire',
+  metal: 'earth',
+  water: 'metal',
+  wood: 'water',
+};
+
 export type ElementRelation = 'strong' | 'weak' | 'neutral';
 
 export function elementRelation(attacker: Element, defender: Element): ElementRelation {

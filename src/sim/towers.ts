@@ -1,6 +1,6 @@
 // 塔:五行各一種基礎塔,攻擊判定全部用整數距離平方比較,不用 sqrt/float。
 
-import { applyElementalDamage, type Element } from './elements';
+import { applyElementalDamage, GENERATED_BY, type Element } from './elements';
 import { FP_SCALE, remainingDistanceFp, worldPositionFp } from './map';
 import type { Monster, MoveType } from './monsters';
 import type { PlayerId } from '../net/protocol';
@@ -108,6 +108,31 @@ function effectiveDamage(tower: Tower): number {
   return base;
 }
 
+/**
+ * 組合建築玩法:塔相鄰(含斜角,3x3 範圍內扣掉自己)蓋了「生」它的那個元素(五行相生,見
+ * elements.ts 的 GENERATED_BY),就會被滋養、攻速變快。故意用「生」而不是「克」的關係,
+ * 才不會跟怪物傷害倍率(elements.ts 的 elementRelation)是同一套規則的兩種說法,讓玩家有
+ * 兩種獨立的五行知識可以組合利用。範圍是即時算的(每次呼叫都重新掃鄰居),不是蓋塔當下
+ * 定案,所以鄰居塔被賣掉/新蓋都會立刻反映,不用特別處理「快取失效」。
+ */
+export function hasGeneratingNeighbor(tower: Tower, allTowers: readonly Tower[]): boolean {
+  const sourceElement = GENERATED_BY[tower.element];
+  for (const other of allTowers) {
+    if (other.id === tower.id || other.element !== sourceElement) continue;
+    if (Math.abs(other.x - tower.x) <= 1 && Math.abs(other.y - tower.y) <= 1) return true;
+  }
+  return false;
+}
+
+/** 鄰接加成生效時,冷卻時間打這個百分比折扣(85 = 快 15%)。 */
+const ADJACENCY_COOLDOWN_PERCENT = 85;
+
+function effectiveCooldownTicks(tower: Tower, allTowers: readonly Tower[]): number {
+  const base = TOWER_DEFS[tower.element].cooldownTicks;
+  if (!hasGeneratingNeighbor(tower, allTowers)) return base;
+  return Math.max(1, Math.floor((base * ADJACENCY_COOLDOWN_PERCENT) / 100));
+}
+
 export interface TowerStats {
   damage: number;
   rangeFp: number;
@@ -115,18 +140,21 @@ export interface TowerStats {
   upgradeCost: number | null;
   sellValue: number;
   upgradePath: UpgradePath;
+  /** 目前是不是有相生鄰居在加速——純顯示用,面板/地圖靠這個決定要不要顯示加成標示。 */
+  adjacencyBonusActive: boolean;
 }
 
-/** 給 UI 顯示用(WC3 式選取面板):這座塔目前的實際數值(已套用等級加成)+ 升級/賣出的花費。 */
-export function describeTower(tower: Tower): TowerStats {
+/** 給 UI 顯示用(WC3 式選取面板):這座塔目前的實際數值(已套用等級加成+鄰接加成)+ 升級/賣出的花費。 */
+export function describeTower(tower: Tower, allTowers: readonly Tower[]): TowerStats {
   const def = TOWER_DEFS[tower.element];
   return {
     damage: effectiveDamage(tower),
     rangeFp: def.rangeFp,
-    cooldownTicks: def.cooldownTicks,
+    cooldownTicks: effectiveCooldownTicks(tower, allTowers),
     upgradeCost: upgradeCost(tower),
     sellValue: sellValue(tower),
     upgradePath: tower.upgradePath,
+    adjacencyBonusActive: hasGeneratingNeighbor(tower, allTowers),
   };
 }
 
@@ -180,12 +208,12 @@ export interface CombatEvent {
 /**
  * 讓一座塔嘗試攻擊一次。有打中就直接扣目標血量(呼叫端傳進來的 monster 物件會被修改),
  * 回傳這次攻擊產生的所有事件給 UI 顯示飄動傷害數字用(通常 1 個,splash 路線可能多個);
- * 沒打中回傳空陣列。
+ * 沒打中回傳空陣列。allTowers 是全場所有塔(含自己),用來算鄰接加成(見 hasGeneratingNeighbor)。
  */
-export function tryAttack(tower: Tower, monsters: readonly Monster[]): CombatEvent[] {
+export function tryAttack(tower: Tower, monsters: readonly Monster[], allTowers: readonly Tower[]): CombatEvent[] {
   const def = TOWER_DEFS[tower.element];
   tower.ticksSinceLastAttack += 1;
-  if (tower.ticksSinceLastAttack < def.cooldownTicks) return [];
+  if (tower.ticksSinceLastAttack < effectiveCooldownTicks(tower, allTowers)) return [];
   const target = findTarget(monsters, tower, def);
   if (!target) return [];
   tower.ticksSinceLastAttack = 0;

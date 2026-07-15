@@ -2,7 +2,7 @@
 // 之後要換真正的圖片/精靈只需要改這個檔案內部的畫法,對外介面(renderState/onTilePlaced)不用動。
 
 import Phaser from 'phaser';
-import type { Element } from '../sim/elements';
+import { GENERATED_BY, type Element } from '../sim/elements';
 import {
   FP_SCALE,
   GRID_HEIGHT,
@@ -700,6 +700,31 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * 畫出每一對「五行相生」鄰接的塔之間的連接線(跟 towers.ts 的 hasGeneratingNeighbor() 是
+   * 同一套判定規則,8 方向鄰接)。用 Set 記錄已經畫過的塔對,同一對 A-B 不會因為從 A 跟從 B
+   * 各掃到一次就畫兩條重疊的線。線的顏色是「生」的那個來源元素的顏色,直覺對應「誰在滋養誰」。
+   */
+  private drawAdjacencyLinks(g: Phaser.GameObjects.Graphics, towers: readonly Tower[]): void {
+    const drawnPairs = new Set<string>();
+    for (const t of towers) {
+      const sourceElement = GENERATED_BY[t.element];
+      for (const other of towers) {
+        if (other.id === t.id || other.element !== sourceElement) continue;
+        if (Math.abs(other.x - t.x) > 1 || Math.abs(other.y - t.y) > 1) continue;
+        const key = t.id < other.id ? `${t.id}-${other.id}` : `${other.id}-${t.id}`;
+        if (drawnPairs.has(key)) continue;
+        drawnPairs.add(key);
+        const cx1 = t.x * TILE_PX + TILE_PX / 2;
+        const cy1 = t.y * TILE_PX + TILE_PX / 2;
+        const cx2 = other.x * TILE_PX + TILE_PX / 2;
+        const cy2 = other.y * TILE_PX + TILE_PX / 2;
+        g.lineStyle(2 * SCALE, ELEMENT_COLORS[sourceElement], 0.55);
+        g.lineBetween(cx1, cy1, cx2, cy2);
+      }
+    }
+  }
+
   /** 列出某條路徑經過的所有格子座標,跟 map.ts 的 computePathTiles() 是同一套走法,只是這裡要分開算單一路徑。 */
   private tilesForPath(pathId: number): Array<[number, number]> {
     const tiles: Array<[number, number]> = [];
@@ -723,6 +748,12 @@ export class GameScene extends Phaser.Scene {
     // 單人模式只有自己,不需要標示「誰蓋的」;多人才需要,顏色取 ownerColorHex()(依 state.gold
     // 的 key 排序決定,所有機器算出來的顏色都一樣)。
     const multiplayer = isMultiplayer(state);
+
+    // 五行相生鄰接加成(見 towers.ts 的 hasGeneratingNeighbor())純粹是數值效果,畫面上完全
+    // 看不出來的話玩家沒辦法學會這個組合玩法,所以疊一條連接線提示「這兩座塔在互相加成」。
+    // dynamicLayer 本身就是 setDepth(2),不管在函式裡多早/多晚畫都一定蓋在塔圖片(depth 1)
+    // 上面,這裡刻意排在最前面純粹是不想被待會的選取白框/血條蓋住而已。
+    this.drawAdjacencyLinks(g, state.towers);
 
     const liveTowerIds = new Set<number>();
     for (const t of state.towers) {

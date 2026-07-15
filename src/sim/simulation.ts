@@ -391,7 +391,7 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   // 一起打死(常見於 splash 路線)只算給第一個把牠打進 0 血以下的塔主人,不會重複計算。
   const killedMonsterIdsThisTick = new Set<number>();
   for (const tower of next.towers) {
-    const events = tryAttack(tower, next.monsters);
+    const events = tryAttack(tower, next.monsters, next.towers);
     const stats = next.playerStats[tower.ownerId];
     for (const event of events) {
       next.combatEvents.push(event);

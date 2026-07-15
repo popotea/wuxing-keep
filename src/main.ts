@@ -76,6 +76,7 @@ const towerPanelRangeEl = $<HTMLSpanElement>('towerPanelRange');
 const towerPanelCooldownEl = $<HTMLSpanElement>('towerPanelCooldown');
 const towerPanelPathRowEl = $<HTMLDivElement>('towerPanelPathRow');
 const towerPanelPathEl = $<HTMLSpanElement>('towerPanelPath');
+const towerPanelAdjacencyRowEl = $<HTMLDivElement>('towerPanelAdjacencyRow');
 const towerPanelStrategySelect = $<HTMLSelectElement>('towerPanelStrategy');
 const towerUpgradeBtn = $<HTMLButtonElement>('towerUpgradeBtn');
 const towerUpgradeCostEl = $<HTMLSpanElement>('towerUpgradeCost');
@@ -360,7 +361,7 @@ function renderTowerPanel(): void {
   towerPanelEl.hidden = !tower;
   if (!tower) return;
 
-  const stats = describeTower(tower);
+  const stats = describeTower(tower, latestState?.towers ?? []);
   const myGold = latestState?.gold[myPlayerId()] ?? 0;
   towerPanelElementEl.textContent = `${TOWER_CHARACTER_NAMES[tower.element]}(${ELEMENT_NAMES[tower.element]}塔)`;
   towerPanelElementEl.className = `element-${tower.element}`;
@@ -375,6 +376,7 @@ function renderTowerPanel(): void {
   // 分岐路線一旦選定(到 UPGRADE_PATH_LEVEL 之後)才顯示這行,選之前不用佔面板版面。
   towerPanelPathRowEl.hidden = tower.upgradePath === 'none';
   if (tower.upgradePath !== 'none') towerPanelPathEl.textContent = UPGRADE_PATH_NAMES[tower.upgradePath];
+  towerPanelAdjacencyRowEl.hidden = !stats.adjacencyBonusActive;
 
   // 升級不分誰的塔,誰都能幫忙出錢升級;賣塔限本人,避免動到別人的投資。
   if (stats.upgradeCost === null) {

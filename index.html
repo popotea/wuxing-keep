@@ -491,6 +491,7 @@
       .tower-panel-level { color: var(--muted); font-weight: normal; font-size: 14px; }
       .tower-panel-owner { color: var(--muted); font-weight: normal; font-size: 13px; margin-left: 4px; }
       .tower-panel-stats { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-bottom: 10px; flex-wrap: wrap; }
+      .tower-panel-adjacency { color: var(--accent); font-weight: bold; }
       .tower-panel-strategy { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
       .tower-panel-strategy select {
         background: var(--panel-2);
@@ -695,6 +696,9 @@
           stroke-linejoin="round"
         />
       </symbol>
+      <symbol id="icon-spark" viewBox="0 0 24 24">
+        <path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor" />
+      </symbol>
     </svg>
 
     <section id="menuScreen">
@@ -854,6 +858,9 @@
           <div><svg class="icon"><use href="#icon-target" /></svg> 範圍 <span id="towerPanelRange">-</span> 格</div>
           <div><svg class="icon"><use href="#icon-clock" /></svg> 攻速 <span id="towerPanelCooldown">-</span>s</div>
           <div id="towerPanelPathRow" hidden><svg class="icon"><use href="#icon-star" /></svg> <span id="towerPanelPath">-</span></div>
+          <div id="towerPanelAdjacencyRow" class="tower-panel-adjacency" hidden>
+            <svg class="icon"><use href="#icon-spark" /></svg> 相生加速中(+15% 攻速)
+          </div>
         </div>
         <label class="tower-panel-strategy">
           集火:
