@@ -2,7 +2,7 @@
 // 之後要換真正的圖片/精靈只需要改這個檔案內部的畫法,對外介面(renderState/onTilePlaced)不用動。
 
 import Phaser from 'phaser';
-import { GENERATED_BY, type Element } from '../sim/elements';
+import { ELEMENT_NAMES, GENERATED_BY, type Element } from '../sim/elements';
 import {
   FP_SCALE,
   GRID_HEIGHT,
@@ -131,6 +131,8 @@ export class GameScene extends Phaser.Scene {
   /** 陷阱上方「Lv.N」文字,獨立一個 Map——塔跟陷阱的 id 是各自獨立的計數器,兩邊都從 1 開始編號,
    * 共用同一個 Map 依 id 存取的話會撞號互相覆蓋/誤刪。 */
   private trapLevelTexts = new Map<number, Phaser.GameObjects.Text>();
+  /** 怪物頭上顯示元素名稱的文字,依 id 建立/更新/銷毀,跟 monsterSprites 走同一套模式。 */
+  private monsterNameTexts = new Map<number, Phaser.GameObjects.Text>();
   private pendingState: SimulationState | null = null;
   private hoverX: number | null = null;
   private hoverY: number | null = null;
@@ -413,6 +415,14 @@ export class GameScene extends Phaser.Scene {
     this.towerSprites.clear();
     for (const sprite of this.monsterSprites.values()) sprite.destroy();
     this.monsterSprites.clear();
+    // 等級/名稱文字物件(Lv.N、怪物元素名稱)也要跟著清掉——新對局的 id 是從頭編號的,
+    // 不清掉的話舊局殘留的文字可能被誤認成同 id 的新實體重複使用(內容沒換成新的)。
+    for (const label of this.towerLevelTexts.values()) label.destroy();
+    this.towerLevelTexts.clear();
+    for (const label of this.trapLevelTexts.values()) label.destroy();
+    this.trapLevelTexts.clear();
+    for (const label of this.monsterNameTexts.values()) label.destroy();
+    this.monsterNameTexts.clear();
   }
 
   private drawStaticLayer(): void {
@@ -798,6 +808,7 @@ export class GameScene extends Phaser.Scene {
       this.renderMonster(g, m);
     }
     this.pruneStaleSprites(this.monsterSprites, liveMonsterIds);
+    this.pruneStaleSprites(this.monsterNameTexts, liveMonsterIds);
   }
 
   /** state 裡已經不存在的 id(賣掉的塔、死掉/走出地圖的怪物)要把對應的 GameObject 銷毀,不然會一直留在畫面上。 */
@@ -893,14 +904,15 @@ export class GameScene extends Phaser.Scene {
     const px = (xFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
     const py = (yFp / FP_SCALE) * TILE_PX + TILE_PX / 2 - (m.moveType === 'air' ? 8 * SCALE : 0);
     const hpRatio = m.hp / m.maxHp;
+    const bossMul = m.isBoss ? 1.8 : 1;
     const key = monsterTextureKey(m.element);
     if (!this.textures.exists(key)) {
       this.monsterSprites.get(m.id)?.destroy();
       this.monsterSprites.delete(m.id);
       this.drawMonster(g, px, py, m.element, hpRatio, m.isBoss);
+      this.drawMonsterNameLabel(m.id, px, py, m.element, bossMul);
       return;
     }
-    const bossMul = m.isBoss ? 1.8 : 1;
     let sprite = this.monsterSprites.get(m.id);
     if (!sprite) {
       sprite = this.add.image(px, py, key).setDepth(1);
@@ -911,6 +923,27 @@ export class GameScene extends Phaser.Scene {
       .setPosition(px, py)
       .setDisplaySize(TILE_PX * MONSTER_IMAGE_DISPLAY_RATIO * bossMul, TILE_PX * MONSTER_IMAGE_DISPLAY_RATIO * bossMul);
     this.drawMonsterOverlay(g, px, py, hpRatio, m.isBoss, bossMul);
+    this.drawMonsterNameLabel(m.id, px, py, m.element, bossMul);
+  }
+
+  /** 怪物頭上顯示元素名稱(金/木/水/火/土),圖片版跟幾何圖形版共用同一個畫法。 */
+  private drawMonsterNameLabel(id: number, px: number, py: number, element: Element, bossMul: number): void {
+    const y = py - 16 * SCALE * bossMul;
+    let label = this.monsterNameTexts.get(id);
+    if (!label) {
+      label = this.add
+        .text(px, y, '', {
+          fontSize: `${9 * SCALE}px`,
+          fontFamily: '"Microsoft JhengHei", sans-serif',
+          color: '#ffffff',
+          stroke: '#000000',
+          strokeThickness: 2 * SCALE,
+        })
+        .setOrigin(0.5, 1)
+        .setDepth(2);
+      this.monsterNameTexts.set(id, label);
+    }
+    label.setPosition(px, y).setText(ELEMENT_NAMES[element]);
   }
 
   /** 血條 + 首領金框,圖片版跟幾何圖形版共用同一個畫法(幾何圖形版的身體本身也另外畫在 drawMonster 裡)。 */
