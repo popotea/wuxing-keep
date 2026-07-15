@@ -22,7 +22,7 @@ export interface GameRenderer {
 
 export function createGameRenderer(
   parentId: string,
-  onTilePlaced: (x: number, y: number) => void,
+  onTilePlaced: (x: number, y: number, screenX: number, screenY: number) => void,
   onTowerSelected: (towerId: number | null) => void,
 ): GameRenderer {
   const scene = new GameScene();

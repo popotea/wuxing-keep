@@ -114,11 +114,32 @@
       label.element-water { color: var(--water); }
       label.element-fire { color: var(--fire); }
       label.element-earth { color: var(--earth); }
-      label.build-tower { color: var(--text); }
-      label.build-trap { color: var(--muted); }
-      label.build-resource { color: var(--accent); }
 
-      /* ---- 選擇彈窗:隨機英雄選擇(蓋塔)、升級選路線都共用 ---- */
+      /* ---- 選擇按鈕(choice-option):選擇彈窗(升級選路線)跟浮動建造選單共用同一套按鈕外觀 ---- */
+      button.choice-option {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 110px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 16px;
+        background: var(--panel-2);
+        color: inherit;
+        font-weight: bold;
+        cursor: pointer;
+        text-align: left;
+        transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+      }
+      button.choice-option:hover:not(:disabled) {
+        border-color: currentColor;
+        transform: translateY(-1px);
+        box-shadow: 0 0 14px -3px currentColor;
+      }
+      button.choice-option:disabled { opacity: 0.4; cursor: default; }
+      button.choice-option small { font-weight: normal; color: var(--muted); font-size: 11px; }
+
+      /* ---- 選擇彈窗(全螢幕黑幕置中):目前只有「升級選路線」用這個 ---- */
       .choice-modal-overlay {
         display: none;
         position: fixed;
@@ -132,33 +153,29 @@
       .choice-modal-panel { padding: 24px 28px; text-align: center; min-width: 320px; max-width: 90vw; }
       .choice-modal-panel h3 { margin: 0 0 14px; }
       .choice-modal-panel .choice-row { margin-bottom: 14px; flex-wrap: wrap; }
-      .choice-modal-panel button.choice-option {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        min-width: 110px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 10px 16px;
-        background: var(--panel-2);
-        color: inherit;
-        font-weight: bold;
-        cursor: pointer;
-        transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
-      }
-      .choice-modal-panel button.choice-option:hover:not(:disabled) {
-        border-color: currentColor;
-        transform: translateY(-1px);
-        box-shadow: 0 0 14px -3px currentColor;
-      }
-      .choice-modal-panel button.choice-option:disabled { opacity: 0.4; cursor: default; }
-      .choice-modal-panel button.choice-option small { font-weight: normal; color: var(--muted); font-size: 11px; }
+      .choice-modal-panel .choice-row button.choice-option { text-align: center; }
       #choiceModalCancelBtn { background: transparent; border-color: var(--border); color: var(--muted); }
       #choiceModalCancelBtn:hover { border-color: var(--fire); color: var(--fire); }
 
-      /* ---- 建造花費提示 + 金幣不足的訊息提示(toast) ---- */
-      #buildCostHint { text-align: center; font-size: 13px; color: var(--muted); min-height: 1.4em; margin: -6px 0 4px; }
-      #buildCostHint.cost-insufficient { color: var(--fire); font-weight: bold; }
+      /* ---- 浮動建造選單:點地圖格子才浮現,定位在點擊處附近,不是固定佔用畫面底部 ---- */
+      /* 透明的點擊接收層,點選單以外的地方會關掉選單,但不會讓畫面變暗(跟 choice-modal-overlay 不同)。 */
+      #floatingBuildBackdrop { display: none; position: fixed; inset: 0; z-index: 24; background: transparent; }
+      #floatingBuildBackdrop.show { display: block; }
+      #floatingBuildMenu {
+        display: none;
+        position: fixed;
+        z-index: 25;
+        flex-direction: column;
+        gap: 6px;
+        background: rgba(15, 18, 24, 0.92);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px;
+        box-shadow: var(--shadow-soft);
+      }
+      #floatingBuildMenu.show { display: flex; }
+
+      /* ---- 金幣不足等訊息提示(toast) ---- */
       /* 不用 hidden 屬性控制顯示(opacity 淡入淡出需要一直是 display:block 才能轉場),
          預設 opacity:0 藏起來,JS 加上 .show class 才淡入,對照 #gameScreen 那個
          [hidden] 被蓋掉的教訓,這裡乾脆不混用 hidden 屬性。 */
@@ -320,29 +337,41 @@
         animation: fade-in-up 0.3s ease-out;
       }
       #gameScreen[hidden] { display: none; }
+      /* 浮動貼在右上角(2026-07-15 改的,原本是滿版寬度的實體面板,佔掉一整塊畫面)。
+         pointer-events:none 讓 HUD 不會擋住底下地圖的點擊,反正裡面全是純顯示文字不用互動。 */
       #hud {
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        z-index: 10;
         display: flex;
-        gap: 10px;
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 8px 14px;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 6px;
         font-size: 15px;
-        box-shadow: var(--shadow-soft);
+        pointer-events: none;
       }
       .hud-stat {
         display: flex;
         align-items: center;
         gap: 6px;
         white-space: nowrap;
-        background: rgba(255, 255, 255, 0.03);
+        background: rgba(15, 18, 24, 0.75);
         border: 1px solid var(--border);
         border-radius: 20px;
         padding: 5px 12px;
+        box-shadow: var(--shadow-soft);
       }
       .lives-bar-outer { width: 140px; height: 12px; background: #333; border-radius: 6px; overflow: hidden; }
       #livesBar { height: 100%; width: 100%; background: var(--wood); transition: width 0.2s, background 0.2s; }
       .lives-bar-outer.lives-critical { animation: pulse-danger 1s ease-in-out infinite; }
-      #bonusWave { font-weight: bold; color: var(--accent); min-height: 1.2em; text-shadow: 0 0 10px rgba(212, 175, 55, 0.4); }
+      #bonusWave {
+        font-weight: bold;
+        color: var(--accent);
+        text-shadow: 0 0 10px rgba(212, 175, 55, 0.4);
+        text-align: right;
+      }
+      #bonusWave:empty { display: none; }
       #gameCanvas {
         border: 2px solid var(--border);
         border-radius: 6px;
@@ -683,7 +712,8 @@
     </section>
 
     <section id="gameScreen" hidden>
-      <div id="hud" class="panel-frame">
+      <!-- 浮動貼在右上角,不佔用畫面區塊(2026-07-15 改的,原本是滿版寬度的實體面板)。 -->
+      <div id="hud">
         <div class="hud-stat">
           <svg class="icon" style="color: var(--accent)"><use href="#icon-coin" /></svg> <span id="gold">-</span>
         </div>
@@ -694,12 +724,15 @@
         <div class="hud-stat">
           第 <span id="waveNumber">-</span> 波 ｜ 下一波 <span id="nextWaveElement">-</span> · <span id="nextWave">-</span>
         </div>
+        <div id="bonusWave"></div>
       </div>
-      <div id="bonusWave"></div>
       <div id="gameCanvas"></div>
-      <div class="choice-row" id="buildBar"></div>
-      <div id="buildCostHint"></div>
       <div id="toast"></div>
+
+      <!-- 蓋塔改成點地圖上的格子才浮現(main.ts 的 showFloatingBuildMenu()),不是固定佔用底部一整塊。
+           floatingBuildBackdrop 是透明的,純粹用來接「點別處關掉選單」的點擊,不會讓畫面變暗。 -->
+      <div id="floatingBuildBackdrop"></div>
+      <div id="floatingBuildMenu"></div>
 
       <div id="towerPanel" class="tower-panel panel-frame" hidden>
         <div class="tower-panel-header">

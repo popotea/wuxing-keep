@@ -88,8 +88,12 @@ function tileHash(x: number, y: number): number {
 }
 
 export class GameScene extends Phaser.Scene {
-  /** main.ts 在 new GameScene() 之後、Phaser boot 完成 create() 之前就會設定好這個 callback。 */
-  onTilePlaced: ((x: number, y: number) => void) | null = null;
+  /**
+   * main.ts 在 new GameScene() 之後、Phaser boot 完成 create() 之前就會設定好這個 callback。
+   * screenX/screenY 是點擊當下畫布內的像素座標(Phaser Pointer 座標,不是頁面座標),
+   * main.ts 用來把浮動建造選單定位在點擊處附近(而不是固定佔用畫面底部一整塊)。
+   */
+  onTilePlaced: ((x: number, y: number, screenX: number, screenY: number) => void) | null = null;
   /** 選到塔(WC3 式:點塔是選取,不是直接升級)或取消選取時呼叫,null 代表沒有選取任何塔。 */
   onTowerSelected: ((towerId: number | null) => void) | null = null;
 
@@ -171,7 +175,7 @@ export class GameScene extends Phaser.Scene {
         return;
       }
       this.setSelectedTower(null);
-      this.onTilePlaced?.(x, y);
+      this.onTilePlaced?.(x, y, pointer.x, pointer.y);
     });
 
     // renderState() 可能在 Phaser 完成 boot、create() 真正執行前就先被呼叫,

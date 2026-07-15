@@ -8,7 +8,7 @@ import type { Action, PlayerInfo } from './net/protocol';
 import { createGameRenderer } from './game/PhaserGame';
 import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
 import { LOCAL_PLAYER_ID, LocalEngine } from './sim/localEngine';
-import { FP_SCALE } from './sim/map';
+import { FP_SCALE, isOnPath } from './sim/map';
 import { activeBonusWaveInfo, currentWaveNumber, ticksUntilNextWave, upcomingWaveDef } from './sim/monsters';
 import { RESOURCE_BUILDING_COST, TRAP_COST } from './sim/placements';
 import { STARTING_LIVES, type SimulationState } from './sim/simulation';
@@ -59,9 +59,9 @@ const readyBtn = $<HTMLButtonElement>('readyBtn');
 const startBtn = $<HTMLButtonElement>('startBtn');
 const startHintEl = $<HTMLParagraphElement>('startHint');
 const leaveRoomBtn = $<HTMLButtonElement>('leaveRoomBtn');
-const buildBarEl = $<HTMLDivElement>('buildBar');
-const buildCostHintEl = $<HTMLDivElement>('buildCostHint');
 const toastEl = $<HTMLDivElement>('toast');
+const floatingBuildMenuEl = $<HTMLDivElement>('floatingBuildMenu');
+const floatingBuildBackdropEl = $<HTMLDivElement>('floatingBuildBackdrop');
 const choiceModalOverlayEl = $<HTMLDivElement>('choiceModalOverlay');
 const choiceModalTitleEl = $<HTMLHeadingElement>('choiceModalTitle');
 const choiceModalOptionsEl = $<HTMLDivElement>('choiceModalOptions');
@@ -121,11 +121,7 @@ function displayNameFor(playerId: string): string {
   return room?.getRoster().find((p) => p.playerId === playerId)?.name ?? playerId;
 }
 
-/** 建塔列現在是「蓋塔(隨機英雄選擇)/陷阱/資源建築」三選一模式,不再直接選屬性。 */
-type BuildMode = 'tower' | 'trap' | 'resource';
-
-/** 蓋塔模式下,依玩家自己選的屬性算出這次要隨機提供哪些選項(WC3 英雄選擇式);
- * 只有 1 個允許屬性就沒有真的選擇可言,直接回傳那 1 個,不用跳彈窗。 */
+/** 依玩家自己選的屬性算出這次要隨機提供哪些蓋塔選項(WC3 英雄選擇式),最多 3 個。 */
 function randomTowerOffer(): Element[] {
   const allowed = latestState?.playerElements[myPlayerId()] ?? ALL_ELEMENTS;
   const shuffled = [...allowed];
@@ -134,20 +130,6 @@ function randomTowerOffer(): Element[] {
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
   return shuffled.slice(0, Math.min(3, shuffled.length));
-}
-
-function buildModeLabel(mode: BuildMode): string {
-  if (mode === 'trap') return '陷阱';
-  if (mode === 'resource') return '資源建築';
-  return '塔';
-}
-
-/** 蓋塔列下方的花費提示用:蓋塔模式沒有固定花費(隨機英雄選擇,每個屬性都一樣是塔的基礎價),
- * 這裡用任一屬性的造價當代表值即可,陷阱/資源建築本來就是固定價。 */
-function buildModeCost(mode: BuildMode): number {
-  if (mode === 'trap') return TRAP_COST;
-  if (mode === 'resource') return RESOURCE_BUILDING_COST;
-  return Math.min(...ALL_ELEMENTS.map((el) => TOWER_DEFS[el].cost));
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -195,69 +177,103 @@ function hideChoiceModal(): void {
 choiceModalCancelBtn.addEventListener('click', hideChoiceModal);
 
 /** 建塔列下方的花費提示,金幣不夠時變色——跟著目前選的建造模式 + 自己的金幣即時更新。 */
-function renderBuildCostHint(): void {
-  const mode = currentBuildMode();
-  const cost = buildModeCost(mode);
-  const myGold = latestState?.gold[myPlayerId()] ?? 0;
-  const insufficient = myGold < cost;
-  buildCostHintEl.textContent = `建造${buildModeLabel(mode)}花費:${cost} 金幣${insufficient ? '(金幣不足)' : ''}`;
-  buildCostHintEl.classList.toggle('cost-insufficient', insufficient);
-}
-
-/** 蓋塔模式:隨機提供最多 3 個屬性選項給玩家挑(WC3 英雄選擇式),只有 1 個允許屬性就直接蓋不跳彈窗。 */
-function tryBuildTowerAt(x: number, y: number): void {
-  const offer = randomTowerOffer();
-  const myGold = latestState?.gold[myPlayerId()] ?? 0;
-
-  if (offer.length <= 1) {
-    const element = offer[0] ?? 'metal';
-    const cost = TOWER_DEFS[element].cost;
-    if (myGold < cost) {
-      showToast(`金幣不足!建造${ELEMENT_NAMES[element]}塔需要 ${cost} 金幣`);
-      return;
-    }
-    submitAction({ kind: 'build_tower', params: { x, y, element } });
-    return;
+/**
+ * 浮動建造選單:定位在點擊處附近的畫布像素座標(換算成頁面座標),不像以前的建塔列
+ * 固定佔用畫面底部一整塊。floatingBuildBackdropEl 是透明的點擊接收層,點選單以外的
+ * 地方會關掉選單,但不會讓畫面變暗(跟 showChoiceModal 的全螢幕黑幕彈窗不同用途)。
+ */
+function showFloatingBuildMenu(canvasX: number, canvasY: number, options: ChoiceOption[]): void {
+  floatingBuildMenuEl.innerHTML = '';
+  for (const opt of options) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'choice-option';
+    btn.disabled = opt.disabled ?? false;
+    btn.innerHTML = opt.sublabel
+      ? `${escapeHtml(opt.label)}<small>${escapeHtml(opt.sublabel)}</small>`
+      : escapeHtml(opt.label);
+    btn.addEventListener('click', () => {
+      hideFloatingBuildMenu();
+      opt.onChoose();
+    });
+    floatingBuildMenuEl.appendChild(btn);
   }
 
-  showChoiceModal(
-    '選擇要蓋的塔(隨機提供)',
-    offer.map((element) => {
-      const cost = TOWER_DEFS[element].cost;
-      return {
-        label: `${TOWER_CHARACTER_NAMES[element]}`,
-        sublabel: `${ELEMENT_NAMES[element]}塔 · ${cost} 金幣`,
-        disabled: myGold < cost,
-        onChoose: () => {
-          if ((latestState?.gold[myPlayerId()] ?? 0) < cost) {
-            showToast(`金幣不足!建造${ELEMENT_NAMES[element]}塔需要 ${cost} 金幣`);
-            return;
-          }
-          submitAction({ kind: 'build_tower', params: { x, y, element } });
-        },
-      };
-    }),
-  );
+  const canvasRect = document.getElementById('gameCanvas')?.getBoundingClientRect();
+  const pageX = (canvasRect?.left ?? 0) + canvasX;
+  const pageY = (canvasRect?.top ?? 0) + canvasY;
+  // 夾在視窗範圍內,避免選單超出畫面邊緣被裁掉看不到(選單實際大小要等內容塞進去後才知道,
+  // 這裡用保守的估計值當夾取上限,足夠應付目前最多 4 個選項的版面)。
+  const MENU_WIDTH_GUESS = 180;
+  const MENU_HEIGHT_GUESS = 240;
+  floatingBuildMenuEl.style.left = `${Math.max(8, Math.min(pageX, window.innerWidth - MENU_WIDTH_GUESS))}px`;
+  floatingBuildMenuEl.style.top = `${Math.max(8, Math.min(pageY, window.innerHeight - MENU_HEIGHT_GUESS))}px`;
+
+  floatingBuildMenuEl.classList.add('show');
+  floatingBuildBackdropEl.classList.add('show');
 }
+
+function hideFloatingBuildMenu(): void {
+  floatingBuildMenuEl.classList.remove('show');
+  floatingBuildBackdropEl.classList.remove('show');
+}
+
+floatingBuildBackdropEl.addEventListener('click', hideFloatingBuildMenu);
 
 const gameRenderer = createGameRenderer(
   'gameCanvas',
-  (x, y) => {
+  (x, y, screenX, screenY) => {
     // GameScene 只有點到「空地」才會呼叫這裡——點到已經有塔的格子是選取,見下面 onTowerSelected。
     if (!matchActive || (!room && !localEngine)) return;
-    const mode = currentBuildMode();
-    if (mode === 'tower') {
-      tryBuildTowerAt(x, y);
-      return;
-    }
-    const cost = buildModeCost(mode);
     const myGold = latestState?.gold[myPlayerId()] ?? 0;
-    if (myGold < cost) {
-      showToast(`金幣不足!建造${buildModeLabel(mode)}需要 ${cost} 金幣`);
-      return;
+    const options: ChoiceOption[] = [];
+
+    if (isOnPath(x, y)) {
+      // 路徑格只能蓋陷阱(規則跟塔相反),不會有塔/資源建築可選。
+      options.push({
+        label: '陷阱',
+        sublabel: `${TRAP_COST} 金幣`,
+        disabled: myGold < TRAP_COST,
+        onChoose: () => {
+          if ((latestState?.gold[myPlayerId()] ?? 0) < TRAP_COST) {
+            showToast(`金幣不足!建造陷阱需要 ${TRAP_COST} 金幣`);
+            return;
+          }
+          submitAction({ kind: 'build_trap', params: { x, y } });
+        },
+      });
+    } else {
+      // 非路徑格:隨機英雄選擇(最多 3 個屬性,WC3 TD 手塔風味)+ 資源建築。
+      for (const element of randomTowerOffer()) {
+        const cost = TOWER_DEFS[element].cost;
+        options.push({
+          label: TOWER_CHARACTER_NAMES[element],
+          sublabel: `${ELEMENT_NAMES[element]}塔 · ${cost} 金幣`,
+          disabled: myGold < cost,
+          onChoose: () => {
+            if ((latestState?.gold[myPlayerId()] ?? 0) < cost) {
+              showToast(`金幣不足!建造${ELEMENT_NAMES[element]}塔需要 ${cost} 金幣`);
+              return;
+            }
+            submitAction({ kind: 'build_tower', params: { x, y, element } });
+          },
+        });
+      }
+      options.push({
+        label: '資源建築',
+        sublabel: `${RESOURCE_BUILDING_COST} 金幣`,
+        disabled: myGold < RESOURCE_BUILDING_COST,
+        onChoose: () => {
+          if ((latestState?.gold[myPlayerId()] ?? 0) < RESOURCE_BUILDING_COST) {
+            showToast(`金幣不足!建造資源建築需要 ${RESOURCE_BUILDING_COST} 金幣`);
+            return;
+          }
+          submitAction({ kind: 'build_resource_building', params: { x, y } });
+        },
+      });
     }
-    if (mode === 'trap') submitAction({ kind: 'build_trap', params: { x, y } });
-    else submitAction({ kind: 'build_resource_building', params: { x, y } });
+
+    showFloatingBuildMenu(screenX, screenY, options);
   },
   (towerId) => {
     selectedTowerId = towerId;
@@ -340,15 +356,19 @@ towerPanelStrategySelect.addEventListener('change', () => {
   });
 });
 
-// 快捷鍵:數字鍵 1~3 切建塔列模式(蓋塔/陷阱/資源建築)、Delete/Backspace 賣掉選中的塔、
-// Esc 取消選取(或關掉選擇彈窗)。只在對局畫面生效,且游標在任何輸入框裡(暱稱/房號等)時整個忽略,
-// 不然打字會被誤判成快捷鍵。
+// 快捷鍵:數字鍵選浮動選單(建造選單或升級路線選單,哪個開著就選哪個)的第 N 個選項、
+// Delete/Backspace 賣掉選中的塔、Esc 關掉開著的選單或取消選取。只在對局畫面生效,
+// 且游標在任何輸入框裡(暱稱/房號等)時整個忽略,不然打字會被誤判成快捷鍵。
 window.addEventListener('keydown', (ev) => {
   if (gameScreenEl.hidden) return;
   const activeTag = document.activeElement?.tagName;
   if (activeTag === 'INPUT' || activeTag === 'SELECT' || activeTag === 'TEXTAREA') return;
 
   if (ev.key === 'Escape') {
+    if (floatingBuildMenuEl.classList.contains('show')) {
+      hideFloatingBuildMenu();
+      return;
+    }
     if (choiceModalOverlayEl.classList.contains('show')) {
       hideChoiceModal();
       return;
@@ -363,14 +383,13 @@ window.addEventListener('keydown', (ev) => {
     return;
   }
   const slot = Number(ev.key);
-  if (Number.isInteger(slot) && slot >= 1 && slot <= 3) {
-    const radios = buildBarEl.querySelectorAll<HTMLInputElement>('input[name="element"]');
-    const radio = radios[slot - 1];
-    if (radio) {
-      radio.checked = true;
-      renderBuildCostHint();
-    }
-  }
+  if (!Number.isInteger(slot) || slot < 1 || slot > 4) return;
+  const openMenu = floatingBuildMenuEl.classList.contains('show')
+    ? floatingBuildMenuEl
+    : choiceModalOverlayEl.classList.contains('show')
+      ? choiceModalOptionsEl
+      : null;
+  openMenu?.querySelectorAll<HTMLButtonElement>('button.choice-option')[slot - 1]?.click();
 });
 
 function log(msg: string): void {
@@ -516,29 +535,6 @@ function selectedElements(scope: HTMLElement): Element[] {
 function selectedDifficulty(container: HTMLElement): number {
   const checked = container.querySelector<HTMLInputElement>('input[name="difficulty"]:checked');
   return Number(checked?.value) || 100;
-}
-
-/** 目前建塔列選到的模式(對局中,建塔列已經被 populateBuildBar 產生過)。 */
-function currentBuildMode(): BuildMode {
-  const checked = buildBarEl.querySelector<HTMLInputElement>('input[name="element"]:checked');
-  return (checked?.value as BuildMode | undefined) ?? 'tower';
-}
-
-/** 建塔列固定是「蓋塔(隨機英雄選擇)/陷阱/資源建築」三個模式,不再逐屬性列出——
- * 蓋塔要蓋哪個屬性改成點地圖時才隨機提供選項(見 tryBuildTowerAt),不受這裡影響。 */
-function populateBuildBar(): void {
-  buildBarEl.innerHTML = `
-    <input type="radio" id="build-tower" name="element" value="tower" checked />
-    <label for="build-tower" class="build-tower">蓋塔</label>
-    <input type="radio" id="build-trap" name="element" value="trap" />
-    <label for="build-trap" class="build-trap">陷阱</label>
-    <input type="radio" id="build-resource" name="element" value="resource" />
-    <label for="build-resource" class="build-resource">資源建築</label>
-  `;
-  buildBarEl.querySelectorAll<HTMLInputElement>('input[name="element"]').forEach((input) => {
-    input.addEventListener('change', renderBuildCostHint);
-  });
-  renderBuildCostHint();
 }
 
 // 單人/連線都通用的「最佳紀錄」——存在這台瀏覽器的 localStorage,跟房間/連線無關。
@@ -747,7 +743,6 @@ const lockstepHandlers: LockstepHandlers = {
     tickEl.textContent = String(state.tick);
     checksumEl.textContent = state.checksum;
     goldEl.textContent = String(state.gold[myPlayerId()] ?? 0);
-    renderBuildCostHint();
     livesEl.textContent = String(state.lives);
     renderLivesBar(state.lives);
     renderWaveHud(state.tick);
@@ -794,7 +789,6 @@ const roomHandlers: RoomHandlers = {
     if (!room) return;
     const me = payload.roster.find((p) => p.playerId === room?.getMyPlayerId());
     myElementCountThisMatch = me?.elements.length ?? 5;
-    populateBuildBar();
     if (room.getRole() === 'host') {
       hostEngine = new HostLockstepEngine(
         room,
@@ -850,7 +844,6 @@ soloBtn.addEventListener('click', () => {
   gameRenderer.resetCamera();
   everSoldTowerThisMatch = false;
   myElementCountThisMatch = elements.length;
-  populateBuildBar();
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   localEngine = new LocalEngine(
     seed,
