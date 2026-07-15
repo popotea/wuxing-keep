@@ -4,8 +4,9 @@
 import Phaser from 'phaser';
 import type { Element } from '../sim/elements';
 import { FP_SCALE, GRID_HEIGHT, GRID_WIDTH, inBounds, isOnPath, PATHS, worldPositionFp } from '../sim/map';
+import type { Monster } from '../sim/monsters';
 import type { SimulationState } from '../sim/simulation';
-import { MAX_TOWER_LEVEL, TOWER_DEFS, type CombatEvent } from '../sim/towers';
+import { MAX_TOWER_LEVEL, TOWER_DEFS, type CombatEvent, type Tower } from '../sim/towers';
 
 export const TILE_PX = 40;
 // 塔/怪物的造型尺寸都是照 TILE_PX=32 時的手感調的,乘這個比例就能跟著 TILE_PX 一起放大,不用重調數字。
@@ -47,6 +48,32 @@ const DECOR_IMAGE_FILES: Record<string, string> = {
 };
 const DECOR_IMAGE_KEYS = Object.keys(DECOR_IMAGE_FILES);
 
+// tools/ai-hub 或 scripts/generate-tower-monster-assets.mjs 產出的正式美術(見 docs/ART_PIPELINE.md),
+// 檔名對應 public/assets/towers|monsters/<element>.png。缺檔/載入失敗會自動退回下面的幾何圖形畫法。
+const TOWER_IMAGE_FILES: Record<Element, string> = {
+  metal: 'metal.png',
+  wood: 'wood.png',
+  water: 'water.png',
+  fire: 'fire.png',
+  earth: 'earth.png',
+};
+const MONSTER_IMAGE_FILES: Record<Element, string> = {
+  metal: 'metal.png',
+  wood: 'wood.png',
+  water: 'water.png',
+  fire: 'fire.png',
+  earth: 'earth.png',
+};
+const TOWER_IMAGE_DISPLAY_RATIO = 0.85;
+const MONSTER_IMAGE_DISPLAY_RATIO = 0.55;
+
+function towerTextureKey(element: Element): string {
+  return `tower-${element}`;
+}
+function monsterTextureKey(element: Element): string {
+  return `monster-${element}`;
+}
+
 /** 純視覺用的簡單雜湊(不是密碼學等級),只用來決定哪幾格灑裝飾物、灑哪一種,裝飾物不是模擬狀態不用管跨機器一不一致。 */
 function tileHash(x: number, y: number): number {
   let h = (x * 374761393 + y * 668265263) ^ 0x9e3779b9;
@@ -63,6 +90,9 @@ export class GameScene extends Phaser.Scene {
   private dynamicLayer!: Phaser.GameObjects.Graphics;
   private previewLayer!: Phaser.GameObjects.Graphics;
   private minimapLayer!: Phaser.GameObjects.Graphics;
+  /** 有正式美術圖時才會用到:塔/怪物各自的 Image,依 id 持久保留(不像 Graphics 每 tick 清掉重畫)。 */
+  private towerSprites = new Map<number, Phaser.GameObjects.Image>();
+  private monsterSprites = new Map<number, Phaser.GameObjects.Image>();
   private pendingState: SimulationState | null = null;
   private hoverX: number | null = null;
   private hoverY: number | null = null;
@@ -78,14 +108,22 @@ export class GameScene extends Phaser.Scene {
     for (const key of DECOR_IMAGE_KEYS) {
       this.load.image(key, `/assets/decor/${DECOR_IMAGE_FILES[key]}`);
     }
+    for (const element of Object.keys(TOWER_IMAGE_FILES) as Element[]) {
+      this.load.image(towerTextureKey(element), `/assets/towers/${TOWER_IMAGE_FILES[element]}`);
+    }
+    for (const element of Object.keys(MONSTER_IMAGE_FILES) as Element[]) {
+      this.load.image(monsterTextureKey(element), `/assets/monsters/${MONSTER_IMAGE_FILES[element]}`);
+    }
   }
 
   create(): void {
     this.drawStaticLayer();
     this.drawDecorations();
-    this.dynamicLayer = this.add.graphics();
-    this.previewLayer = this.add.graphics();
-    this.minimapLayer = this.add.graphics().setScrollFactor(0); // 固定貼在螢幕上,不隨鏡頭捲動
+    // 明確指定 depth,不依賴建立順序:塔/怪物 Image(depth 1)在下,dynamicLayer 的疊加圖層
+    // (血條/選取框/射程圈/等級光點,depth 2)蓋在圖片上面,再上面依序是預覽格跟固定貼齊螢幕的小地圖。
+    this.dynamicLayer = this.add.graphics().setDepth(2);
+    this.previewLayer = this.add.graphics().setDepth(3);
+    this.minimapLayer = this.add.graphics().setScrollFactor(0).setDepth(4); // 固定貼在螢幕上,不隨鏡頭捲動
     // 世界(地圖)比畫布視窗大很多,鏡頭預設從左上角開始,靠邊緣平移才看得到其他區域。
     this.cameras.main.setBounds(0, 0, GRID_WIDTH * TILE_PX, GRID_HEIGHT * TILE_PX);
 
@@ -270,9 +308,17 @@ export class GameScene extends Phaser.Scene {
     if (this.pendingState && this.dynamicLayer) this.drawDynamicLayer(this.pendingState);
   }
 
-  /** 新對局開始時呼叫:Phaser.Game 整個網頁只建立一次、跨對局重複使用,鏡頭捲動位置不會自己歸零回左上角。 */
+  /**
+   * 新對局開始時呼叫:Phaser.Game 整個網頁只建立一次、跨對局重複使用,鏡頭捲動位置不會自己歸零回左上角。
+   * 同時清掉上一局留下的塔/怪物 Image——新對局的 id 是從頭編號的,不清掉的話舊局的 sprite
+   * 可能被誤認成同 id 的新實體重複使用(貼圖沒換成新的元素)。
+   */
   resetCamera(): void {
     this.cameras.main.setScroll(0, 0);
+    for (const sprite of this.towerSprites.values()) sprite.destroy();
+    this.towerSprites.clear();
+    for (const sprite of this.monsterSprites.values()) sprite.destroy();
+    this.monsterSprites.clear();
   }
 
   private drawStaticLayer(): void {
@@ -502,7 +548,12 @@ export class GameScene extends Phaser.Scene {
     const g = this.dynamicLayer;
     g.clear();
 
-    for (const t of state.towers) this.drawTower(g, t.x, t.y, t.element, t.level);
+    const liveTowerIds = new Set<number>();
+    for (const t of state.towers) {
+      liveTowerIds.add(t.id);
+      this.renderTower(g, t);
+    }
+    this.pruneStaleSprites(this.towerSprites, liveTowerIds);
 
     if (this.selectedTowerId !== null) {
       const selected = state.towers.find((t) => t.id === this.selectedTowerId);
@@ -519,15 +570,103 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    const liveMonsterIds = new Set<number>();
     for (const m of state.monsters) {
-      const { xFp, yFp } = worldPositionFp(m.pos);
-      const px = (xFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
-      const py = (yFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
-      this.drawMonster(g, px, py, m.element, m.hp / m.maxHp, m.isBoss);
+      liveMonsterIds.add(m.id);
+      this.renderMonster(g, m);
+    }
+    this.pruneStaleSprites(this.monsterSprites, liveMonsterIds);
+  }
+
+  /** state 裡已經不存在的 id(賣掉的塔、死掉/走出地圖的怪物)要把對應的 Image 銷毀,不然會一直留在畫面上。 */
+  private pruneStaleSprites(sprites: Map<number, Phaser.GameObjects.Image>, liveIds: Set<number>): void {
+    for (const [id, sprite] of sprites) {
+      if (liveIds.has(id)) continue;
+      sprite.destroy();
+      sprites.delete(id);
     }
   }
 
-  /** 底座 + 尖塔的簡易造型,比純色圓形更有辨識度;等級用塔尖上方的一排小點表示。 */
+  /** 有正式美術圖就用 Image 顯示(位置不變,只需要更新等級光點);沒有就退回原本的幾何圖形畫法。 */
+  private renderTower(g: Phaser.GameObjects.Graphics, t: Tower): void {
+    const key = towerTextureKey(t.element);
+    if (!this.textures.exists(key)) {
+      this.towerSprites.get(t.id)?.destroy();
+      this.towerSprites.delete(t.id);
+      this.drawTower(g, t.x, t.y, t.element, t.level);
+      return;
+    }
+    const cx = t.x * TILE_PX + TILE_PX / 2;
+    const cy = t.y * TILE_PX + TILE_PX / 2;
+    let sprite = this.towerSprites.get(t.id);
+    if (!sprite) {
+      sprite = this.add.image(cx, cy, key).setDepth(1);
+      this.towerSprites.set(t.id, sprite);
+    }
+    sprite.setTexture(key).setPosition(cx, cy).setDisplaySize(TILE_PX * TOWER_IMAGE_DISPLAY_RATIO, TILE_PX * TOWER_IMAGE_DISPLAY_RATIO);
+    this.drawTowerLevelPips(g, cx, cy, t.level);
+  }
+
+  /** 塔上方一排小白點表示等級,圖片版跟幾何圖形版共用同一個畫法。 */
+  private drawTowerLevelPips(g: Phaser.GameObjects.Graphics, cx: number, cy: number, level: number): void {
+    const pipSpacing = 5 * SCALE;
+    const pipsWidth = (Math.min(level, MAX_TOWER_LEVEL) - 1) * pipSpacing;
+    for (let i = 0; i < level; i++) {
+      g.fillStyle(0xffffff, 1);
+      g.fillCircle(cx - pipsWidth / 2 + i * pipSpacing, cy - TILE_PX / 2 + 3 * SCALE, 1.5 * SCALE);
+    }
+  }
+
+  /** 有正式美術圖就用 Image 顯示(每 tick 更新位置/縮放);沒有就退回原本的幾何圖形畫法。 */
+  private renderMonster(g: Phaser.GameObjects.Graphics, m: Monster): void {
+    const { xFp, yFp } = worldPositionFp(m.pos);
+    const px = (xFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
+    const py = (yFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
+    const hpRatio = m.hp / m.maxHp;
+    const key = monsterTextureKey(m.element);
+    if (!this.textures.exists(key)) {
+      this.monsterSprites.get(m.id)?.destroy();
+      this.monsterSprites.delete(m.id);
+      this.drawMonster(g, px, py, m.element, hpRatio, m.isBoss);
+      return;
+    }
+    const bossMul = m.isBoss ? 1.8 : 1;
+    let sprite = this.monsterSprites.get(m.id);
+    if (!sprite) {
+      sprite = this.add.image(px, py, key).setDepth(1);
+      this.monsterSprites.set(m.id, sprite);
+    }
+    sprite
+      .setTexture(key)
+      .setPosition(px, py)
+      .setDisplaySize(TILE_PX * MONSTER_IMAGE_DISPLAY_RATIO * bossMul, TILE_PX * MONSTER_IMAGE_DISPLAY_RATIO * bossMul);
+    this.drawMonsterOverlay(g, px, py, hpRatio, m.isBoss, bossMul);
+  }
+
+  /** 血條 + 首領金框,圖片版跟幾何圖形版共用同一個畫法(幾何圖形版的身體本身也另外畫在 drawMonster 裡)。 */
+  private drawMonsterOverlay(
+    g: Phaser.GameObjects.Graphics,
+    px: number,
+    py: number,
+    hpRatio: number,
+    isBoss: boolean,
+    bossMul: number,
+  ): void {
+    if (isBoss) {
+      g.lineStyle(1.5 * SCALE, 0xffe98a, 0.85);
+      g.strokeCircle(px, py, 8 * SCALE * bossMul);
+    }
+    const ratio = Math.max(0, Math.min(1, hpRatio));
+    const barColor = ratio > 0.5 ? 0x3a9d3a : ratio > 0.25 ? 0xd4af37 : 0xe05a2b;
+    const barW = 16 * SCALE * bossMul;
+    const barH = 3 * SCALE;
+    g.fillStyle(0x000000, 0.6);
+    g.fillRect(px - barW / 2, py - 12 * SCALE * bossMul, barW, barH);
+    g.fillStyle(barColor, 1);
+    g.fillRect(px - barW / 2, py - 12 * SCALE * bossMul, barW * ratio, barH);
+  }
+
+  /** 底座 + 尖塔的簡易造型,比純色圓形更有辨識度;等級用塔尖上方的一排小點表示。沒有正式美術圖時的備援畫法。 */
   private drawTower(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number, element: Element, level: number): void {
     const cx = gridX * TILE_PX + TILE_PX / 2;
     const cy = gridY * TILE_PX + TILE_PX / 2;
@@ -562,7 +701,7 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** 圓身 + 小眼睛 + 頭上血條,取代原本的純色方塊。首領怪(isBoss)整隻放大 1.8 倍再加一圈金框。 */
+  /** 圓身 + 小眼睛 + 頭上血條。首領怪(isBoss)整隻放大 1.8 倍再加一圈金框。沒有正式美術圖時的備援畫法。 */
   private drawMonster(
     g: Phaser.GameObjects.Graphics,
     px: number,

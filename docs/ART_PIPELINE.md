@@ -23,9 +23,11 @@
 | `assets/monsters/` | 同上 5 個檔名 | 同上 |
 | `assets/tiles/` | `floor.png`(可蓋塔地面)、`path.png`(怪物路徑) | `src/sim/map.ts` |
 
-## 現況:產好的圖,遊戲還沒讀
+## 現況:塔/怪物正式美術已經產好並接進遊戲
 
-`src/game/GameScene.ts` 目前完全用 Phaser Graphics 畫幾何圖形(塔=底座+尖塔、怪物=圓身+眼睛),**還沒有任何程式碼會去讀 `public/assets/` 底下的圖片**。等這裡真的生出堪用的素材之後,下一步是把 `GameScene.ts` 的 `drawTower`/`drawMonster` 改成用 `this.load.image()` 讀取對應檔案、`this.add.image()` 畫出來,對外呼叫介面(`renderState`/`onTilePlaced`)不需要改。
+`src/game/GameScene.ts` 的 `preload()` 載入 `public/assets/towers/<element>.png`、`public/assets/monsters/<element>.png`(5 種元素各 1 張),`renderTower()`/`renderMonster()` 用 `this.textures.exists()` 判斷載入成功沒——**有圖就用 `Image` 顯示,沒圖或載入失敗就退回原本的 Phaser Graphics 幾何圖形畫法**(塔=底座+尖塔、怪物=圓身+眼睛,留著當保險),不會整格空白。
+
+這 10 張圖目前是用 `scripts/generate-tower-monster-assets.mjs` 產的,不是透過下面「怎麼用」的 AI Hub 手動流程——這支腳本直接呼叫 Pollinations API(prompt 沿用這裡的 `GAME_ASSETS` 清單措辭),額外裝了 `jpeg-js`/`pngjs`(純 JS,無原生相依)自己做邊框 flood fill 去背,不用開瀏覽器手動點。如果之後想要不同風格/重新生成單一張圖,**兩條路都可以**:改這支腳本的 prompt/seed 重跑(快,但去背是簡單版邊框 flood-fill,細節複雜的圖可能去背不乾淨),或是用下面「怎麼用」的 AI Hub 手動生成單張(可以人工挑喜歡的結果,去背也是同一套 flood-fill 邏輯但在瀏覽器上跑,兩者去背原理相同)。
 
 ## 美術風格模板
 
