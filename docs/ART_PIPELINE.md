@@ -31,6 +31,7 @@
 
 這批圖是用兩支獨立腳本產的,不是透過下面「怎麼用」的 AI Hub 手動流程:
 - `scripts/generate-tower-monster-assets.mjs` — 呼叫免金鑰的 Pollinations API,prompt 沿用這裡的 `GAME_ASSETS` 清單措辭,額外裝了 `jpeg-js`/`pngjs`(純 JS,無原生相依)自己做邊框 flood fill 去背(塔/怪物是前景遊戲物件,需要真正的 alpha 透明)。
+- `scripts/generate-tower-evolution-assets.mjs`(2026-07-15 新增)— 同一套去背管線,換一批 prompt 產塔升到分岐級後的強化造型:`<element>-burst.png`(加尖刺/利刃呼應單體強化)、`<element>-splash.png`(加光環/擴散元素呼應範圍波及),存進 `public/assets/towers/`,對照 `src/sim/towers.ts` 的 `UpgradePath`。
 - `scripts/generate-terrain-assets.mjs` — 呼叫 HuggingFace Inference API(`router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell`,注意舊的 `api-inference.huggingface.co` 網域已經停用),需要環境變數 `HF_TOKEN`(不要寫死在檔案裡、不要 commit)。地形材質不用去背(整格鋪滿),但需要「無縫可鋪磚」——AI 生的圖天生邊緣對不起來,腳本額外做「wrap-shift 半張圖 + 中央漸層混合」的後處理讓邊緣保證接得起來(細節見腳本內註解)。**已知限制**:混合處理會在材質正中央留下一圈稍微模糊的過渡區,鋪滿地圖時會每隔一個材質週期重複出現一次,不是完美無縫,但比起直接鋪會出現的硬接縫好很多,而且遊戲裡本來就會疊裝飾物打散單調感。
 
 如果之後想要不同風格/重新生成單一張圖,**兩條路都可以**:改對應腳本的 prompt/seed 重跑(快,但去背/去縫都是簡化版演算法,細節複雜的圖可能處理不乾淨),或是用下面「怎麼用」的 AI Hub 手動生成單張(可以人工挑喜歡的結果)。

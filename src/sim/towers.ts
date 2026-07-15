@@ -2,8 +2,20 @@
 
 import { applyElementalDamage, type Element } from './elements';
 import { FP_SCALE, remainingDistanceFp, worldPositionFp } from './map';
-import type { Monster } from './monsters';
+import type { Monster, MoveType } from './monsters';
 import type { PlayerId } from '../net/protocol';
+
+/**
+ * 移動類型限制(參考 Bloons TD 的 flying/camo 概念):'ground' 怪任何塔都打得到;
+ * 'air' 怪土屬性打不到(土是純地面系,搆不到天上);'water' 怪火屬性打不到
+ * (呼應五行水克火,火遇水熄滅)。刻意讓每種特殊類型都還有 4/5 屬性打得到,
+ * 避免玩家選到「完全打不到某種怪」的屬性組合就卡死。
+ */
+export function canTargetMoveType(element: Element, moveType: MoveType): boolean {
+  if (moveType === 'air') return element !== 'earth';
+  if (moveType === 'water') return element !== 'fire';
+  return true;
+}
 
 export interface TowerDef {
   element: Element;
@@ -147,6 +159,7 @@ function findTarget(monsters: readonly Monster[], tower: Tower, def: TowerDef): 
   const rangeSq = def.rangeFp * def.rangeFp;
   let best: Monster | null = null;
   for (const m of monsters) {
+    if (!canTargetMoveType(tower.element, m.moveType)) continue;
     const { xFp, yFp } = worldPositionFp(m.pos);
     const dx = towerXFp - xFp;
     const dy = towerYFp - yFp;
@@ -187,6 +200,7 @@ export function tryAttack(tower: Tower, monsters: readonly Monster[]): CombatEve
     const splashRangeSq = SPLASH_RANGE_FP * SPLASH_RANGE_FP;
     for (const m of monsters) {
       if (m.id === target.id) continue;
+      if (!canTargetMoveType(tower.element, m.moveType)) continue;
       const { xFp, yFp } = worldPositionFp(m.pos);
       const dx = targetPosFp.xFp - xFp;
       const dy = targetPosFp.yFp - yFp;

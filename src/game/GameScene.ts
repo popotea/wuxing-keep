@@ -6,7 +6,7 @@ import type { Element } from '../sim/elements';
 import { FP_SCALE, GRID_HEIGHT, GRID_WIDTH, inBounds, isOnPath, PATHS, worldPositionFp } from '../sim/map';
 import type { Monster } from '../sim/monsters';
 import type { SimulationState } from '../sim/simulation';
-import { MAX_TOWER_LEVEL, TOWER_DEFS, type CombatEvent, type Tower } from '../sim/towers';
+import { MAX_TOWER_LEVEL, TOWER_DEFS, UPGRADE_PATH_LEVEL, type CombatEvent, type Tower, type UpgradePath } from '../sim/towers';
 
 export const TILE_PX = 40;
 // 塔/怪物的造型尺寸都是照 TILE_PX=32 時的手感調的,乘這個比例就能跟著 TILE_PX 一起放大,不用重調數字。
@@ -74,6 +74,13 @@ function monsterTextureKey(element: Element): string {
   return `monster-${element}`;
 }
 
+// scripts/generate-tower-evolution-assets.mjs 產出的升級分岐造型(見 docs/ART_PIPELINE.md)。
+// 只有到 UPGRADE_PATH_LEVEL 之後選定路線的塔才會用這個,缺檔/載入失敗會退回原本的 <element>.png
+// 基礎造型(不會直接跳去幾何圖形備援),levels 1~2(或選了路線前)本來就一直用基礎造型。
+function towerEvolutionTextureKey(element: Element, path: UpgradePath): string {
+  return `tower-${element}-${path}`;
+}
+
 // scripts/generate-terrain-assets.mjs 產出的地板/路徑材質(見 docs/ART_PIPELINE.md),
 // 已經做過 seamless tiling 後處理,可以用 TileSprite 整片鋪滿不會有格線接縫。
 // 缺檔/載入失敗會自動退回下面 drawStaticLayer() 原本的純色畫法。
@@ -97,6 +104,8 @@ export class GameScene extends Phaser.Scene {
   /** 選到塔(WC3 式:點塔是選取,不是直接升級)或取消選取時呼叫,null 代表沒有選取任何塔。 */
   onTowerSelected: ((towerId: number | null) => void) | null = null;
 
+  /** 水路怪的流水視覺效果、飛行怪的地面影子——要蓋在地板材質上面、但在塔/怪物圖片下面。 */
+  private groundEffectsLayer!: Phaser.GameObjects.Graphics;
   private dynamicLayer!: Phaser.GameObjects.Graphics;
   private previewLayer!: Phaser.GameObjects.Graphics;
   private minimapLayer!: Phaser.GameObjects.Graphics;
@@ -120,6 +129,9 @@ export class GameScene extends Phaser.Scene {
     }
     for (const element of Object.keys(TOWER_IMAGE_FILES) as Element[]) {
       this.load.image(towerTextureKey(element), `/assets/towers/${TOWER_IMAGE_FILES[element]}`);
+      for (const evolutionPath of ['burst', 'splash'] as const) {
+        this.load.image(towerEvolutionTextureKey(element, evolutionPath), `/assets/towers/${element}-${evolutionPath}.png`);
+      }
     }
     for (const element of Object.keys(MONSTER_IMAGE_FILES) as Element[]) {
       this.load.image(monsterTextureKey(element), `/assets/monsters/${MONSTER_IMAGE_FILES[element]}`);
@@ -131,8 +143,11 @@ export class GameScene extends Phaser.Scene {
   create(): void {
     this.drawStaticLayer();
     this.drawDecorations();
-    // 明確指定 depth,不依賴建立順序:塔/怪物 Image(depth 1)在下,dynamicLayer 的疊加圖層
-    // (血條/選取框/射程圈/等級光點,depth 2)蓋在圖片上面,再上面依序是預覽格跟固定貼齊螢幕的小地圖。
+    // 明確指定 depth,不依賴建立順序:groundEffectsLayer(depth 0.5,水路怪的流水視覺/飛行怪
+    // 的地面影子)蓋在地板/路徑材質(depth 0)上面、但在塔/怪物 Image(depth 1)下面,
+    // dynamicLayer 的疊加圖層(血條/選取框/射程圈/等級光點,depth 2)再蓋在圖片上面,
+    // 再上面依序是預覽格跟固定貼齊螢幕的小地圖。
+    this.groundEffectsLayer = this.add.graphics().setDepth(0.5);
     this.dynamicLayer = this.add.graphics().setDepth(2);
     this.previewLayer = this.add.graphics().setDepth(3);
     this.minimapLayer = this.add.graphics().setScrollFactor(0).setDepth(4); // 固定貼在螢幕上,不隨鏡頭捲動
@@ -605,7 +620,56 @@ export class GameScene extends Phaser.Scene {
     g.strokeRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
   }
 
+  /**
+   * 水路怪的流水視覺效果(哪條路徑上有 'water' 移動類型的怪,整條路徑浮現半透明藍色疊加,
+   * 用 sin 波輕微明暗脈動模擬水流,不是真的流動動畫,先求「看得出有水」的簡化版)+
+   * 飛行怪的地面影子(暗示牠飛在空中,呼應 renderMonster 裡的懸浮位移)。
+   */
+  private drawGroundEffects(state: SimulationState): void {
+    const g = this.groundEffectsLayer;
+    g.clear();
+
+    const wetPathIds = new Set(
+      state.monsters.filter((m) => m.moveType === 'water').map((m) => m.pos.pathId),
+    );
+    if (wetPathIds.size > 0) {
+      const pulse = 0.16 + 0.07 * Math.sin(this.time.now / 300);
+      g.fillStyle(0x3a7bd5, pulse);
+      for (const pathId of wetPathIds) {
+        for (const [x, y] of this.tilesForPath(pathId)) {
+          g.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+        }
+      }
+    }
+
+    for (const m of state.monsters) {
+      if (m.moveType !== 'air') continue;
+      const { xFp, yFp } = worldPositionFp(m.pos);
+      const px = (xFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
+      const py = (yFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
+      const bossMul = m.isBoss ? 1.8 : 1;
+      g.fillStyle(0x000000, 0.25);
+      g.fillEllipse(px, py + 3 * SCALE * bossMul, 10 * SCALE * bossMul, 4 * SCALE * bossMul);
+    }
+  }
+
+  /** 列出某條路徑經過的所有格子座標,跟 map.ts 的 computePathTiles() 是同一套走法,只是這裡要分開算單一路徑。 */
+  private tilesForPath(pathId: number): Array<[number, number]> {
+    const tiles: Array<[number, number]> = [];
+    const waypoints = PATHS[pathId];
+    for (let i = 0; i < waypoints.length - 1; i++) {
+      const [ax, ay] = waypoints[i];
+      const [bx, by] = waypoints[i + 1];
+      const dx = Math.sign(bx - ax);
+      const dy = Math.sign(by - ay);
+      const steps = Math.max(Math.abs(bx - ax), Math.abs(by - ay));
+      for (let s = 0; s <= steps; s++) tiles.push([ax + dx * s, ay + dy * s]);
+    }
+    return tiles;
+  }
+
   private drawDynamicLayer(state: SimulationState): void {
+    this.drawGroundEffects(state);
     const g = this.dynamicLayer;
     g.clear();
 
@@ -652,10 +716,24 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** 有正式美術圖就用 Image 顯示(位置不變,只需要更新等級光點);沒有就退回原本的幾何圖形畫法。 */
+  /**
+   * 決定這座塔目前該用哪張圖:選了路線且到分岐級以上,優先用該路線的強化造型;
+   * 沒有強化造型(還沒產圖/載入失敗)就退回基礎造型;基礎造型也沒有就回傳 null
+   * 讓呼叫端退回幾何圖形畫法。三層備援都不會整格空白。
+   */
+  private resolveTowerTextureKey(t: Tower): string | null {
+    if (t.level >= UPGRADE_PATH_LEVEL && t.upgradePath !== 'none') {
+      const evolvedKey = towerEvolutionTextureKey(t.element, t.upgradePath);
+      if (this.textures.exists(evolvedKey)) return evolvedKey;
+    }
+    const baseKey = towerTextureKey(t.element);
+    return this.textures.exists(baseKey) ? baseKey : null;
+  }
+
+  /** 有正式美術圖就用 Image 顯示(位置不變,只需要更新等級光點/強化造型);沒有就退回原本的幾何圖形畫法。 */
   private renderTower(g: Phaser.GameObjects.Graphics, t: Tower): void {
-    const key = towerTextureKey(t.element);
-    if (!this.textures.exists(key)) {
+    const key = this.resolveTowerTextureKey(t);
+    if (!key) {
       this.towerSprites.get(t.id)?.destroy();
       this.towerSprites.delete(t.id);
       this.drawTower(g, t.x, t.y, t.element, t.level);
@@ -663,12 +741,15 @@ export class GameScene extends Phaser.Scene {
     }
     const cx = t.x * TILE_PX + TILE_PX / 2;
     const cy = t.y * TILE_PX + TILE_PX / 2;
+    // 選了路線的強化造型額外放大一點,搭配造型本身的變化,讓「升級後更強」更有感覺。
+    const evolved = t.level >= UPGRADE_PATH_LEVEL && t.upgradePath !== 'none';
+    const displaySize = TILE_PX * TOWER_IMAGE_DISPLAY_RATIO * (evolved ? 1.15 : 1);
     let sprite = this.towerSprites.get(t.id);
     if (!sprite) {
       sprite = this.add.image(cx, cy, key).setDepth(1);
       this.towerSprites.set(t.id, sprite);
     }
-    sprite.setTexture(key).setPosition(cx, cy).setDisplaySize(TILE_PX * TOWER_IMAGE_DISPLAY_RATIO, TILE_PX * TOWER_IMAGE_DISPLAY_RATIO);
+    sprite.setTexture(key).setPosition(cx, cy).setDisplaySize(displaySize, displaySize);
     this.drawTowerLevelPips(g, cx, cy, t.level);
   }
 
@@ -682,11 +763,15 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** 有正式美術圖就用 Image 顯示(每 tick 更新位置/縮放);沒有就退回原本的幾何圖形畫法。 */
+  /**
+   * 有正式美術圖就用 Image 顯示(每 tick 更新位置/縮放);沒有就退回原本的幾何圖形畫法。
+   * 飛行怪的圖(跟血條/首領框一起)整隻往上位移一點,配合 drawGroundEffects() 畫的地面
+   * 影子,製造出「飛在空中」的感覺——實際戰鬥判定的座標(m.pos)完全不受這個視覺位移影響。
+   */
   private renderMonster(g: Phaser.GameObjects.Graphics, m: Monster): void {
     const { xFp, yFp } = worldPositionFp(m.pos);
     const px = (xFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
-    const py = (yFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
+    const py = (yFp / FP_SCALE) * TILE_PX + TILE_PX / 2 - (m.moveType === 'air' ? 8 * SCALE : 0);
     const hpRatio = m.hp / m.maxHp;
     const key = monsterTextureKey(m.element);
     if (!this.textures.exists(key)) {

@@ -716,11 +716,21 @@ function renderWaveHud(tick: number): void {
   nextWaveEl.textContent =
     ticksLeft === null ? '最後一波' : `${Math.ceil((ticksLeft * currentTickRateMs) / 1000)}s`;
   const upcoming = upcomingWaveDef(tick);
-  nextWaveElementEl.innerHTML = !upcoming
-    ? '—'
-    : upcoming.isBoss
-      ? `<svg class="icon" style="color: var(--accent)"><use href="#icon-crown" /></svg> ${ELEMENT_NAMES[upcoming.element]}首領`
-      : ELEMENT_NAMES[upcoming.element];
+  if (!upcoming) {
+    nextWaveElementEl.innerHTML = '—';
+  } else {
+    const bossBadge = upcoming.isBoss
+      ? `<svg class="icon" style="color: var(--accent)"><use href="#icon-crown" /></svg> `
+      : '';
+    // 空中/水路怪出場前先提醒一下,玩家才知道要準備打得到這種移動類型的塔(見 canTargetMoveType)。
+    const moveTypeBadge =
+      upcoming.moveType === 'air'
+        ? ` <svg class="icon" style="color: var(--muted)"><use href="#icon-wing" /></svg> 空中`
+        : upcoming.moveType === 'water'
+          ? ` <svg class="icon" style="color: var(--water)"><use href="#icon-wave" /></svg> 水路`
+          : '';
+    nextWaveElementEl.innerHTML = `${bossBadge}${ELEMENT_NAMES[upcoming.element]}${upcoming.isBoss ? '首領' : ''}${moveTypeBadge}`;
+  }
 
   const bonus = activeBonusWaveInfo(tick);
   bonusWaveEl.innerHTML = bonus

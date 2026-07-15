@@ -350,12 +350,12 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
     next.monsters.push(createMonster(next.nextMonsterId++, scaled));
   }
 
-  // 怪物移動,漏怪扣生命——站在陷阱格上的怪物這個 tick 的移動速度打折扣。
+  // 怪物移動,漏怪扣生命——站在陷阱格上的怪物這個 tick 的移動速度打折扣(飛行怪飛在空中,陷阱打不到)。
   const trapTiles = new Set(next.traps.map((t) => `${t.x},${t.y}`));
   const survivors: Monster[] = [];
   for (const m of next.monsters) {
     const { xFp, yFp } = worldPositionFp(m.pos);
-    const onTrap = trapTiles.has(`${Math.floor(xFp / FP_SCALE)},${Math.floor(yFp / FP_SCALE)}`);
+    const onTrap = m.moveType !== 'air' && trapTiles.has(`${Math.floor(xFp / FP_SCALE)},${Math.floor(yFp / FP_SCALE)}`);
     const speedFp = onTrap ? Math.floor((m.speedFp * (100 - TRAP_SLOW_PERCENT)) / 100) : m.speedFp;
     const { pos, leaked } = advanceAlongPath(m.pos, speedFp);
     if (leaked) {
