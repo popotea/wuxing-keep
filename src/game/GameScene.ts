@@ -3,17 +3,7 @@
 
 import Phaser from 'phaser';
 import { ELEMENT_NAMES, GENERATED_BY, type Element } from '../sim/elements';
-import {
-  FP_SCALE,
-  GRID_HEIGHT,
-  GRID_WIDTH,
-  inBounds,
-  isOnPath,
-  PATHS,
-  VIEWPORT_TILES_H,
-  VIEWPORT_TILES_W,
-  worldPositionFp,
-} from '../sim/map';
+import { FP_SCALE, GRID_HEIGHT, GRID_WIDTH, inBounds, isOnPath, PATHS, worldPositionFp } from '../sim/map';
 import type { Monster } from '../sim/monsters';
 import { RUNE_TOTEM_RANGE_FP } from '../sim/placements';
 import type { SimulationState } from '../sim/simulation';
@@ -231,16 +221,17 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * 畫布跟著視窗尺寸滿版(Scale.RESIZE),大螢幕上畫布的實際像素會遠大於原本設計的 880x560,
-   * 若鏡頭一路維持 zoom=1(1 格固定 TILE_PX 像素),大螢幕會一次看到遠超過 VIEWPORT_TILES_W/H
-   * 的格數,塔/怪物相對畫面就顯得很小。改成動態算 zoom,讓畫面固定大約只看得到
-   * VIEWPORT_TILES_W x VIEWPORT_TILES_H 這麼多格(取寬高比例較保守的那一邊),不管螢幕多大,
-   * 物件在畫面上的相對大小都維持一致觀感,而不是螢幕越大東西看起來越小。
+   * 一開始用「固定只看得到 VIEWPORT_TILES_W x VIEWPORT_TILES_H 格,滑鼠貼邊緣平移鏡頭」
+   * (世紀帝國式),但滑鼠不好操作平移這件事本身,改成乾脆縮放到整張地圖(GRID_WIDTH x
+   * GRID_HEIGHT)一次全部塞進畫布,不管螢幕多大都直接看到全圖,不用平移鏡頭
+   * (2026-07-16 改的)。取寬高比例較保守的那一邊,確保地圖完整塞得下不會被裁掉。
+   * 這樣一來 update() 裡的邊緣平移計算會自動變成 no-op(maxScrollX/Y 算出來就是 0,
+   * 因為 worldView 已經跟整張地圖一樣大或更大),不用另外刪那段程式碼。
    */
   private applyViewportZoom(): void {
-    const zoomX = this.scale.width / (VIEWPORT_TILES_W * TILE_PX);
-    const zoomY = this.scale.height / (VIEWPORT_TILES_H * TILE_PX);
-    this.cameras.main.setZoom(Math.max(1, Math.min(zoomX, zoomY)));
+    const zoomX = this.scale.width / (GRID_WIDTH * TILE_PX);
+    const zoomY = this.scale.height / (GRID_HEIGHT * TILE_PX);
+    this.cameras.main.setZoom(Math.min(zoomX, zoomY));
   }
 
   /** 小地圖左上角在螢幕座標系(scrollFactor=0)裡的位置,固定貼在畫布右下角。 */

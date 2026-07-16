@@ -57,6 +57,10 @@ const tabSoloEl = $<HTMLButtonElement>('tabSolo');
 const tabMultiEl = $<HTMLButtonElement>('tabMulti');
 const soloPanelEl = $<HTMLElement>('soloPanel');
 const multiPanelEl = $<HTMLElement>('multiPanel');
+const subTabHostEl = $<HTMLButtonElement>('subTabHost');
+const subTabJoinEl = $<HTMLButtonElement>('subTabJoin');
+const hostSectionEl = $<HTMLElement>('hostSection');
+const joinSectionEl = $<HTMLElement>('joinSection');
 const multiSetupEl = $<HTMLElement>('multiSetup');
 const multiLobbyEl = $<HTMLElement>('multiLobby');
 const soloBtn = $<HTMLButtonElement>('soloBtn');
@@ -205,15 +209,13 @@ scoreboardBtn.addEventListener('click', () => {
   if (showing) renderScoreboard();
 });
 
-/** 依玩家自己選的屬性算出這次要隨機提供哪些蓋塔選項(WC3 英雄選擇式),最多 3 個。 */
-function randomTowerOffer(): Element[] {
-  const allowed = latestState?.playerElements[myPlayerId()] ?? ALL_ELEMENTS;
-  const shuffled = [...allowed];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled.slice(0, Math.min(3, shuffled.length));
+/**
+ * 蓋塔選單要列出哪些屬性——固定顯示玩家自己允許的全部屬性,不再隨機抽 3 個
+ * (2026-07-16 改的,原本是 WC3 英雄選擇式隨機抽最多 3 個,玩家反應想要固定看到全部)。
+ * 順序照 ALL_ELEMENTS 固定順序,不用洗牌。
+ */
+function buildableTowerElements(): readonly Element[] {
+  return latestState?.playerElements[myPlayerId()] ?? ALL_ELEMENTS;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -287,9 +289,10 @@ function showFloatingBuildMenu(canvasX: number, canvasY: number, options: Choice
   const pageX = (canvasRect?.left ?? 0) + canvasX;
   const pageY = (canvasRect?.top ?? 0) + canvasY;
   // 夾在視窗範圍內,避免選單超出畫面邊緣被裁掉看不到(選單實際大小要等內容塞進去後才知道,
-  // 這裡用保守的估計值當夾取上限,足夠應付目前最多 5 個選項的版面)。
+  // 這裡用保守的估計值當夾取上限,足夠應付目前最多 7 個選項的版面:5 種屬性都固定顯示
+  // 不再隨機抽 3 個,加上資源建築跟符文圖騰)。
   const MENU_WIDTH_GUESS = 180;
-  const MENU_HEIGHT_GUESS = 290;
+  const MENU_HEIGHT_GUESS = 400;
   floatingBuildMenuEl.style.left = `${Math.max(8, Math.min(pageX, window.innerWidth - MENU_WIDTH_GUESS))}px`;
   floatingBuildMenuEl.style.top = `${Math.max(8, Math.min(pageY, window.innerHeight - MENU_HEIGHT_GUESS))}px`;
 
@@ -445,7 +448,7 @@ const gameRenderer = createGameRenderer(
       });
     } else {
       // 非路徑格:隨機英雄選擇(最多 3 個屬性,WC3 TD 手塔風味)+ 資源建築。
-      for (const element of randomTowerOffer()) {
+      for (const element of buildableTowerElements()) {
         const cost = TOWER_DEFS[element].cost;
         options.push({
           label: TOWER_CHARACTER_NAMES[element],
@@ -603,7 +606,7 @@ window.addEventListener('keydown', (ev) => {
     return;
   }
   const slot = Number(ev.key);
-  if (!Number.isInteger(slot) || slot < 1 || slot > 5) return;
+  if (!Number.isInteger(slot) || slot < 1 || slot > 7) return;
   const openMenu = floatingBuildMenuEl.classList.contains('show')
     ? floatingBuildMenuEl
     : choiceModalOverlayEl.classList.contains('show')
@@ -660,6 +663,17 @@ function setMode(mode: 'solo' | 'multi'): void {
 
 tabSoloEl.addEventListener('click', () => setMode('solo'));
 tabMultiEl.addEventListener('click', () => setMode('multi'));
+
+/** 多人連線裡「建立房間」/「加入房間」兩塊表單一次只顯示一邊,不再兩個一起堆在畫面上。 */
+function setMultiAction(action: 'host' | 'join'): void {
+  subTabHostEl.classList.toggle('active', action === 'host');
+  subTabJoinEl.classList.toggle('active', action === 'join');
+  hostSectionEl.hidden = action !== 'host';
+  joinSectionEl.hidden = action !== 'join';
+}
+
+subTabHostEl.addEventListener('click', () => setMultiAction('host'));
+subTabJoinEl.addEventListener('click', () => setMultiAction('join'));
 
 /** 建立/加入房間成功後,把設定表單換成房間 Lobby(不再兩者一起顯示)。 */
 function showLobby(show: boolean): void {

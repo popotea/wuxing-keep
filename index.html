@@ -260,6 +260,8 @@
 
       /* ---- 模式頁籤 ---- */
       .mode-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+      .multi-action-tabs { margin: 4px 0 12px; }
+      .multi-action-tabs .mode-tab { padding: 7px 14px; font-size: 13px; }
       .mode-tab {
         flex: 1;
         padding: 10px 18px;
@@ -796,8 +798,14 @@
             <label for="multi-el-earth" class="element-earth">土</label>
           </div>
 
-          <div class="multi-section">
-            <h3>建立房間</h3>
+          <!-- 建立/加入房間分成子頁籤,一次只顯示一邊的表單(2026-07-16 改的,原本兩塊表單
+               一起堆在畫面上,使用者反應看起來很花俏雜亂)。 -->
+          <div class="mode-tabs multi-action-tabs">
+            <button id="subTabHost" class="mode-tab active" type="button">建立房間</button>
+            <button id="subTabJoin" class="mode-tab" type="button">加入房間</button>
+          </div>
+
+          <div id="hostSection" class="multi-section">
             <label>暱稱: <input id="hostName" value="房主" /></label>
             <label>難度:
               <select id="hostDifficulty">
@@ -812,8 +820,7 @@
             <button id="hostBtn" class="btn"><svg class="icon"><use href="#icon-plus" /></svg> 建立房間</button>
           </div>
 
-          <div class="multi-section">
-            <h3>加入房間</h3>
+          <div id="joinSection" class="multi-section" hidden>
             <label>暱稱: <input id="joinName" value="玩家2" /></label>
             <label>房號: <input id="joinCode" placeholder="gld-XXXXX" list="recentRoomsList" /></label>
             <datalist id="recentRoomsList"></datalist>
