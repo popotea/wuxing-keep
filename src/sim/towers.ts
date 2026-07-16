@@ -3,6 +3,7 @@
 import { applyElementalDamage, GENERATED_BY, type Element } from './elements';
 import { FP_SCALE, remainingDistanceFp, worldPositionFp } from './map';
 import type { Monster, MoveType } from './monsters';
+import { RUNE_TOTEM_DAMAGE_BONUS_PERCENT, RUNE_TOTEM_RANGE_FP, type RuneTotem } from './placements';
 import type { PlayerId } from '../net/protocol';
 
 /**
@@ -95,21 +96,41 @@ export function sellValue(tower: Tower): number {
 }
 
 /**
+ * 組合建築玩法(圖騰):範圍內(RUNE_TOTEM_RANGE_FP,距離平方比較,不用 sqrt)只要有一座
+ * 符文圖騰,不分誰蓋的都吃得到加成——跟塔的分岐路線/相生加成是各自獨立疊加的效果,不互斥。
+ */
+export function hasNearbyTotem(tower: Tower, runeTotems: readonly RuneTotem[]): boolean {
+  const towerXFp = tower.x * FP_SCALE;
+  const towerYFp = tower.y * FP_SCALE;
+  const rangeSq = RUNE_TOTEM_RANGE_FP * RUNE_TOTEM_RANGE_FP;
+  for (const totem of runeTotems) {
+    const dx = towerXFp - totem.x * FP_SCALE;
+    const dy = towerYFp - totem.y * FP_SCALE;
+    if (dx * dx + dy * dy <= rangeSq) return true;
+  }
+  return false;
+}
+
+/**
  * 1~2 級(或還沒選路線前)是線性倍增;到 UPGRADE_PATH_LEVEL 選了 'burst' 路線後,傷害
  * 比線性更陡(BURST_DAMAGE_PERCENT);選 'splash' 路線則維持線性不額外加成,因為傷害輸出
  * 靠 tryAttack 的範圍波及效果拿,不是靠單體數字堆疊。範圍/冷卻留給之後平衡調整。
+ * 圖騰加成(RUNE_TOTEM_DAMAGE_BONUS_PERCENT)在等級/路線加成算完之後才乘,兩者疊加。
  */
-function effectiveDamage(tower: Tower): number {
+function effectiveDamage(tower: Tower, runeTotems: readonly RuneTotem[]): number {
   const def = TOWER_DEFS[tower.element];
-  const base = def.damage * tower.level;
+  let base = def.damage * tower.level;
   if (tower.level >= UPGRADE_PATH_LEVEL && tower.upgradePath === 'burst') {
-    return Math.floor((base * BURST_DAMAGE_PERCENT) / 100);
+    base = Math.floor((base * BURST_DAMAGE_PERCENT) / 100);
+  }
+  if (hasNearbyTotem(tower, runeTotems)) {
+    base = Math.floor((base * (100 + RUNE_TOTEM_DAMAGE_BONUS_PERCENT)) / 100);
   }
   return base;
 }
 
 /**
- * 組合建築玩法:塔相鄰(含斜角,3x3 範圍內扣掉自己)蓋了「生」它的那個元素(五行相生,見
+ * 組合建築玩法(相生):塔相鄰(含斜角,3x3 範圍內扣掉自己)蓋了「生」它的那個元素(五行相生,見
  * elements.ts 的 GENERATED_BY),就會被滋養、攻速變快。故意用「生」而不是「克」的關係,
  * 才不會跟怪物傷害倍率(elements.ts 的 elementRelation)是同一套規則的兩種說法,讓玩家有
  * 兩種獨立的五行知識可以組合利用。範圍是即時算的(每次呼叫都重新掃鄰居),不是蓋塔當下
@@ -142,19 +163,22 @@ export interface TowerStats {
   upgradePath: UpgradePath;
   /** 目前是不是有相生鄰居在加速——純顯示用,面板/地圖靠這個決定要不要顯示加成標示。 */
   adjacencyBonusActive: boolean;
+  /** 目前是不是在符文圖騰範圍內——純顯示用,同上。 */
+  totemBonusActive: boolean;
 }
 
-/** 給 UI 顯示用(WC3 式選取面板):這座塔目前的實際數值(已套用等級加成+鄰接加成)+ 升級/賣出的花費。 */
-export function describeTower(tower: Tower, allTowers: readonly Tower[]): TowerStats {
+/** 給 UI 顯示用(WC3 式選取面板):這座塔目前的實際數值(已套用等級加成+鄰接加成+圖騰加成)+ 升級/賣出的花費。 */
+export function describeTower(tower: Tower, allTowers: readonly Tower[], runeTotems: readonly RuneTotem[]): TowerStats {
   const def = TOWER_DEFS[tower.element];
   return {
-    damage: effectiveDamage(tower),
+    damage: effectiveDamage(tower, runeTotems),
     rangeFp: def.rangeFp,
     cooldownTicks: effectiveCooldownTicks(tower, allTowers),
     upgradeCost: upgradeCost(tower),
     sellValue: sellValue(tower),
     upgradePath: tower.upgradePath,
     adjacencyBonusActive: hasGeneratingNeighbor(tower, allTowers),
+    totemBonusActive: hasNearbyTotem(tower, runeTotems),
   };
 }
 
@@ -208,16 +232,22 @@ export interface CombatEvent {
 /**
  * 讓一座塔嘗試攻擊一次。有打中就直接扣目標血量(呼叫端傳進來的 monster 物件會被修改),
  * 回傳這次攻擊產生的所有事件給 UI 顯示飄動傷害數字用(通常 1 個,splash 路線可能多個);
- * 沒打中回傳空陣列。allTowers 是全場所有塔(含自己),用來算鄰接加成(見 hasGeneratingNeighbor)。
+ * 沒打中回傳空陣列。allTowers 是全場所有塔(含自己),用來算鄰接加成(見 hasGeneratingNeighbor);
+ * runeTotems 是全場所有符文圖騰,用來算圖騰增傷(見 hasNearbyTotem)。
  */
-export function tryAttack(tower: Tower, monsters: readonly Monster[], allTowers: readonly Tower[]): CombatEvent[] {
+export function tryAttack(
+  tower: Tower,
+  monsters: readonly Monster[],
+  allTowers: readonly Tower[],
+  runeTotems: readonly RuneTotem[],
+): CombatEvent[] {
   const def = TOWER_DEFS[tower.element];
   tower.ticksSinceLastAttack += 1;
   if (tower.ticksSinceLastAttack < effectiveCooldownTicks(tower, allTowers)) return [];
   const target = findTarget(monsters, tower, def);
   if (!target) return [];
   tower.ticksSinceLastAttack = 0;
-  const damage = applyElementalDamage(effectiveDamage(tower), tower.element, target.element);
+  const damage = applyElementalDamage(effectiveDamage(tower, runeTotems), tower.element, target.element);
   target.hp -= damage;
   const targetPosFp = worldPositionFp(target.pos);
   const events: CombatEvent[] = [{ monsterId: target.id, xFp: targetPosFp.xFp, yFp: targetPosFp.yFp, damage }];
@@ -234,7 +264,7 @@ export function tryAttack(tower: Tower, monsters: readonly Monster[], allTowers:
       const dy = targetPosFp.yFp - yFp;
       if (dx * dx + dy * dy > splashRangeSq) continue;
       const splashDamage = applyElementalDamage(
-        Math.floor((effectiveDamage(tower) * SPLASH_DAMAGE_PERCENT) / 100),
+        Math.floor((effectiveDamage(tower, runeTotems) * SPLASH_DAMAGE_PERCENT) / 100),
         tower.element,
         m.element,
       );

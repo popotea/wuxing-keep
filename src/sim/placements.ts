@@ -38,3 +38,23 @@ export interface ResourceBuilding {
 export const RESOURCE_BUILDING_COST = 80;
 export const RESOURCE_BUILDING_INCOME = 15;
 export const RESOURCE_BUILDING_INTERVAL_TICKS = 200; // 20 tick/秒 * 10 秒
+
+/**
+ * 符文圖騰:純支援型建築,自己不攻擊,範圍內的塔(不分誰的塔)攻擊力都會提升,規則跟塔/
+ * 資源建築一樣蓋在非路徑格。故意不做等級(跟資源建築一樣單純,先求「組合玩法」的架構成立,
+ * 之後真的要加分岐/升級再說)。跟第二種組合玩法(五行相生鄰接加成,見 towers.ts 的
+ * hasGeneratingNeighbor())是互補關係:相生是「塔跟塔之間」的組合,圖騰是「塔跟支援建築
+ * 之間」的組合,兩者可以疊加、不衝突。
+ */
+export interface RuneTotem {
+  id: number;
+  x: number;
+  y: number;
+  ownerId: PlayerId;
+}
+
+export const RUNE_TOTEM_COST = 120;
+/** 範圍(定點數),比大多數塔的攻擊範圍再大一點,才能真的罩住一小群塔,不是只罩到自己那格。 */
+export const RUNE_TOTEM_RANGE_FP = 2600;
+/** 範圍內的塔攻擊力提升這個百分比(20 = +20%),跟塔的分岐路線/相生加成可以疊加。 */
+export const RUNE_TOTEM_DAMAGE_BONUS_PERCENT = 20;

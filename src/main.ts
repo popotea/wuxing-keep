@@ -23,6 +23,9 @@ import {
   RESOURCE_BUILDING_COST,
   RESOURCE_BUILDING_INCOME,
   RESOURCE_BUILDING_INTERVAL_TICKS,
+  RUNE_TOTEM_COST,
+  RUNE_TOTEM_DAMAGE_BONUS_PERCENT,
+  RUNE_TOTEM_RANGE_FP,
   TRAP_COST,
   TRAP_SLOW_PERCENT_BY_LEVEL,
   trapUpgradeCost,
@@ -94,6 +97,7 @@ const towerPanelCooldownEl = $<HTMLSpanElement>('towerPanelCooldown');
 const towerPanelPathRowEl = $<HTMLDivElement>('towerPanelPathRow');
 const towerPanelPathEl = $<HTMLSpanElement>('towerPanelPath');
 const towerPanelAdjacencyRowEl = $<HTMLDivElement>('towerPanelAdjacencyRow');
+const towerPanelTotemRowEl = $<HTMLDivElement>('towerPanelTotemRow');
 const towerPanelStrategySelect = $<HTMLSelectElement>('towerPanelStrategy');
 const towerUpgradeBtn = $<HTMLButtonElement>('towerUpgradeBtn');
 const towerUpgradeCostEl = $<HTMLSpanElement>('towerUpgradeCost');
@@ -283,9 +287,9 @@ function showFloatingBuildMenu(canvasX: number, canvasY: number, options: Choice
   const pageX = (canvasRect?.left ?? 0) + canvasX;
   const pageY = (canvasRect?.top ?? 0) + canvasY;
   // 夾在視窗範圍內,避免選單超出畫面邊緣被裁掉看不到(選單實際大小要等內容塞進去後才知道,
-  // 這裡用保守的估計值當夾取上限,足夠應付目前最多 4 個選項的版面)。
+  // 這裡用保守的估計值當夾取上限,足夠應付目前最多 5 個選項的版面)。
   const MENU_WIDTH_GUESS = 180;
-  const MENU_HEIGHT_GUESS = 240;
+  const MENU_HEIGHT_GUESS = 290;
   floatingBuildMenuEl.style.left = `${Math.max(8, Math.min(pageX, window.innerWidth - MENU_WIDTH_GUESS))}px`;
   floatingBuildMenuEl.style.top = `${Math.max(8, Math.min(pageY, window.innerHeight - MENU_HEIGHT_GUESS))}px`;
 
@@ -323,12 +327,13 @@ function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: n
       hideObjectTooltip();
       return;
     }
-    const stats = describeTower(tower, state.towers);
+    const stats = describeTower(tower, state.towers, state.runeTotems);
     const rows = [
       `<div class="tooltip-row">攻擊力 <b>${stats.damage}</b> · 範圍 <b>${(stats.rangeFp / FP_SCALE).toFixed(1)}</b> 格 · 攻速 <b>${((stats.cooldownTicks * currentTickRateMs) / 1000).toFixed(2)}s</b></div>`,
     ];
     if (tower.upgradePath !== 'none') rows.push(`<div class="tooltip-row">${escapeHtml(UPGRADE_PATH_NAMES[tower.upgradePath])}</div>`);
     if (stats.adjacencyBonusActive) rows.push(`<div class="tooltip-row" style="color: var(--accent)">相生加速中(+15% 攻速)</div>`);
+    if (stats.totemBonusActive) rows.push(`<div class="tooltip-row" style="color: var(--accent)">圖騰增傷中(+20% 攻擊力)</div>`);
     rows.push(`<div class="tooltip-row">建造者:${escapeHtml(displayNameFor(tower.ownerId))}</div>`);
     html = `<div class="tooltip-title">${escapeHtml(TOWER_CHARACTER_NAMES[tower.element])}(${ELEMENT_NAMES[tower.element]}塔)Lv.${tower.level}</div>${rows.join('')}`;
   } else if (info.kind === 'monster') {
@@ -348,7 +353,7 @@ function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: n
     const cost = trapUpgradeCost(trap);
     const upgradeRow = cost === null ? '已滿級' : `升級到 Lv.${trap.level + 1} 需要 ${cost} 金幣`;
     html = `<div class="tooltip-title">陷阱 Lv.${trap.level}</div><div class="tooltip-row">減速 <b>${TRAP_SLOW_PERCENT_BY_LEVEL[trap.level]}%</b></div><div class="tooltip-row">${upgradeRow}</div>`;
-  } else {
+  } else if (info.kind === 'resourceBuilding') {
     const building = state.resourceBuildings.find((b) => b.id === info.id);
     if (!building) {
       hideObjectTooltip();
@@ -356,6 +361,13 @@ function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: n
     }
     const intervalSec = Math.round((RESOURCE_BUILDING_INTERVAL_TICKS * currentTickRateMs) / 1000);
     html = `<div class="tooltip-title">資源建築</div><div class="tooltip-row">每 ${intervalSec}s +${RESOURCE_BUILDING_INCOME} 金幣</div><div class="tooltip-row">建造者:${escapeHtml(displayNameFor(building.ownerId))}</div>`;
+  } else {
+    const totem = state.runeTotems.find((r) => r.id === info.id);
+    if (!totem) {
+      hideObjectTooltip();
+      return;
+    }
+    html = `<div class="tooltip-title">符文圖騰</div><div class="tooltip-row">範圍內全隊塔 <b>+${RUNE_TOTEM_DAMAGE_BONUS_PERCENT}%</b> 攻擊力</div><div class="tooltip-row">範圍 <b>${(RUNE_TOTEM_RANGE_FP / FP_SCALE).toFixed(1)}</b> 格</div><div class="tooltip-row">建造者:${escapeHtml(displayNameFor(totem.ownerId))}</div>`;
   }
 
   objectTooltipEl.innerHTML = html;
@@ -381,6 +393,7 @@ const gameRenderer = createGameRenderer(
     const myGold = latestState?.gold[myPlayerId()] ?? 0;
     const existingTrap = latestState?.traps.find((t) => t.x === x && t.y === y);
     const occupiedByResource = latestState?.resourceBuildings.some((r) => r.x === x && r.y === y);
+    const occupiedByTotem = latestState?.runeTotems.some((r) => r.x === x && r.y === y);
     // 已經有陷阱的格子改成跳「升級陷阱」選單(不分誰蓋的,誰都能出錢升級,跟塔升級同一套慣例),
     // 只有真的封頂了才單純跳提示,不會讓玩家搞不清楚這格到底能不能再做點什麼。
     if (existingTrap) {
@@ -408,6 +421,10 @@ const gameRenderer = createGameRenderer(
     }
     if (occupiedByResource) {
       showToast('這格已經有資源建築了');
+      return;
+    }
+    if (occupiedByTotem) {
+      showToast('這格已經有符文圖騰了');
       return;
     }
     const options: ChoiceOption[] = [];
@@ -455,6 +472,18 @@ const gameRenderer = createGameRenderer(
           submitAction({ kind: 'build_resource_building', params: { x, y } });
         },
       });
+      options.push({
+        label: '符文圖騰',
+        sublabel: `${RUNE_TOTEM_COST} 金幣 · 範圍內全隊塔 +${RUNE_TOTEM_DAMAGE_BONUS_PERCENT}% 攻擊力`,
+        disabled: myGold < RUNE_TOTEM_COST,
+        onChoose: () => {
+          if ((latestState?.gold[myPlayerId()] ?? 0) < RUNE_TOTEM_COST) {
+            showToast(`金幣不足!建造符文圖騰需要 ${RUNE_TOTEM_COST} 金幣`);
+            return;
+          }
+          submitAction({ kind: 'build_rune_totem', params: { x, y } });
+        },
+      });
     }
 
     showFloatingBuildMenu(screenX, screenY, options);
@@ -476,7 +505,7 @@ function renderTowerPanel(): void {
   towerPanelEl.hidden = !tower;
   if (!tower) return;
 
-  const stats = describeTower(tower, latestState?.towers ?? []);
+  const stats = describeTower(tower, latestState?.towers ?? [], latestState?.runeTotems ?? []);
   const myGold = latestState?.gold[myPlayerId()] ?? 0;
   towerPanelElementEl.textContent = `${TOWER_CHARACTER_NAMES[tower.element]}(${ELEMENT_NAMES[tower.element]}塔)`;
   towerPanelElementEl.className = `element-${tower.element}`;
@@ -492,6 +521,7 @@ function renderTowerPanel(): void {
   towerPanelPathRowEl.hidden = tower.upgradePath === 'none';
   if (tower.upgradePath !== 'none') towerPanelPathEl.textContent = UPGRADE_PATH_NAMES[tower.upgradePath];
   towerPanelAdjacencyRowEl.hidden = !stats.adjacencyBonusActive;
+  towerPanelTotemRowEl.hidden = !stats.totemBonusActive;
 
   // 升級不分誰的塔,誰都能幫忙出錢升級;賣塔限本人,避免動到別人的投資。
   if (stats.upgradeCost === null) {
@@ -573,7 +603,7 @@ window.addEventListener('keydown', (ev) => {
     return;
   }
   const slot = Number(ev.key);
-  if (!Number.isInteger(slot) || slot < 1 || slot > 4) return;
+  if (!Number.isInteger(slot) || slot < 1 || slot > 5) return;
   const openMenu = floatingBuildMenuEl.classList.contains('show')
     ? floatingBuildMenuEl
     : choiceModalOverlayEl.classList.contains('show')

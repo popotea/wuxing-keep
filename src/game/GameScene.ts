@@ -15,6 +15,7 @@ import {
   worldPositionFp,
 } from '../sim/map';
 import type { Monster } from '../sim/monsters';
+import { RUNE_TOTEM_RANGE_FP } from '../sim/placements';
 import type { SimulationState } from '../sim/simulation';
 import { TOWER_DEFS, UPGRADE_PATH_LEVEL, type CombatEvent, type Tower, type UpgradePath } from '../sim/towers';
 import { isMultiplayer, ownerColorHex } from './playerColors';
@@ -110,7 +111,7 @@ function tileHash(x: number, y: number): number {
 
 /** 滑鼠目前停在哪個物件上面(塔/怪物/陷阱/資源建築),main.ts 靠這個決定要不要顯示浮動說明。 */
 export interface HoverInfo {
-  kind: 'tower' | 'monster' | 'trap' | 'resourceBuilding';
+  kind: 'tower' | 'monster' | 'trap' | 'resourceBuilding' | 'runeTotem';
   id: number;
 }
 
@@ -381,6 +382,8 @@ export class GameScene extends Phaser.Scene {
     if (trap) return { kind: 'trap', id: trap.id };
     const building = this.pendingState.resourceBuildings.find((b) => b.x === gridX && b.y === gridY);
     if (building) return { kind: 'resourceBuilding', id: building.id };
+    const totem = this.pendingState.runeTotems.find((r) => r.x === gridX && r.y === gridY);
+    if (totem) return { kind: 'runeTotem', id: totem.id };
     return null;
   }
 
@@ -764,6 +767,19 @@ export class GameScene extends Phaser.Scene {
       g.fillStyle(0x000000, 0.25);
       g.fillEllipse(px, py + 3 * SCALE * bossMul, 10 * SCALE * bossMul, 4 * SCALE * bossMul);
     }
+
+    // 符文圖騰的範圍圈固定顯示,不用選取就看得到覆蓋範圍——這是純支援建築,玩家要能一眼
+    // 判斷「蓋在這裡罩得到哪些塔」,不像塔的射程圈只在選取時才顯示(那是攻擊判定的細節,
+    // 圖騰範圍是擺放策略的核心資訊,顯示邏輯故意不一樣)。
+    if (state.runeTotems.length > 0) {
+      const rangePx = (RUNE_TOTEM_RANGE_FP / FP_SCALE) * TILE_PX;
+      g.lineStyle(1.5 * SCALE, 0x9b59d0, 0.35);
+      for (const totem of state.runeTotems) {
+        const cx = totem.x * TILE_PX + TILE_PX / 2;
+        const cy = totem.y * TILE_PX + TILE_PX / 2;
+        g.strokeCircle(cx, cy, rangePx);
+      }
+    }
   }
 
   /**
@@ -838,6 +854,9 @@ export class GameScene extends Phaser.Scene {
     this.pruneStaleSprites(this.trapLevelTexts, liveTrapIds);
     for (const building of state.resourceBuildings) {
       this.drawResourceBuilding(g, building.x, building.y, multiplayer ? ownerColorHex(state, building.ownerId) : null);
+    }
+    for (const totem of state.runeTotems) {
+      this.drawRuneTotem(g, totem.x, totem.y, multiplayer ? ownerColorHex(state, totem.ownerId) : null);
     }
 
     if (this.selectedTowerId !== null) {
@@ -1051,6 +1070,28 @@ export class GameScene extends Phaser.Scene {
     g.fillTriangle(cx - 11 * SCALE, cy - 2 * SCALE, cx, cy - 14 * SCALE, cx + 11 * SCALE, cy - 2 * SCALE);
     g.lineStyle(1 * SCALE, 0x000000, 0.35);
     g.strokeTriangle(cx - 11 * SCALE, cy - 2 * SCALE, cx, cy - 14 * SCALE, cx + 11 * SCALE, cy - 2 * SCALE);
+    this.drawOwnerMark(g, cx, cy, ownerMark);
+  }
+
+  /**
+   * 符文圖騰目前沒有正式美術,畫一個發紫光的水晶方尖碑造型——刻意跟塔/怪物(五行配色)、
+   * 資源建築(金色屋頂)都不同色,一眼就看得出「這是純支援建築,不是攻擊單位」。
+   * 範圍圈另外畫在 groundEffectsLayer(見 drawGroundEffects()),不用選取就能看到覆蓋範圍。
+   */
+  private drawRuneTotem(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number, ownerMark: number | null): void {
+    const cx = gridX * TILE_PX + TILE_PX / 2;
+    const cy = gridY * TILE_PX + TILE_PX / 2;
+    const color = 0x9b59d0;
+    g.fillStyle(color, 0.15);
+    g.fillCircle(cx, cy, 17 * SCALE);
+    g.fillStyle(0x000000, 0.25);
+    g.fillEllipse(cx, cy + 9 * SCALE, 20 * SCALE, 6 * SCALE);
+    g.fillStyle(color, 1);
+    g.fillTriangle(cx - 7 * SCALE, cy + 7 * SCALE, cx, cy - 13 * SCALE, cx + 7 * SCALE, cy + 7 * SCALE);
+    g.lineStyle(1 * SCALE, 0x2d1b3a, 0.5);
+    g.strokeTriangle(cx - 7 * SCALE, cy + 7 * SCALE, cx, cy - 13 * SCALE, cx + 7 * SCALE, cy + 7 * SCALE);
+    g.fillStyle(0xffffff, 0.7);
+    g.fillCircle(cx, cy - 2 * SCALE, 2 * SCALE);
     this.drawOwnerMark(g, cx, cy, ownerMark);
   }
 

@@ -22,10 +22,12 @@ import {
   RESOURCE_BUILDING_COST,
   RESOURCE_BUILDING_INCOME,
   RESOURCE_BUILDING_INTERVAL_TICKS,
+  RUNE_TOTEM_COST,
   TRAP_COST,
   TRAP_SLOW_PERCENT_BY_LEVEL,
   trapUpgradeCost,
   type ResourceBuilding,
+  type RuneTotem,
   type Trap,
 } from './placements';
 import {
@@ -55,13 +57,19 @@ export interface SimulationState {
   lives: number;
   towers: Tower[];
   monsters: Monster[];
-  /** 非攻擊型放置物:陷阱只能蓋在路徑格,踩到會減速;資源建築規則跟塔一樣蓋在非路徑格,定期給 owner 被動金幣。 */
+  /**
+   * 非攻擊型放置物:陷阱只能蓋在路徑格,踩到會減速;資源建築規則跟塔一樣蓋在非路徑格,定期給
+   * owner 被動金幣;符文圖騰規則也跟塔一樣蓋在非路徑格,自己不攻擊,範圍內的塔(不分誰的)
+   * 攻擊力都會提升(見 towers.ts 的 hasNearbyTotem)。
+   */
   traps: Trap[];
   resourceBuildings: ResourceBuilding[];
+  runeTotems: RuneTotem[];
   nextTowerId: number;
   nextMonsterId: number;
   nextTrapId: number;
   nextResourceBuildingId: number;
+  nextRuneTotemId: number;
   gameOver: boolean;
   victory: boolean;
   /** 第 i 波的加碼獎勵是否已經判定過(不管有沒有趕上時限),避免重複發放 */
@@ -132,10 +140,12 @@ export function createInitialState(
     monsters: [],
     traps: [],
     resourceBuildings: [],
+    runeTotems: [],
     nextTowerId: 1,
     nextMonsterId: 1,
     nextTrapId: 1,
     nextResourceBuildingId: 1,
+    nextRuneTotemId: 1,
     gameOver: false,
     victory: false,
     waveTickOffset: 0,
@@ -183,15 +193,17 @@ function cloneState(state: SimulationState): SimulationState {
     monsters: state.monsters.map((m) => ({ ...m, pos: { ...m.pos } })),
     traps: state.traps.map((t) => ({ ...t })),
     resourceBuildings: state.resourceBuildings.map((r) => ({ ...r })),
+    runeTotems: state.runeTotems.map((r) => ({ ...r })),
     bonusAwarded: [...state.bonusAwarded],
     playerStats,
   };
 }
 
-/** 塔/資源建築都只能蓋在非路徑格,而且彼此不能疊在同一格上。 */
+/** 塔/資源建築/符文圖騰都只能蓋在非路徑格,而且彼此不能疊在同一格上。 */
 function isBuildableTileFree(state: SimulationState, x: number, y: number): boolean {
   if (state.towers.some((t) => t.x === x && t.y === y)) return false;
   if (state.resourceBuildings.some((r) => r.x === x && r.y === y)) return false;
+  if (state.runeTotems.some((r) => r.x === x && r.y === y)) return false;
   return true;
 }
 
@@ -318,6 +330,19 @@ function applyBuildResourceBuilding(state: SimulationState, playerId: PlayerId, 
   });
 }
 
+/** 符文圖騰規則跟塔/資源建築一樣蓋在非路徑格,自己不攻擊,只提供範圍加成(見 towers.ts 的 hasNearbyTotem)。 */
+function applyBuildRuneTotem(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const x = asFiniteInt(action.params.x);
+  const y = asFiniteInt(action.params.y);
+  if (x === null || y === null) return;
+  if (!inBounds(x, y) || isOnPath(x, y)) return;
+  if (!isBuildableTileFree(state, x, y)) return;
+  const gold = state.gold[playerId] ?? 0;
+  if (gold < RUNE_TOTEM_COST) return;
+  state.gold[playerId] = gold - RUNE_TOTEM_COST;
+  state.runeTotems.push({ id: state.nextRuneTotemId++, x, y, ownerId: playerId });
+}
+
 /**
  * 「呼叫下一波」:把 waveTickOffset 往前調,讓 effectiveWaveTick() 直接跳到下一波開始的
  * 那一刻——不分誰按,任何隊友都能按(跟升級/集火策略同一套慣例)。固定模式已經是最後一波
@@ -340,6 +365,7 @@ function applyCommand(state: SimulationState, playerId: PlayerId, action: Action
   else if (action.kind === 'build_trap') applyBuildTrap(state, playerId, action);
   else if (action.kind === 'upgrade_trap') applyUpgradeTrap(state, playerId, action);
   else if (action.kind === 'build_resource_building') applyBuildResourceBuilding(state, playerId, action);
+  else if (action.kind === 'build_rune_totem') applyBuildRuneTotem(state, playerId, action);
   else if (action.kind === 'skip_to_next_wave') applySkipToNextWave(state);
   // 其他/未知 kind 一律安全忽略
 }
@@ -368,13 +394,14 @@ function computeChecksum(state: SimulationState): string {
   const resourceBuildingPart = state.resourceBuildings
     .map((r) => `${r.id}:${r.x}:${r.y}:${r.ticksSinceLastIncome}`)
     .join(';');
+  const runeTotemPart = state.runeTotems.map((r) => `${r.id}:${r.x}:${r.y}`).join(';');
   const bonusPart = state.bonusAwarded.map((b) => (b ? '1' : '0')).join('');
   const statsPart = Object.keys(state.playerStats)
     .sort()
     .map((id) => `${id}:${state.playerStats[id].damageDealt}:${state.playerStats[id].kills}`)
     .join(',');
   return simpleHash(
-    `${state.tick}|${state.waveTickOffset}|${goldPart}|${state.lives}|${towerPart}|${monsterPart}|${trapPart}|${resourceBuildingPart}|${bonusPart}|${statsPart}`,
+    `${state.tick}|${state.waveTickOffset}|${goldPart}|${state.lives}|${towerPart}|${monsterPart}|${trapPart}|${resourceBuildingPart}|${runeTotemPart}|${bonusPart}|${statsPart}`,
   );
 }
 
@@ -453,7 +480,7 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   // 一起打死(常見於 splash 路線)只算給第一個把牠打進 0 血以下的塔主人,不會重複計算。
   const killedMonsterIdsThisTick = new Set<number>();
   for (const tower of next.towers) {
-    const events = tryAttack(tower, next.monsters, next.towers);
+    const events = tryAttack(tower, next.monsters, next.towers, next.runeTotems);
     const stats = next.playerStats[tower.ownerId];
     for (const event of events) {
       next.combatEvents.push(event);
