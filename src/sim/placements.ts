@@ -43,21 +43,38 @@ export const RESOURCE_BUILDING_INCOME = 10;
 export const RESOURCE_BUILDING_INTERVAL_TICKS = 300; // 20 tick/秒 * 15 秒
 
 /**
- * 符文圖騰:純支援型建築,自己不攻擊,範圍內的塔(不分誰的塔)攻擊力都會提升,規則跟塔/
- * 資源建築一樣蓋在非路徑格。故意不做等級(跟資源建築一樣單純,先求「組合玩法」的架構成立,
- * 之後真的要加分岐/升級再說)。跟第二種組合玩法(五行相生鄰接加成,見 towers.ts 的
+ * 符文圖騰:純支援型建築,自己不攻擊,範圍內的塔(不分誰的塔)會得到加成,規則跟塔/
+ * 資源建築一樣蓋在非路徑格。跟第二種組合玩法(五行相生鄰接加成,見 towers.ts 的
  * hasGeneratingNeighbor())是互補關係:相生是「塔跟塔之間」的組合,圖騰是「塔跟支援建築
  * 之間」的組合,兩者可以疊加、不衝突。
+ *
+ * **進階版圖騰**(2026-07-16 加的,呼應塔的分岐升級概念):新蓋的圖騰是 1 級(基礎版,固定
+ * `RUNE_TOTEM_DAMAGE_BONUS_PERCENT` 攻擊力加成,沒有分岐);花錢升到 `MAX_RUNE_TOTEM_LEVEL`
+ * (2 級)那一次必須二選一定案、之後不能改(跟塔的 `UPGRADE_PATH_LEVEL` 同一套慣例)——
+ * `damage`(強化圖騰)把攻擊力加成加重到 `RUNE_TOTEM_DAMAGE_BONUS_PERCENT_SPECIALIZED`;
+ * `haste`(疾風圖騰)整個換掉,改給範圍內的塔攻速加成(`RUNE_TOTEM_HASTE_PERCENT`,冷卻時間
+ * 打折),兩者互斥、不會同時疊加在同一座圖騰上(但一座強化圖騰跟一座疾風圖騰可以同時存在,
+ * 各自的效果分開套用在各自範圍內的塔——見 towers.ts 的 `nearbyTotemEffect()`)。
  */
 export interface RuneTotem {
   id: number;
   x: number;
   y: number;
   ownerId: PlayerId;
+  /** 圖騰等級,新蓋是 1(基礎版),封頂 MAX_RUNE_TOTEM_LEVEL。 */
+  level: number;
+  /** 升到 MAX_RUNE_TOTEM_LEVEL 那一次才會定案、之後不能改;之前都是 'none'。 */
+  upgradePath: 'none' | 'damage' | 'haste';
 }
 
 export const RUNE_TOTEM_COST = 150; // 2026-07-16 從 120 調漲(呼應賞金調降,見 monsters.ts 的 WAVES 註解)
 /** 範圍(定點數),比大多數塔的攻擊範圍再大一點,才能真的罩住一小群塔,不是只罩到自己那格。 */
 export const RUNE_TOTEM_RANGE_FP = 2600;
-/** 範圍內的塔攻擊力提升這個百分比(20 = +20%),跟塔的分岐路線/相生加成可以疊加。 */
+/** 基礎版(1 級,還沒分歧)的攻擊力加成百分比。 */
 export const RUNE_TOTEM_DAMAGE_BONUS_PERCENT = 20;
+export const MAX_RUNE_TOTEM_LEVEL = 2;
+export const RUNE_TOTEM_UPGRADE_COST = 200;
+/** 'damage' 分歧路線加重過的攻擊力加成(取代基礎版的 20%)。 */
+export const RUNE_TOTEM_DAMAGE_BONUS_PERCENT_SPECIALIZED = 35;
+/** 'haste' 分歧路線的攻速加成(冷卻時間打折,不是攻擊力)。 */
+export const RUNE_TOTEM_HASTE_PERCENT = 15;

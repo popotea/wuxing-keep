@@ -137,6 +137,8 @@ export class GameScene extends Phaser.Scene {
   private trapLevelTexts = new Map<number, Phaser.GameObjects.Text>();
   /** 怪物頭上顯示元素名稱的文字,依 id 建立/更新/銷毀,跟 monsterSprites 走同一套模式。 */
   private monsterNameTexts = new Map<number, Phaser.GameObjects.Text>();
+  /** 符文圖騰上方「Lv.N」文字,獨立一個 Map(理由同 trapLevelTexts,id 計數器各自獨立)。 */
+  private totemLevelTexts = new Map<number, Phaser.GameObjects.Text>();
   private pendingState: SimulationState | null = null;
   private hoverX: number | null = null;
   private hoverY: number | null = null;
@@ -470,6 +472,8 @@ export class GameScene extends Phaser.Scene {
     this.trapLevelTexts.clear();
     for (const label of this.monsterNameTexts.values()) label.destroy();
     this.monsterNameTexts.clear();
+    for (const label of this.totemLevelTexts.values()) label.destroy();
+    this.totemLevelTexts.clear();
   }
 
   private drawStaticLayer(): void {
@@ -846,9 +850,20 @@ export class GameScene extends Phaser.Scene {
     for (const building of state.resourceBuildings) {
       this.drawResourceBuilding(g, building.x, building.y, multiplayer ? ownerColorHex(state, building.ownerId) : null);
     }
+    const liveTotemIds = new Set<number>();
     for (const totem of state.runeTotems) {
-      this.drawRuneTotem(g, totem.x, totem.y, multiplayer ? ownerColorHex(state, totem.ownerId) : null);
+      liveTotemIds.add(totem.id);
+      this.drawRuneTotem(
+        g,
+        totem.id,
+        totem.x,
+        totem.y,
+        totem.level,
+        totem.upgradePath,
+        multiplayer ? ownerColorHex(state, totem.ownerId) : null,
+      );
     }
+    this.pruneStaleSprites(this.totemLevelTexts, liveTotemIds);
 
     if (this.selectedTowerId !== null) {
       const selected = state.towers.find((t) => t.id === this.selectedTowerId);
@@ -1065,14 +1080,25 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * 符文圖騰目前沒有正式美術,畫一個發紫光的水晶方尖碑造型——刻意跟塔/怪物(五行配色)、
-   * 資源建築(金色屋頂)都不同色,一眼就看得出「這是純支援建築,不是攻擊單位」。
+   * 符文圖騰目前沒有正式美術,畫一個發光水晶方尖碑造型——刻意跟塔/怪物(五行配色)、
+   * 資源建築(金色屋頂)都不同色,一眼就看得出「這是純支援建築,不是攻擊單位」。分歧路線
+   * 定案後(2 級)換不同色系:強化(damage)偏紅紫、疾風(haste)偏藍紫,還沒分歧(1 級)
+   * 維持原本的紫色,一眼就能區分三種狀態不用點進去看數字。
    * 範圍圈另外畫在 groundEffectsLayer(見 drawGroundEffects()),不用選取就能看到覆蓋範圍。
    */
-  private drawRuneTotem(g: Phaser.GameObjects.Graphics, gridX: number, gridY: number, ownerMark: number | null): void {
+  private drawRuneTotem(
+    g: Phaser.GameObjects.Graphics,
+    id: number,
+    gridX: number,
+    gridY: number,
+    level: number,
+    upgradePath: 'none' | 'damage' | 'haste',
+    ownerMark: number | null,
+  ): void {
     const cx = gridX * TILE_PX + TILE_PX / 2;
     const cy = gridY * TILE_PX + TILE_PX / 2;
-    const color = 0x9b59d0;
+    const specialized = level >= 2 && upgradePath !== 'none';
+    const color = specialized ? (upgradePath === 'haste' ? 0x4a8fe0 : 0xe0398f) : 0x9b59d0;
     g.fillStyle(color, 0.15);
     g.fillCircle(cx, cy, 17 * SCALE);
     g.fillStyle(0x000000, 0.25);
@@ -1084,6 +1110,7 @@ export class GameScene extends Phaser.Scene {
     g.fillStyle(0xffffff, 0.7);
     g.fillCircle(cx, cy - 2 * SCALE, 2 * SCALE);
     this.drawOwnerMark(g, cx, cy, ownerMark);
+    this.drawLevelLabel(this.totemLevelTexts, id, cx, cy, level);
   }
 
   /** 底座 + 尖塔的簡易造型,比純色圓形更有辨識度;等級用塔尖上方的「Lv.N」文字表示。沒有正式美術圖時的備援畫法。 */

@@ -21,16 +21,20 @@ import {
 } from './sim/monsters';
 import {
   RESOURCE_BUILDING_COST,
+  MAX_RUNE_TOTEM_LEVEL,
   RESOURCE_BUILDING_INCOME,
   RESOURCE_BUILDING_INTERVAL_TICKS,
   RUNE_TOTEM_COST,
   RUNE_TOTEM_DAMAGE_BONUS_PERCENT,
+  RUNE_TOTEM_DAMAGE_BONUS_PERCENT_SPECIALIZED,
+  RUNE_TOTEM_HASTE_PERCENT,
   RUNE_TOTEM_RANGE_FP,
+  RUNE_TOTEM_UPGRADE_COST,
   TRAP_COST,
   TRAP_SLOW_PERCENT_BY_LEVEL,
   trapUpgradeCost,
 } from './sim/placements';
-import { STARTING_LIVES, type SimulationState } from './sim/simulation';
+import { EMERGENCY_HEAL_COST, EMERGENCY_HEAL_THRESHOLD, STARTING_LIVES, type SimulationState } from './sim/simulation';
 import {
   describeTower,
   TOWER_CHARACTER_NAMES,
@@ -103,6 +107,7 @@ const towerPanelPathRowEl = $<HTMLDivElement>('towerPanelPathRow');
 const towerPanelPathEl = $<HTMLSpanElement>('towerPanelPath');
 const towerPanelAdjacencyRowEl = $<HTMLDivElement>('towerPanelAdjacencyRow');
 const towerPanelTotemRowEl = $<HTMLDivElement>('towerPanelTotemRow');
+const towerPanelTotemTextEl = $<HTMLSpanElement>('towerPanelTotemText');
 const towerPanelStrategySelect = $<HTMLSelectElement>('towerPanelStrategy');
 const towerUpgradeBtn = $<HTMLButtonElement>('towerUpgradeBtn');
 const towerUpgradeCostEl = $<HTMLSpanElement>('towerUpgradeCost');
@@ -114,6 +119,7 @@ const livesEl = $<HTMLSpanElement>('lives');
 const livesBarEl = $<HTMLDivElement>('livesBar');
 const teamLivesStatEl = $<HTMLDivElement>('teamLivesStat');
 const pathLivesStatsEl = $<HTMLDivElement>('pathLivesStats');
+const emergencyHealBtn = $<HTMLButtonElement>('emergencyHealBtn');
 const tickEl = $<HTMLSpanElement>('tick');
 const nextWaveEl = $<HTMLSpanElement>('nextWave');
 const waveNumberEl = $<HTMLSpanElement>('waveNumber');
@@ -244,6 +250,25 @@ scoreboardBodyEl.addEventListener('click', (ev) => {
   showGiftGoldModal(btn.dataset.giftTo);
 });
 
+/** 互助道具:緊急補命——團隊模式的按鈕是固定的 DOM 元素;個人生命模式的按鈕是動態產生的,用事件代理。 */
+emergencyHealBtn.addEventListener('click', () => {
+  if ((latestState?.gold[myPlayerId()] ?? 0) < EMERGENCY_HEAL_COST) {
+    showToast(`金幣不足!緊急補命需要 ${EMERGENCY_HEAL_COST} 金幣`);
+    return;
+  }
+  submitAction({ kind: 'emergency_heal', params: {} });
+});
+
+pathLivesStatsEl.addEventListener('click', (ev) => {
+  const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-heal-path]');
+  if (!btn?.dataset.healPath) return;
+  if ((latestState?.gold[myPlayerId()] ?? 0) < EMERGENCY_HEAL_COST) {
+    showToast(`金幣不足!緊急補命需要 ${EMERGENCY_HEAL_COST} 金幣`);
+    return;
+  }
+  submitAction({ kind: 'emergency_heal', params: { pathId: Number(btn.dataset.healPath) } });
+});
+
 /**
  * 蓋塔選單要列出哪些屬性——固定顯示玩家自己允許的全部屬性,不再隨機抽 3 個
  * (2026-07-16 改的,原本是 WC3 英雄選擇式隨機抽最多 3 個,玩家反應想要固定看到全部)。
@@ -371,7 +396,12 @@ function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: n
     ];
     if (tower.upgradePath !== 'none') rows.push(`<div class="tooltip-row">${escapeHtml(UPGRADE_PATH_NAMES[tower.upgradePath])}</div>`);
     if (stats.adjacencyBonusActive) rows.push(`<div class="tooltip-row" style="color: var(--accent)">相生加速中(+15% 攻速)</div>`);
-    if (stats.totemBonusActive) rows.push(`<div class="tooltip-row" style="color: var(--accent)">圖騰增傷中(+20% 攻擊力)</div>`);
+    if (stats.totemDamageBonusPercent > 0) {
+      rows.push(`<div class="tooltip-row" style="color: var(--accent)">圖騰增傷中(+${stats.totemDamageBonusPercent}% 攻擊力)</div>`);
+    }
+    if (stats.totemHastePercent > 0) {
+      rows.push(`<div class="tooltip-row" style="color: var(--accent)">圖騰加速中(+${stats.totemHastePercent}% 攻速)</div>`);
+    }
     rows.push(`<div class="tooltip-row">建造者:${escapeHtml(displayNameFor(tower.ownerId))}</div>`);
     html = `<div class="tooltip-title">${escapeHtml(TOWER_CHARACTER_NAMES[tower.element])}(${ELEMENT_NAMES[tower.element]}塔)Lv.${tower.level}</div>${rows.join('')}`;
   } else if (info.kind === 'monster') {
@@ -405,7 +435,13 @@ function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: n
       hideObjectTooltip();
       return;
     }
-    html = `<div class="tooltip-title">符文圖騰</div><div class="tooltip-row">範圍內全隊塔 <b>+${RUNE_TOTEM_DAMAGE_BONUS_PERCENT}%</b> 攻擊力</div><div class="tooltip-row">範圍 <b>${(RUNE_TOTEM_RANGE_FP / FP_SCALE).toFixed(1)}</b> 格</div><div class="tooltip-row">建造者:${escapeHtml(displayNameFor(totem.ownerId))}</div>`;
+    const specialized = totem.level >= MAX_RUNE_TOTEM_LEVEL && totem.upgradePath !== 'none';
+    const effectRow = specialized
+      ? totem.upgradePath === 'haste'
+        ? `<div class="tooltip-row">疾風圖騰:範圍內塔 <b>+${RUNE_TOTEM_HASTE_PERCENT}%</b> 攻速</div>`
+        : `<div class="tooltip-row">強化圖騰:範圍內塔 <b>+${RUNE_TOTEM_DAMAGE_BONUS_PERCENT_SPECIALIZED}%</b> 攻擊力</div>`
+      : `<div class="tooltip-row">範圍內塔 <b>+${RUNE_TOTEM_DAMAGE_BONUS_PERCENT}%</b> 攻擊力</div>`;
+    html = `<div class="tooltip-title">符文圖騰 Lv.${totem.level}</div>${effectRow}<div class="tooltip-row">範圍 <b>${(RUNE_TOTEM_RANGE_FP / FP_SCALE).toFixed(1)}</b> 格</div><div class="tooltip-row">建造者:${escapeHtml(displayNameFor(totem.ownerId))}</div>`;
   }
 
   objectTooltipEl.innerHTML = html;
@@ -431,7 +467,7 @@ const gameRenderer = createGameRenderer(
     const myGold = latestState?.gold[myPlayerId()] ?? 0;
     const existingTrap = latestState?.traps.find((t) => t.x === x && t.y === y);
     const occupiedByResource = latestState?.resourceBuildings.some((r) => r.x === x && r.y === y);
-    const occupiedByTotem = latestState?.runeTotems.some((r) => r.x === x && r.y === y);
+    const existingTotem = latestState?.runeTotems.find((r) => r.x === x && r.y === y);
     // 已經有陷阱的格子改成跳「升級陷阱」選單(不分誰蓋的,誰都能出錢升級,跟塔升級同一套慣例),
     // 只有真的封頂了才單純跳提示,不會讓玩家搞不清楚這格到底能不能再做點什麼。
     if (existingTrap) {
@@ -461,8 +497,40 @@ const gameRenderer = createGameRenderer(
       showToast('這格已經有資源建築了');
       return;
     }
-    if (occupiedByTotem) {
-      showToast('這格已經有符文圖騰了');
+    // 已經有符文圖騰的格子改成跳「升級圖騰」選單——圖騰只有 1→2 級這一次升級,而且這次
+    // 升級一定要選分歧路線(跟塔升到分岐級同一套慣例),所以直接跳分歧選擇,不用先跳一個
+    // 中間的「要不要升級」選單。
+    if (existingTotem) {
+      if (existingTotem.level >= MAX_RUNE_TOTEM_LEVEL) {
+        showToast('符文圖騰已經滿級了');
+        return;
+      }
+      showChoiceModal(`升級符文圖騰(選一條分歧路線)`, [
+        {
+          label: '強化圖騰',
+          sublabel: `${RUNE_TOTEM_UPGRADE_COST} 金幣 · 攻擊力加成 +${RUNE_TOTEM_DAMAGE_BONUS_PERCENT_SPECIALIZED}%`,
+          disabled: myGold < RUNE_TOTEM_UPGRADE_COST,
+          onChoose: () => {
+            if ((latestState?.gold[myPlayerId()] ?? 0) < RUNE_TOTEM_UPGRADE_COST) {
+              showToast(`金幣不足!升級圖騰需要 ${RUNE_TOTEM_UPGRADE_COST} 金幣`);
+              return;
+            }
+            submitAction({ kind: 'upgrade_rune_totem', params: { totemId: existingTotem.id, path: 'damage' } });
+          },
+        },
+        {
+          label: '疾風圖騰',
+          sublabel: `${RUNE_TOTEM_UPGRADE_COST} 金幣 · 攻速加成 +${RUNE_TOTEM_HASTE_PERCENT}%(取代攻擊力加成)`,
+          disabled: myGold < RUNE_TOTEM_UPGRADE_COST,
+          onChoose: () => {
+            if ((latestState?.gold[myPlayerId()] ?? 0) < RUNE_TOTEM_UPGRADE_COST) {
+              showToast(`金幣不足!升級圖騰需要 ${RUNE_TOTEM_UPGRADE_COST} 金幣`);
+              return;
+            }
+            submitAction({ kind: 'upgrade_rune_totem', params: { totemId: existingTotem.id, path: 'haste' } });
+          },
+        },
+      ]);
       return;
     }
     const options: ChoiceOption[] = [];
@@ -559,7 +627,14 @@ function renderTowerPanel(): void {
   towerPanelPathRowEl.hidden = tower.upgradePath === 'none';
   if (tower.upgradePath !== 'none') towerPanelPathEl.textContent = UPGRADE_PATH_NAMES[tower.upgradePath];
   towerPanelAdjacencyRowEl.hidden = !stats.adjacencyBonusActive;
-  towerPanelTotemRowEl.hidden = !stats.totemBonusActive;
+  const totemActive = stats.totemDamageBonusPercent > 0 || stats.totemHastePercent > 0;
+  towerPanelTotemRowEl.hidden = !totemActive;
+  if (totemActive) {
+    towerPanelTotemTextEl.textContent =
+      stats.totemHastePercent > 0
+        ? `圖騰加速中(+${stats.totemHastePercent}% 攻速)`
+        : `圖騰增傷中(+${stats.totemDamageBonusPercent}% 攻擊力)`;
+  }
 
   // 升級不分誰的塔,誰都能幫忙出錢升級;賣塔限本人,避免動到別人的投資。
   if (stats.upgradeCost === null) {
@@ -998,6 +1073,8 @@ function renderLivesHud(state: SimulationState): void {
     pathLivesStatsEl.hidden = true;
     livesEl.textContent = String(state.lives);
     renderLivesBar(state.lives);
+    // 互助道具:緊急補命——只有生命快歸零時才顯示這顆按鈕,平常不佔位置也不會被誤按。
+    emergencyHealBtn.hidden = state.lives > EMERGENCY_HEAL_THRESHOLD;
     return;
   }
   teamLivesStatEl.hidden = true;
@@ -1009,12 +1086,18 @@ function renderLivesHud(state: SimulationState): void {
       const ownerLabel = owners.length > 0 ? owners.map((id) => displayNameFor(id)).join('、') : '無人負責';
       const ratio = Math.max(0, Math.min(1, lives / startingPerPath));
       const barColor = ratio > 0.5 ? '#3a9d3a' : ratio > 0.25 ? '#d4af37' : '#e05a2b';
+      // 個人生命模式下每條路徑各自的補命按鈕(data-heal-path 事件代理,見下面的監聽器),
+      // 同樣只有那條路徑快歸零時才顯示。
+      const healBtn =
+        lives <= EMERGENCY_HEAL_THRESHOLD
+          ? `<button class="hud-skip-wave-btn" type="button" data-heal-path="${pathId}" title="花 ${EMERGENCY_HEAL_COST} 金幣補這條路徑幾條命"><svg class="icon"><use href="#icon-heart" /></svg> 補命</button>`
+          : '';
       return `
         <div class="hud-stat">
           <svg class="icon" style="color: var(--fire)"><use href="#icon-heart" /></svg>
           路徑${pathId + 1}(${escapeHtml(ownerLabel)})
           <div class="lives-bar-outer ${ratio <= 0.25 ? 'lives-critical' : ''}"><div style="width:${ratio * 100}%; background:${barColor}"></div></div>
-          ${lives}
+          ${lives}${healBtn}
         </div>
       `;
     })

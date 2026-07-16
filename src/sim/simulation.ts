@@ -19,10 +19,12 @@ import {
   type SpawnEvent,
 } from './monsters';
 import {
+  MAX_RUNE_TOTEM_LEVEL,
   RESOURCE_BUILDING_COST,
   RESOURCE_BUILDING_INCOME,
   RESOURCE_BUILDING_INTERVAL_TICKS,
   RUNE_TOTEM_COST,
+  RUNE_TOTEM_UPGRADE_COST,
   TRAP_COST,
   TRAP_SLOW_PERCENT_BY_LEVEL,
   trapUpgradeCost,
@@ -136,6 +138,16 @@ export function effectiveWaveTick(state: SimulationState): number {
 
 const STARTING_GOLD = 300;
 export const STARTING_LIVES = 20;
+
+/**
+ * 互助道具:緊急補命——花大錢回復幾條命,任何玩家都能用,不分誰出錢。故意設計成只有
+ * 「生命快歸零」時才能用(`lives <= EMERGENCY_HEAL_THRESHOLD`),不是隨時能買命池子,
+ * 定位是走投無路時的最後手段,不是常態性的生命來源。個人生命模式下改看指定路徑的
+ * `pathLives`,只補那一條路徑,其他路徑不受影響。
+ */
+export const EMERGENCY_HEAL_COST = 400;
+export const EMERGENCY_HEAL_AMOUNT = 5;
+export const EMERGENCY_HEAL_THRESHOLD = 5;
 
 export function createInitialState(
   seed: number,
@@ -367,7 +379,7 @@ function applyBuildResourceBuilding(state: SimulationState, playerId: PlayerId, 
   });
 }
 
-/** 符文圖騰規則跟塔/資源建築一樣蓋在非路徑格,自己不攻擊,只提供範圍加成(見 towers.ts 的 hasNearbyTotem)。 */
+/** 符文圖騰規則跟塔/資源建築一樣蓋在非路徑格,自己不攻擊,只提供範圍加成(見 towers.ts 的 nearbyTotemEffect)。 */
 function applyBuildRuneTotem(state: SimulationState, playerId: PlayerId, action: Action): void {
   const x = asFiniteInt(action.params.x);
   const y = asFiniteInt(action.params.y);
@@ -377,7 +389,34 @@ function applyBuildRuneTotem(state: SimulationState, playerId: PlayerId, action:
   const gold = state.gold[playerId] ?? 0;
   if (gold < RUNE_TOTEM_COST) return;
   state.gold[playerId] = gold - RUNE_TOTEM_COST;
-  state.runeTotems.push({ id: state.nextRuneTotemId++, x, y, ownerId: playerId });
+  state.runeTotems.push({ id: state.nextRuneTotemId++, x, y, ownerId: playerId, level: 1, upgradePath: 'none' });
+}
+
+/**
+ * 符文圖騰升級不分誰蓋的,誰都能出錢升級(跟塔/陷阱升級同一套慣例)。升到
+ * MAX_RUNE_TOTEM_LEVEL(2 級)那一次必須在 action.params.path 指定 'damage'/'haste' 之一,
+ * 不是就整個升級安全忽略(不會扣錢卻沒定案路線,跟塔的 applyUpgradeTower 同一套邏輯)。
+ */
+function applyUpgradeRuneTotem(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const totemId = asFiniteInt(action.params.totemId);
+  if (totemId === null) return;
+  const totem = state.runeTotems.find((t) => t.id === totemId);
+  if (!totem) return;
+  if (totem.level >= MAX_RUNE_TOTEM_LEVEL) return;
+  const gold = state.gold[playerId] ?? 0;
+  if (gold < RUNE_TOTEM_UPGRADE_COST) return;
+
+  const nextLevel = totem.level + 1;
+  let path: 'damage' | 'haste' | null = null;
+  if (nextLevel === MAX_RUNE_TOTEM_LEVEL) {
+    const requestedPath = action.params.path;
+    if (requestedPath !== 'damage' && requestedPath !== 'haste') return;
+    path = requestedPath;
+  }
+
+  state.gold[playerId] = gold - RUNE_TOTEM_UPGRADE_COST;
+  totem.level = nextLevel;
+  if (path) totem.upgradePath = path;
 }
 
 /**
@@ -412,6 +451,29 @@ function applyGiftGold(state: SimulationState, playerId: PlayerId, action: Actio
   state.gold[toPlayerId] = (state.gold[toPlayerId] ?? 0) + amount;
 }
 
+/**
+ * 互助道具:緊急補命。個人生命模式下 `action.params.pathId` 指定要補哪一條路徑(不合法/超出
+ * 範圍就安全忽略);預設模式不需要 `pathId`,直接補團隊共用的 `lives`。兩種模式都只有生命
+ * 「快歸零」(`<= EMERGENCY_HEAL_THRESHOLD`)時才能用,回滿也不會超過開局的滿血值。
+ */
+function applyEmergencyHeal(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const gold = state.gold[playerId] ?? 0;
+  if (gold < EMERGENCY_HEAL_COST) return;
+
+  if (state.individualLivesMode) {
+    const pathId = asFiniteInt(action.params.pathId);
+    if (pathId === null || pathId < 0 || pathId >= state.pathLives.length) return;
+    if (state.pathLives[pathId] > EMERGENCY_HEAL_THRESHOLD) return;
+    const startingPerPath = Math.max(1, Math.floor(STARTING_LIVES / state.pathLives.length));
+    state.gold[playerId] = gold - EMERGENCY_HEAL_COST;
+    state.pathLives[pathId] = Math.min(startingPerPath, state.pathLives[pathId] + EMERGENCY_HEAL_AMOUNT);
+  } else {
+    if (state.lives > EMERGENCY_HEAL_THRESHOLD) return;
+    state.gold[playerId] = gold - EMERGENCY_HEAL_COST;
+    state.lives = Math.min(STARTING_LIVES, state.lives + EMERGENCY_HEAL_AMOUNT);
+  }
+}
+
 function applyCommand(state: SimulationState, playerId: PlayerId, action: Action): void {
   if (action.kind === 'build_tower') applyBuildTower(state, playerId, action);
   else if (action.kind === 'sell_tower') applySellTower(state, playerId, action);
@@ -421,8 +483,10 @@ function applyCommand(state: SimulationState, playerId: PlayerId, action: Action
   else if (action.kind === 'upgrade_trap') applyUpgradeTrap(state, playerId, action);
   else if (action.kind === 'build_resource_building') applyBuildResourceBuilding(state, playerId, action);
   else if (action.kind === 'build_rune_totem') applyBuildRuneTotem(state, playerId, action);
+  else if (action.kind === 'upgrade_rune_totem') applyUpgradeRuneTotem(state, playerId, action);
   else if (action.kind === 'skip_to_next_wave') applySkipToNextWave(state);
   else if (action.kind === 'gift_gold') applyGiftGold(state, playerId, action);
+  else if (action.kind === 'emergency_heal') applyEmergencyHeal(state, playerId, action);
   // 其他/未知 kind 一律安全忽略
 }
 
@@ -450,7 +514,7 @@ function computeChecksum(state: SimulationState): string {
   const resourceBuildingPart = state.resourceBuildings
     .map((r) => `${r.id}:${r.x}:${r.y}:${r.ticksSinceLastIncome}`)
     .join(';');
-  const runeTotemPart = state.runeTotems.map((r) => `${r.id}:${r.x}:${r.y}`).join(';');
+  const runeTotemPart = state.runeTotems.map((r) => `${r.id}:${r.x}:${r.y}:${r.level}:${r.upgradePath}`).join(';');
   const pathLivesPart = state.pathLives.join(',');
   const bonusPart = state.bonusAwarded.map((b) => (b ? '1' : '0')).join('');
   const statsPart = Object.keys(state.playerStats)

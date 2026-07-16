@@ -3,7 +3,14 @@
 import { applyElementalDamage, GENERATED_BY, type Element } from './elements';
 import { FP_SCALE, remainingDistanceFp, worldPositionFp } from './map';
 import type { Monster, MoveType } from './monsters';
-import { RUNE_TOTEM_DAMAGE_BONUS_PERCENT, RUNE_TOTEM_RANGE_FP, type RuneTotem } from './placements';
+import {
+  MAX_RUNE_TOTEM_LEVEL,
+  RUNE_TOTEM_DAMAGE_BONUS_PERCENT,
+  RUNE_TOTEM_DAMAGE_BONUS_PERCENT_SPECIALIZED,
+  RUNE_TOTEM_HASTE_PERCENT,
+  RUNE_TOTEM_RANGE_FP,
+  type RuneTotem,
+} from './placements';
 import type { PlayerId } from '../net/protocol';
 
 /**
@@ -113,11 +120,46 @@ export function hasNearbyTotem(tower: Tower, runeTotems: readonly RuneTotem[]): 
   return false;
 }
 
+export interface TotemEffect {
+  /** 0 = 沒有加成。多座圖騰在範圍內同時生效時取最大值,不會疊加相加(避免堆圖騰數值爆炸)。 */
+  damageBonusPercent: number;
+  hastePercent: number;
+}
+
+/**
+ * 進階版圖騰:1 級(或還沒分歧)一律是 `damage` 效果、用基礎版的百分比;2 級才會依
+ * `upgradePath` 決定實際套用哪一種、用哪個百分比——`damage` 分歧路線把百分比加重,`haste`
+ * 分歧路線整個換成攻速加成(兩者互斥,同一座圖騰不會同時給兩種效果)。範圍內同時有好幾座
+ * 圖騰(可能分歧路線不同)時,傷害/攻速各自取範圍內最大值,不會通通疊加相加。
+ */
+export function nearbyTotemEffect(tower: Tower, runeTotems: readonly RuneTotem[]): TotemEffect {
+  const towerXFp = tower.x * FP_SCALE;
+  const towerYFp = tower.y * FP_SCALE;
+  const rangeSq = RUNE_TOTEM_RANGE_FP * RUNE_TOTEM_RANGE_FP;
+  let damageBonusPercent = 0;
+  let hastePercent = 0;
+  for (const totem of runeTotems) {
+    const dx = towerXFp - totem.x * FP_SCALE;
+    const dy = towerYFp - totem.y * FP_SCALE;
+    if (dx * dx + dy * dy > rangeSq) continue;
+    if (totem.level >= MAX_RUNE_TOTEM_LEVEL && totem.upgradePath === 'haste') {
+      hastePercent = Math.max(hastePercent, RUNE_TOTEM_HASTE_PERCENT);
+    } else {
+      const percent =
+        totem.level >= MAX_RUNE_TOTEM_LEVEL && totem.upgradePath === 'damage'
+          ? RUNE_TOTEM_DAMAGE_BONUS_PERCENT_SPECIALIZED
+          : RUNE_TOTEM_DAMAGE_BONUS_PERCENT;
+      damageBonusPercent = Math.max(damageBonusPercent, percent);
+    }
+  }
+  return { damageBonusPercent, hastePercent };
+}
+
 /**
  * 1~2 級(或還沒選路線前)是線性倍增;到 UPGRADE_PATH_LEVEL 選了 'burst' 路線後,傷害
  * 比線性更陡(BURST_DAMAGE_PERCENT);選 'splash' 路線則維持線性不額外加成,因為傷害輸出
  * 靠 tryAttack 的範圍波及效果拿,不是靠單體數字堆疊。範圍/冷卻留給之後平衡調整。
- * 圖騰加成(RUNE_TOTEM_DAMAGE_BONUS_PERCENT)在等級/路線加成算完之後才乘,兩者疊加。
+ * 圖騰的傷害加成(見 nearbyTotemEffect())在等級/路線加成算完之後才乘,兩者疊加。
  */
 function effectiveDamage(tower: Tower, runeTotems: readonly RuneTotem[]): number {
   const def = TOWER_DEFS[tower.element];
@@ -125,8 +167,9 @@ function effectiveDamage(tower: Tower, runeTotems: readonly RuneTotem[]): number
   if (tower.level >= UPGRADE_PATH_LEVEL && tower.upgradePath === 'burst') {
     base = Math.floor((base * BURST_DAMAGE_PERCENT) / 100);
   }
-  if (hasNearbyTotem(tower, runeTotems)) {
-    base = Math.floor((base * (100 + RUNE_TOTEM_DAMAGE_BONUS_PERCENT)) / 100);
+  const { damageBonusPercent } = nearbyTotemEffect(tower, runeTotems);
+  if (damageBonusPercent > 0) {
+    base = Math.floor((base * (100 + damageBonusPercent)) / 100);
   }
   return base;
 }
@@ -150,10 +193,20 @@ export function hasGeneratingNeighbor(tower: Tower, allTowers: readonly Tower[])
 /** 鄰接加成生效時,冷卻時間打這個百分比折扣(85 = 快 15%)。 */
 const ADJACENCY_COOLDOWN_PERCENT = 85;
 
-function effectiveCooldownTicks(tower: Tower, allTowers: readonly Tower[]): number {
-  const base = TOWER_DEFS[tower.element].cooldownTicks;
-  if (!hasGeneratingNeighbor(tower, allTowers)) return base;
-  return Math.max(1, Math.floor((base * ADJACENCY_COOLDOWN_PERCENT) / 100));
+/**
+ * 冷卻時間依序打兩層折扣(相生鄰接 + 疾風圖騰,兩個來源各自獨立,都生效時會複合疊加,
+ * 不是只算比較大的那個):相生鄰接固定折扣、圖騰疾風折扣依 `nearbyTotemEffect()` 算。
+ */
+function effectiveCooldownTicks(tower: Tower, allTowers: readonly Tower[], runeTotems: readonly RuneTotem[]): number {
+  let base = TOWER_DEFS[tower.element].cooldownTicks;
+  if (hasGeneratingNeighbor(tower, allTowers)) {
+    base = Math.floor((base * ADJACENCY_COOLDOWN_PERCENT) / 100);
+  }
+  const { hastePercent } = nearbyTotemEffect(tower, runeTotems);
+  if (hastePercent > 0) {
+    base = Math.floor((base * (100 - hastePercent)) / 100);
+  }
+  return Math.max(1, base);
 }
 
 export interface TowerStats {
@@ -165,22 +218,26 @@ export interface TowerStats {
   upgradePath: UpgradePath;
   /** 目前是不是有相生鄰居在加速——純顯示用,面板/地圖靠這個決定要不要顯示加成標示。 */
   adjacencyBonusActive: boolean;
-  /** 目前是不是在符文圖騰範圍內——純顯示用,同上。 */
-  totemBonusActive: boolean;
+  /** 目前範圍內圖騰給的傷害加成百分比(0 = 沒有),純顯示用。 */
+  totemDamageBonusPercent: number;
+  /** 目前範圍內圖騰給的攻速加成百分比(0 = 沒有),純顯示用。 */
+  totemHastePercent: number;
 }
 
 /** 給 UI 顯示用(WC3 式選取面板):這座塔目前的實際數值(已套用等級加成+鄰接加成+圖騰加成)+ 升級/賣出的花費。 */
 export function describeTower(tower: Tower, allTowers: readonly Tower[], runeTotems: readonly RuneTotem[]): TowerStats {
   const def = TOWER_DEFS[tower.element];
+  const totemEffect = nearbyTotemEffect(tower, runeTotems);
   return {
     damage: effectiveDamage(tower, runeTotems),
     rangeFp: def.rangeFp,
-    cooldownTicks: effectiveCooldownTicks(tower, allTowers),
+    cooldownTicks: effectiveCooldownTicks(tower, allTowers, runeTotems),
     upgradeCost: upgradeCost(tower),
     sellValue: sellValue(tower),
     upgradePath: tower.upgradePath,
     adjacencyBonusActive: hasGeneratingNeighbor(tower, allTowers),
-    totemBonusActive: hasNearbyTotem(tower, runeTotems),
+    totemDamageBonusPercent: totemEffect.damageBonusPercent,
+    totemHastePercent: totemEffect.hastePercent,
   };
 }
 
@@ -245,7 +302,7 @@ export function tryAttack(
 ): CombatEvent[] {
   const def = TOWER_DEFS[tower.element];
   tower.ticksSinceLastAttack += 1;
-  if (tower.ticksSinceLastAttack < effectiveCooldownTicks(tower, allTowers)) return [];
+  if (tower.ticksSinceLastAttack < effectiveCooldownTicks(tower, allTowers, runeTotems)) return [];
   const target = findTarget(monsters, tower, def);
   if (!target) return [];
   tower.ticksSinceLastAttack = 0;

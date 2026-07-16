@@ -889,6 +889,9 @@
         <div id="teamLivesStat" class="hud-stat">
           <svg class="icon" style="color: var(--fire)"><use href="#icon-heart" /></svg>
           <div class="lives-bar-outer"><div id="livesBar"></div></div> <span id="lives">-</span>
+          <button id="emergencyHealBtn" class="hud-skip-wave-btn" type="button" hidden title="生命快歸零時的最後手段,花費較高">
+            <svg class="icon"><use href="#icon-heart" /></svg> 緊急補命
+          </button>
         </div>
         <!-- 個人生命模式:每條路徑各自一個生命條,取代上面那顆團隊共用的(main.ts 依
              state.individualLivesMode 二選一顯示,內容由 renderPathLivesHud() 動態產生)。 -->
@@ -951,7 +954,7 @@
             <svg class="icon"><use href="#icon-spark" /></svg> 相生加速中(+15% 攻速)
           </div>
           <div id="towerPanelTotemRow" class="tower-panel-adjacency" hidden>
-            <svg class="icon"><use href="#icon-star" /></svg> 圖騰增傷中(+20% 攻擊力)
+            <svg class="icon"><use href="#icon-star" /></svg> <span id="towerPanelTotemText">-</span>
           </div>
         </div>
         <label class="tower-panel-strategy">
