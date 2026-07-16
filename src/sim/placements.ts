@@ -13,7 +13,7 @@ export interface Trap {
   level: number;
 }
 
-export const TRAP_COST = 30;
+export const TRAP_COST = 40; // 2026-07-16 從 30 調漲(呼應賞金調降,見 monsters.ts 的 WAVES 註解)
 export const MAX_TRAP_LEVEL = 3;
 /**
  * 怪物只要站在陷阱格上,這個 tick 的移動速度打這個折扣(百分比,依陷阱等級查表)。持續生效,
@@ -35,9 +35,12 @@ export interface ResourceBuilding {
   ticksSinceLastIncome: number;
 }
 
-export const RESOURCE_BUILDING_COST = 80;
-export const RESOURCE_BUILDING_INCOME = 15;
-export const RESOURCE_BUILDING_INTERVAL_TICKS = 200; // 20 tick/秒 * 10 秒
+// 2026-07-16 玩家實測反應金幣累積太快花不完,把資源建築的被動收入調弱(15 金幣/10 秒
+// -> 10 金幣/15 秒,速率大約砍掉一半以上)+ 順便漲一點建造成本,呼應同一次調整裡賞金調降、
+// 塔/陷阱/圖騰漲價(見 monsters.ts 的 WAVES 註解)。
+export const RESOURCE_BUILDING_COST = 90;
+export const RESOURCE_BUILDING_INCOME = 10;
+export const RESOURCE_BUILDING_INTERVAL_TICKS = 300; // 20 tick/秒 * 15 秒
 
 /**
  * 符文圖騰:純支援型建築,自己不攻擊,範圍內的塔(不分誰的塔)攻擊力都會提升,規則跟塔/
@@ -53,7 +56,7 @@ export interface RuneTotem {
   ownerId: PlayerId;
 }
 
-export const RUNE_TOTEM_COST = 120;
+export const RUNE_TOTEM_COST = 150; // 2026-07-16 從 120 調漲(呼應賞金調降,見 monsters.ts 的 WAVES 註解)
 /** 範圍(定點數),比大多數塔的攻擊範圍再大一點,才能真的罩住一小群塔,不是只罩到自己那格。 */
 export const RUNE_TOTEM_RANGE_FP = 2600;
 /** 範圍內的塔攻擊力提升這個百分比(20 = +20%),跟塔的分岐路線/相生加成可以疊加。 */

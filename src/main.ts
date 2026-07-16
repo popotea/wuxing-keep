@@ -192,7 +192,11 @@ function renderScoreboard(): void {
       (r, i) => `
         <tr class="${r.playerId === myPlayerId() ? 'scoreboard-me' : ''}">
           <td><span class="scoreboard-rank ${i === 0 ? 'rank-1' : ''}">${i + 1}</span></td>
-          <td>${multiplayer ? `<span class="scoreboard-dot" style="background:${ownerColorCss(state, r.playerId)}"></span>` : ''}${escapeHtml(r.name)}</td>
+          <td>${multiplayer ? `<span class="scoreboard-dot" style="background:${ownerColorCss(state, r.playerId)}"></span>` : ''}${escapeHtml(r.name)}${
+            multiplayer && r.playerId !== myPlayerId()
+              ? `<button class="scoreboard-gift-btn" type="button" data-gift-to="${escapeHtml(r.playerId)}" title="送金幣給${escapeHtml(r.name)}"><svg class="icon"><use href="#icon-gift" /></svg></button>`
+              : ''
+          }</td>
           <td>${r.gold}</td>
           <td>${r.towerCount}</td>
           <td>${r.kills}</td>
@@ -207,6 +211,34 @@ scoreboardBtn.addEventListener('click', () => {
   const showing = scoreboardOverlayEl.classList.toggle('show');
   scoreboardBtn.textContent = showing ? '關閉記分板' : '記分板';
   if (showing) renderScoreboard();
+});
+
+/** 互助道具:金幣禮物——記分板每列(自己除外)的禮物按鈕點下去,跳選單選金額,送出 gift_gold 指令。 */
+function showGiftGoldModal(toPlayerId: string): void {
+  const toName = displayNameFor(toPlayerId);
+  const amounts = [50, 100, 200];
+  showChoiceModal(
+    `送金幣給 ${toName}`,
+    amounts.map((amount) => ({
+      label: `${amount} 金幣`,
+      disabled: (latestState?.gold[myPlayerId()] ?? 0) < amount,
+      onChoose: () => {
+        if ((latestState?.gold[myPlayerId()] ?? 0) < amount) {
+          showToast('金幣不足,沒辦法送這麼多');
+          return;
+        }
+        submitAction({ kind: 'gift_gold', params: { toPlayerId, amount } });
+      },
+    })),
+  );
+}
+
+// 記分板內容是整段 innerHTML 重畫的(見 renderScoreboard()),禮物按鈕改用事件代理(委派到
+// 整個 tbody 上),不用每次重畫後重新綁定個別按鈕的監聽器。
+scoreboardBodyEl.addEventListener('click', (ev) => {
+  const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>('button.scoreboard-gift-btn');
+  if (!btn?.dataset.giftTo) return;
+  showGiftGoldModal(btn.dataset.giftTo);
 });
 
 /**

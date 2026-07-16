@@ -483,6 +483,18 @@
       .scoreboard-rank { font-weight: bold; color: var(--muted); width: 1.6em; display: inline-block; text-align: center; }
       .scoreboard-rank.rank-1 { color: var(--accent); }
       .scoreboard-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; box-shadow: 0 0 4px currentColor; }
+      .scoreboard-gift-btn {
+        margin-left: 6px;
+        padding: 1px 5px;
+        background: rgba(212, 175, 55, 0.12);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        color: var(--accent);
+        cursor: pointer;
+        vertical-align: middle;
+      }
+      .scoreboard-gift-btn:hover { border-color: var(--accent); }
+      .scoreboard-gift-btn .icon { width: 0.85em; height: 0.85em; vertical-align: -0.1em; }
       #gameCanvas {
         border: 2px solid var(--border);
         border-radius: 6px;
@@ -739,6 +751,15 @@
       </symbol>
       <symbol id="icon-spark" viewBox="0 0 24 24">
         <path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor" />
+      </symbol>
+      <symbol id="icon-gift" viewBox="0 0 24 24">
+        <rect x="4" y="10" width="16" height="10" rx="1" fill="currentColor" />
+        <rect x="3" y="6.5" width="18" height="4" rx="1" fill="currentColor" />
+        <rect x="11" y="6.5" width="2" height="13.5" fill="#00000055" />
+        <path
+          d="M12 6.5c-1-3-5.5-3.5-5.5-1S9 6.5 12 6.5zM12 6.5c1-3 5.5-3.5 5.5-1S15 6.5 12 6.5z"
+          fill="currentColor"
+        />
       </symbol>
     </svg>
 

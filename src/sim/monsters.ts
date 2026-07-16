@@ -46,28 +46,30 @@ export interface WaveDef {
 export const WAVE_INTERVAL_TICKS = 400; // 20 tick/秒 * 20 秒
 export const SPAWN_INTERVAL_TICKS = 20; // 同波怪物間隔 1 秒
 
-// 數值都是先求「能玩」的佔位平衡,真正調數值是 Phase 5 的事。
+// 數值都是先求「能玩」的佔位平衡,真正平衡是 Phase 5 的事。2026-07-16 玩家實測反應金幣
+// 累積太快、根本花不完,把賞金整批調降約 30%(呼應同一次調整裡塔/陷阱/圖騰的漲價跟資源建築
+// 收入調降,三個方向一起下手,不是單靠其中一個)。
 export const WAVES: readonly WaveDef[] = [
   // 水路怪:出場時路徑會浮現流水視覺效果(GameScene.ts),只有非火屬性的塔打得到(水克火)。
-  { element: 'water', count: 6, hp: 40, speedFp: 60, bounty: 10, moveType: 'water' },
-  { element: 'fire', count: 6, hp: 55, speedFp: 65, bounty: 12 },
-  { element: 'wood', count: 8, hp: 70, speedFp: 60, bounty: 14 },
+  { element: 'water', count: 6, hp: 40, speedFp: 60, bounty: 7, moveType: 'water' },
+  { element: 'fire', count: 6, hp: 55, speedFp: 65, bounty: 8 },
+  { element: 'wood', count: 8, hp: 70, speedFp: 60, bounty: 10 },
   // 加碼波:血少速度快,限時內清光才拿得到額外金幣,清不完也不會有懲罰。
   {
     element: 'earth',
     count: 5,
     hp: 30,
     speedFp: 90,
-    bounty: 8,
+    bounty: 6,
     bonusClearWithinTicks: 200,
-    bonusGold: 100,
+    bonusGold: 70,
   },
-  { element: 'earth', count: 8, hp: 90, speedFp: 55, bounty: 16 },
+  { element: 'earth', count: 8, hp: 90, speedFp: 55, bounty: 11 },
   // 飛行怪:陷阱打不到,只有土屬性以外的塔打得到(土是純地面系,搆不到天上)。
-  { element: 'metal', count: 10, hp: 110, speedFp: 60, bounty: 18, moveType: 'air' },
-  { element: 'fire', count: 12, hp: 130, speedFp: 70, bounty: 22 },
+  { element: 'metal', count: 10, hp: 110, speedFp: 60, bounty: 13, moveType: 'air' },
+  { element: 'fire', count: 12, hp: 130, speedFp: 70, bounty: 15 },
   // 最終首領波:單隻厚血慢速的收尾挑戰,賞金給得比較多當作全破獎勵的一部分。
-  { element: 'earth', count: 1, hp: 1200, speedFp: 35, bounty: 150, isBoss: true },
+  { element: 'earth', count: 1, hp: 1200, speedFp: 35, bounty: 105, isBoss: true },
 ];
 
 export function totalWaveTicks(): number {
@@ -164,7 +166,7 @@ export function createMonster(id: number, spawn: SpawnEvent): Monster {
 export const ENDLESS_BOSS_INTERVAL = 5;
 const ENDLESS_BASE_HP = 50;
 const ENDLESS_BASE_SPEED_FP = 60;
-const ENDLESS_BASE_BOUNTY = 12;
+const ENDLESS_BASE_BOUNTY = 8; // 2026-07-16 跟著固定模式的賞金調降一起降(約 -30%)
 const ENDLESS_WAVE_MONSTER_COUNT = 8;
 /** 血量/賞金每波 +12%(對第 0 波基準值線性疊加,不封頂——就是要讓怪物「持續變強」)。 */
 const ENDLESS_HP_GROWTH_PERCENT = 12;

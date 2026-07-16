@@ -357,6 +357,24 @@ function applySkipToNextWave(state: SimulationState): void {
   state.waveTickOffset += nextWaveStartTick - current;
 }
 
+/**
+ * 互助道具:金幣禮物——把自己的金幣直接轉一部分給隊友,純粹重新分配現有資源,不會憑空
+ * 生錢也不會消失(從送禮者的 gold 扣多少,收禮者的 gold 就加多少)。不能送給自己、金額
+ * 必須是正整數、送禮者的錢要夠,任何一項不成立就安全忽略。單人模式沒有其他玩家可以送,
+ * 這個指令自然就一直是 no-op。
+ */
+function applyGiftGold(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const toPlayerId = action.params.toPlayerId;
+  const amount = asFiniteInt(action.params.amount);
+  if (typeof toPlayerId !== 'string' || amount === null || amount <= 0) return;
+  if (toPlayerId === playerId) return;
+  if (!(toPlayerId in state.gold)) return;
+  const gold = state.gold[playerId] ?? 0;
+  if (gold < amount) return;
+  state.gold[playerId] = gold - amount;
+  state.gold[toPlayerId] = (state.gold[toPlayerId] ?? 0) + amount;
+}
+
 function applyCommand(state: SimulationState, playerId: PlayerId, action: Action): void {
   if (action.kind === 'build_tower') applyBuildTower(state, playerId, action);
   else if (action.kind === 'sell_tower') applySellTower(state, playerId, action);
@@ -367,6 +385,7 @@ function applyCommand(state: SimulationState, playerId: PlayerId, action: Action
   else if (action.kind === 'build_resource_building') applyBuildResourceBuilding(state, playerId, action);
   else if (action.kind === 'build_rune_totem') applyBuildRuneTotem(state, playerId, action);
   else if (action.kind === 'skip_to_next_wave') applySkipToNextWave(state);
+  else if (action.kind === 'gift_gold') applyGiftGold(state, playerId, action);
   // 其他/未知 kind 一律安全忽略
 }
 
