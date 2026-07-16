@@ -69,6 +69,7 @@ const turnCredInput = $<HTMLInputElement>('turnCred');
 const hostNameInput = $<HTMLInputElement>('hostName');
 const hostDifficultySelect = $<HTMLSelectElement>('hostDifficulty');
 const hostEndlessModeCheckbox = $<HTMLInputElement>('hostEndlessMode');
+const hostIndividualLivesModeCheckbox = $<HTMLInputElement>('hostIndividualLivesMode');
 const soloEndlessModeCheckbox = $<HTMLInputElement>('soloEndlessMode');
 const hostBtn = $<HTMLButtonElement>('hostBtn');
 const roomCodeEl = $<HTMLSpanElement>('roomCode');
@@ -111,6 +112,8 @@ const towerDeselectBtn = $<HTMLButtonElement>('towerDeselectBtn');
 const goldEl = $<HTMLSpanElement>('gold');
 const livesEl = $<HTMLSpanElement>('lives');
 const livesBarEl = $<HTMLDivElement>('livesBar');
+const teamLivesStatEl = $<HTMLDivElement>('teamLivesStat');
+const pathLivesStatsEl = $<HTMLDivElement>('pathLivesStats');
 const tickEl = $<HTMLSpanElement>('tick');
 const nextWaveEl = $<HTMLSpanElement>('nextWave');
 const waveNumberEl = $<HTMLSpanElement>('waveNumber');
@@ -964,7 +967,12 @@ function evaluateAchievements(state: SimulationState): void {
     }
   };
   unlock('full-clear');
-  if (state.lives === STARTING_LIVES) unlock('flawless');
+  // 個人生命模式下 state.lives 這個欄位是凍結不動的(見 simulation.ts 的說明,漏怪改扣
+  // pathLives),不能直接拿來判斷「無傷」,要改比對每條路徑的生命是不是都還在開局的滿血狀態。
+  const flawless = state.individualLivesMode
+    ? state.pathLives.every((l) => l === Math.max(1, Math.floor(STARTING_LIVES / state.pathLives.length)))
+    : state.lives === STARTING_LIVES;
+  if (flawless) unlock('flawless');
   if (!everSoldTowerThisMatch) unlock('no-sell');
   if (myElementCountThisMatch === 1) unlock('mono-element');
   if (changed) {
@@ -978,6 +986,39 @@ function renderLivesBar(lives: number): void {
   livesBarEl.style.width = `${ratio * 100}%`;
   livesBarEl.style.background = ratio > 0.5 ? '#3a9d3a' : ratio > 0.25 ? '#d4af37' : '#e05a2b';
   livesBarEl.parentElement?.classList.toggle('lives-critical', ratio <= 0.25);
+}
+
+/**
+ * 生命 HUD:預設模式顯示團隊共用一條命條(`#teamLivesStat`);個人生命模式改顯示每條路徑
+ * 各自一條命條(`#pathLivesStats`,動態產生,標出負責的玩家名字),兩者互斥顯示。
+ */
+function renderLivesHud(state: SimulationState): void {
+  if (!state.individualLivesMode) {
+    teamLivesStatEl.hidden = false;
+    pathLivesStatsEl.hidden = true;
+    livesEl.textContent = String(state.lives);
+    renderLivesBar(state.lives);
+    return;
+  }
+  teamLivesStatEl.hidden = true;
+  pathLivesStatsEl.hidden = false;
+  const startingPerPath = Math.max(1, Math.floor(STARTING_LIVES / state.pathLives.length));
+  pathLivesStatsEl.innerHTML = state.pathLives
+    .map((lives, pathId) => {
+      const owners = state.pathOwners[pathId] ?? [];
+      const ownerLabel = owners.length > 0 ? owners.map((id) => displayNameFor(id)).join('、') : '無人負責';
+      const ratio = Math.max(0, Math.min(1, lives / startingPerPath));
+      const barColor = ratio > 0.5 ? '#3a9d3a' : ratio > 0.25 ? '#d4af37' : '#e05a2b';
+      return `
+        <div class="hud-stat">
+          <svg class="icon" style="color: var(--fire)"><use href="#icon-heart" /></svg>
+          路徑${pathId + 1}(${escapeHtml(ownerLabel)})
+          <div class="lives-bar-outer ${ratio <= 0.25 ? 'lives-critical' : ''}"><div style="width:${ratio * 100}%; background:${barColor}"></div></div>
+          ${lives}
+        </div>
+      `;
+    })
+    .join('');
 }
 
 /** 對局開始/回選單時清掉上一場的勝敗橫幅跟樣式,不然舊的發光顏色會殘留。 */
@@ -1055,8 +1096,7 @@ const lockstepHandlers: LockstepHandlers = {
     tickEl.textContent = String(state.tick);
     checksumEl.textContent = state.checksum;
     goldEl.textContent = String(state.gold[myPlayerId()] ?? 0);
-    livesEl.textContent = String(state.lives);
-    renderLivesBar(state.lives);
+    renderLivesHud(state);
     renderWaveHud(state);
     gameRenderer.renderState(state);
     renderTowerPanel();
@@ -1118,6 +1158,7 @@ const roomHandlers: RoomHandlers = {
           countdownMs: payload.countdownMs,
           difficultyPercent: payload.difficultyPercent,
           endlessMode: payload.endlessMode,
+          individualLivesMode: payload.individualLivesMode,
         },
         payload.seed,
         lockstepHandlers,
@@ -1129,6 +1170,7 @@ const roomHandlers: RoomHandlers = {
         payload.seed,
         payload.difficultyPercent,
         payload.endlessMode,
+        payload.individualLivesMode,
         lockstepHandlers,
       );
     }
@@ -1272,6 +1314,7 @@ startBtn.addEventListener('click', () => {
     ...BASE_MATCH_CONFIG,
     difficultyPercent: Number(hostDifficultySelect.value) || 100,
     endlessMode: hostEndlessModeCheckbox.checked,
+    individualLivesMode: hostIndividualLivesModeCheckbox.checked,
   });
 });
 

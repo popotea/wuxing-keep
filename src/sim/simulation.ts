@@ -6,7 +6,7 @@
 
 import type { Action, PlayerId, TimedCommand } from '../net/protocol';
 import { isElement, type Element } from './elements';
-import { advanceAlongPath, FP_SCALE, inBounds, isOnPath, worldPositionFp } from './map';
+import { advanceAlongPath, FP_SCALE, inBounds, isOnPath, PATH_COUNT, worldPositionFp } from './map';
 import {
   createMonster,
   getEndlessSpawnEventsForTick,
@@ -53,7 +53,8 @@ export interface SimulationState {
   tick: number;
   /** 團隊模式:每個玩家自己一份、彼此獨立的金幣。塔可以互相幫忙升級,但花的是升級者自己的錢。 */
   gold: Record<PlayerId, number>;
-  /** 生命是團隊共用一份,不分誰漏的怪。 */
+  /** 團隊共用一份的生命(預設模式,不分誰漏的怪)。`individualLivesMode` 開啟時這個欄位不會
+   * 再被更新(固定停在初始值),勝敗判定跟漏怪扣血都改看下面的 `pathLives`。 */
   lives: number;
   towers: Tower[];
   monsters: Monster[];
@@ -103,6 +104,27 @@ export interface SimulationState {
    * 任何玩家都能按,不分誰的操作(跟升級/集火策略同一套慣例)。
    */
   waveTickOffset: number;
+  /**
+   * 個人生命模式:開局後固定不變(跟 `endlessMode` 一樣,不用算進 checksum)。多人連線限定
+   * (單人模式一直是 false,見 `main.ts` 只有多人建房頁面才有這個選項)。true 時每條路徑各自
+   * 有獨立的生命池子(見 `pathLives`),漏怪只扣該路徑自己的血,不影響其他路徑;某條路徑的
+   * 生命歸零時那條路徑直接停止生怪(`step()` 過濾掉指定給死路徑的 `SpawnEvent`,怪物永遠不會
+   * 再出現,不是暫停),其他路徑不受影響繼續進行;全部路徑都歸零才算 `gameOver`。
+   */
+  individualLivesMode: boolean;
+  /**
+   * 只有 `individualLivesMode` 開啟時才有意義,長度固定是 `PATH_COUNT`,索引對應 `pathId`。
+   * 是會被 `step()` 修改的動態狀態,**要算進 `computeChecksum`**(跟 `waveTickOffset` 同一類,
+   * 不是像 `endlessMode` 那種一次性旗標)。
+   */
+  pathLives: number[];
+  /**
+   * 只有 `individualLivesMode` 開啟時才有意義,長度固定是 `PATH_COUNT`,索引對應 `pathId`,
+   * 內容是負責那條路徑的玩家 id 清單(`createInitialState()` 依玩家數對 `PATH_COUNT` 取餘數
+   * 分組,純顯示用——不是權限管控,任何人本來就能在任何地方蓋塔,只是决定「這條路徑漏怪
+   * 算誰的」)。開局後固定不變,不用算進 checksum。
+   */
+  pathOwners: PlayerId[][];
   /** 除錯用:多台機器互相比對,一旦不一致就代表跑飛了 */
   checksum: string;
 }
@@ -120,6 +142,7 @@ export function createInitialState(
   difficultyPercent = 100,
   playerElements: Record<PlayerId, Element[]> = {},
   endlessMode = false,
+  individualLivesMode = false,
 ): SimulationState {
   const gold: Record<PlayerId, number> = {};
   const playerStats: Record<PlayerId, PlayerStats> = {};
@@ -131,6 +154,15 @@ export function createInitialState(
   const playerCount = Math.max(1, Object.keys(playerElements).length);
   // 每多一個玩家 +20% 血量/速度,單人(playerCount=1)固定是 100%,不影響既有單人平衡。
   const playerCountScalePercent = 100 + (playerCount - 1) * 20;
+
+  // 個人生命模式:把玩家排序後依 index % PATH_COUNT 分組,每條路徑的生命池子是團隊生命
+  // 平均分下去(而不是每條路徑各自滿額),維持整體難度跟預設模式差不多,不會憑空變兩倍簡單。
+  const sortedPlayerIds = Object.keys(playerElements).sort();
+  const pathOwners: PlayerId[][] = Array.from({ length: PATH_COUNT }, () => []);
+  for (let i = 0; i < sortedPlayerIds.length; i++) {
+    pathOwners[i % PATH_COUNT].push(sortedPlayerIds[i]);
+  }
+  const livesPerPath = Math.max(1, Math.floor(STARTING_LIVES / PATH_COUNT));
 
   return {
     tick: 0,
@@ -149,6 +181,9 @@ export function createInitialState(
     gameOver: false,
     victory: false,
     waveTickOffset: 0,
+    individualLivesMode,
+    pathLives: Array.from({ length: PATH_COUNT }, () => livesPerPath),
+    pathOwners,
     bonusAwarded: WAVES.map(() => false),
     difficultyPercent,
     playerCountScalePercent,
@@ -194,6 +229,8 @@ function cloneState(state: SimulationState): SimulationState {
     traps: state.traps.map((t) => ({ ...t })),
     resourceBuildings: state.resourceBuildings.map((r) => ({ ...r })),
     runeTotems: state.runeTotems.map((r) => ({ ...r })),
+    pathLives: [...state.pathLives],
+    pathOwners: state.pathOwners.map((owners) => [...owners]),
     bonusAwarded: [...state.bonusAwarded],
     playerStats,
   };
@@ -414,13 +451,14 @@ function computeChecksum(state: SimulationState): string {
     .map((r) => `${r.id}:${r.x}:${r.y}:${r.ticksSinceLastIncome}`)
     .join(';');
   const runeTotemPart = state.runeTotems.map((r) => `${r.id}:${r.x}:${r.y}`).join(';');
+  const pathLivesPart = state.pathLives.join(',');
   const bonusPart = state.bonusAwarded.map((b) => (b ? '1' : '0')).join('');
   const statsPart = Object.keys(state.playerStats)
     .sort()
     .map((id) => `${id}:${state.playerStats[id].damageDealt}:${state.playerStats[id].kills}`)
     .join(',');
   return simpleHash(
-    `${state.tick}|${state.waveTickOffset}|${goldPart}|${state.lives}|${towerPart}|${monsterPart}|${trapPart}|${resourceBuildingPart}|${runeTotemPart}|${bonusPart}|${statsPart}`,
+    `${state.tick}|${state.waveTickOffset}|${goldPart}|${state.lives}|${pathLivesPart}|${towerPart}|${monsterPart}|${trapPart}|${resourceBuildingPart}|${runeTotemPart}|${bonusPart}|${statsPart}`,
   );
 }
 
@@ -470,7 +508,12 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   }
 
   const waveTick = effectiveWaveTick(next);
-  const spawnEvents = next.endlessMode ? getEndlessSpawnEventsForTick(waveTick) : getSpawnEventsForTick(waveTick);
+  const rawSpawnEvents = next.endlessMode ? getEndlessSpawnEventsForTick(waveTick) : getSpawnEventsForTick(waveTick);
+  // 個人生命模式下,生命池子歸零的路徑直接停止生怪(不是暫停,是永久不會再出現),
+  // 過濾掉指定給死路徑的 SpawnEvent 就好,不用另外處理「這隻怪生出來要不要立刻消失」。
+  const spawnEvents = next.individualLivesMode
+    ? rawSpawnEvents.filter((spawn) => next.pathLives[spawn.pathId] > 0)
+    : rawSpawnEvents;
   for (const spawn of spawnEvents) {
     const scaled = scaledSpawn(spawn, next.difficultyPercent, next.playerCountScalePercent);
     next.monsters.push(createMonster(next.nextMonsterId++, scaled));
@@ -487,7 +530,11 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
     const speedFp = slowPercent > 0 ? Math.floor((m.speedFp * (100 - slowPercent)) / 100) : m.speedFp;
     const { pos, leaked } = advanceAlongPath(m.pos, speedFp);
     if (leaked) {
-      next.lives -= 1;
+      if (next.individualLivesMode) {
+        next.pathLives[m.pos.pathId] = Math.max(0, next.pathLives[m.pos.pathId] - 1);
+      } else {
+        next.lives -= 1;
+      }
       continue;
     }
     m.pos = pos;
@@ -530,10 +577,12 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
 
   applyBonusWaveRewards(next, waveTick);
 
-  if (next.lives <= 0) {
+  // 個人生命模式:全部路徑的生命池子都歸零才算團隊真的守不住;預設模式維持原本團隊共用一份。
+  const teamWiped = next.individualLivesMode ? next.pathLives.every((l) => l <= 0) : next.lives <= 0;
+  if (teamWiped) {
     next.gameOver = true;
   } else if (!next.endlessMode && waveTick >= totalWaveTicks() && next.monsters.length === 0) {
-    // 無限模式沒有「破完」這回事,永遠不會走到這個分支,只有 lives<=0 的 gameOver。
+    // 無限模式沒有「破完」這回事,永遠不會走到這個分支,只有團隊守不住的 gameOver。
     next.victory = true;
   }
 

@@ -67,6 +67,8 @@ export interface StartMatchMsg {
   difficultyPercent: number;
   /** 無限模式:沒有固定波次終點,難度隨波次持續往上疊,直到守不住為止。 */
   endlessMode: boolean;
+  /** 個人生命模式:每條路徑各自的生命池子,漏怪只扣該路徑的血,不影響其他路徑。 */
+  individualLivesMode: boolean;
 }
 
 export interface SetReadyMsg {
@@ -223,7 +225,8 @@ export function parse(raw: unknown): NetMessage | null {
         typeof o.inputDelayTicks === 'number' &&
         typeof o.countdownMs === 'number' &&
         typeof o.difficultyPercent === 'number' &&
-        typeof o.endlessMode === 'boolean'
+        typeof o.endlessMode === 'boolean' &&
+        typeof o.individualLivesMode === 'boolean'
       ) {
         return {
           type: 'START_MATCH',
@@ -234,6 +237,7 @@ export function parse(raw: unknown): NetMessage | null {
           countdownMs: o.countdownMs,
           difficultyPercent: o.difficultyPercent,
           endlessMode: o.endlessMode,
+          individualLivesMode: o.individualLivesMode,
         };
       }
       return null;

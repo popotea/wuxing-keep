@@ -377,6 +377,8 @@
         font-size: 15px;
         pointer-events: none;
       }
+      /* 個人生命模式:每條路徑各自一個 .hud-stat,跟其他 HUD 項目一樣橫排在同一條狀態列上。 */
+      #pathLivesStats { display: flex; align-items: center; gap: 8px; }
       .hud-stat {
         display: flex;
         align-items: center;
@@ -838,6 +840,10 @@
               <input type="checkbox" id="hostEndlessMode" />
               無限模式(沒有終點,怪物隨波次持續變強,看大家能撐到第幾波)
             </label>
+            <label class="endless-mode-row">
+              <input type="checkbox" id="hostIndividualLivesMode" />
+              個人生命模式(每條路徑各自計算生命,某條路徑守不住只有那條停止生怪,不會拖累其他人)
+            </label>
             <button id="hostBtn" class="btn"><svg class="icon"><use href="#icon-plus" /></svg> 建立房間</button>
           </div>
 
@@ -880,10 +886,13 @@
         <div class="hud-stat hud-stat-gold">
           <svg class="icon" style="color: var(--accent)"><use href="#icon-coin" /></svg> <span id="gold">-</span>
         </div>
-        <div class="hud-stat">
+        <div id="teamLivesStat" class="hud-stat">
           <svg class="icon" style="color: var(--fire)"><use href="#icon-heart" /></svg>
           <div class="lives-bar-outer"><div id="livesBar"></div></div> <span id="lives">-</span>
         </div>
+        <!-- 個人生命模式:每條路徑各自一個生命條,取代上面那顆團隊共用的(main.ts 依
+             state.individualLivesMode 二選一顯示,內容由 renderPathLivesHud() 動態產生)。 -->
+        <div id="pathLivesStats" hidden></div>
         <div class="hud-stat hud-stat-wave">
           第 <b><span id="waveNumber">-</span></b> 波 ｜ 下一波 <span id="nextWaveElement">-</span> · <span id="nextWave">-</span>
           <button id="skipWaveBtn" class="hud-skip-wave-btn" type="button" title="提早呼叫下一波(場上怪物不會被清掉,兩波會疊在一起)">

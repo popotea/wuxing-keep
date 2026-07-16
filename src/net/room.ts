@@ -47,6 +47,7 @@ export interface MatchConfig {
   countdownMs: number;
   difficultyPercent: number;
   endlessMode: boolean;
+  individualLivesMode: boolean;
 }
 
 export interface RoomHandlers {
@@ -172,6 +173,7 @@ export class Room {
       countdownMs: config.countdownMs,
       difficultyPercent: config.difficultyPercent,
       endlessMode: config.endlessMode,
+      individualLivesMode: config.individualLivesMode,
     };
     this.net.broadcast(payload);
     this.handlers.onMatchStarted?.(payload);
