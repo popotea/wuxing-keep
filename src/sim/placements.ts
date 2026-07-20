@@ -36,11 +36,15 @@ export interface ResourceBuilding {
 }
 
 // 2026-07-16 玩家實測反應金幣累積太快花不完,把資源建築的被動收入調弱(15 金幣/10 秒
-// -> 10 金幣/15 秒,速率大約砍掉一半以上)+ 順便漲一點建造成本,呼應同一次調整裡賞金調降、
-// 塔/陷阱/圖騰漲價(見 monsters.ts 的 WAVES 註解)。
+// -> 10 金幣/15 秒)+ 順便漲一點建造成本,呼應同一次調整裡賞金調降、塔/陷阱/圖騰漲價
+// (見 monsters.ts 的 WAVES 註解)。**2026-07-20 發現調過頭**:算過一輪 8 波(3200 tick)
+// 的總回本——開局第一 tick 就蓋,10/300 這個速率整場下來只回得了 100 金幣,扣掉 90 成本
+// 淨賺 10,等於白白讓一格塔的攻擊力空掉 8 波只換 10 金幣,根本不值得蓋,變成陷阱選項。
+// 調成 12/250(整場回得了 144,淨賺 54),雖然還是比原本 15/200 弱(調弱的初衷維持),
+// 但至少蓋了不會虧,回本期落在中期(約第 5 波)還算合理。
 export const RESOURCE_BUILDING_COST = 90;
-export const RESOURCE_BUILDING_INCOME = 10;
-export const RESOURCE_BUILDING_INTERVAL_TICKS = 300; // 20 tick/秒 * 15 秒
+export const RESOURCE_BUILDING_INCOME = 12;
+export const RESOURCE_BUILDING_INTERVAL_TICKS = 250; // 20 tick/秒 * 12.5 秒
 
 /**
  * 符文圖騰:純支援型建築,自己不攻擊,範圍內的塔(不分誰的塔)會得到加成,規則跟塔/

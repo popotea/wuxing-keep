@@ -406,7 +406,8 @@
         cursor: pointer;
         transition: border-color 0.15s, color 0.15s;
       }
-      .hud-skip-wave-btn:hover { border-color: var(--accent); color: var(--accent); }
+      .hud-skip-wave-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+      .hud-skip-wave-btn:disabled { opacity: 0.4; cursor: default; }
       .hud-skip-wave-btn .icon { width: 0.9em; height: 0.9em; vertical-align: -0.1em; }
       body.hud-compact .hud-skip-wave-btn { background: rgba(0, 0, 0, 0.4); }
       .lives-bar-outer { width: 110px; height: 10px; background: #333; border-radius: 6px; overflow: hidden; }

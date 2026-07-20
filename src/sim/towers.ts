@@ -36,12 +36,19 @@ export interface TowerDef {
 // 佔位數值,真正平衡是 Phase 5 的事。cost 2026-07-16 從 50 調漲到 70(呼應同一次調整裡
 // 賞金調降、資源建築收入調弱,見 monsters.ts 的 WAVES 註解)——upgradeCost 公式是
 // cost * level,漲 cost 連帶讓升級也跟著等比例變貴,不用另外改升級公式。
+//
+// cooldownTicks 2026-07-20 微調過一次:算 dps(=damage/cooldownTicks)對照 rangeFp 發現
+// metal 同時贏過 fire(dps 更高、射程更長)、贏過 earth(同樣兩項都贏),water 又輸給 wood
+// (dps 打平但射程更短)——同樣 cost 卻有元素在數值上被另一個完全比下去,等於沒有選它的理由。
+// 只調 cooldownTicks(每一擊的 damage 數字不動,維持「單發傷害」這個手感跟 burst 分歧路線的
+// 意義),讓 5 個屬性照 range 由高到低排列時 dps 剛好由低到高排列(wood<water<metal<earth<
+// fire),彼此之間變成純粹的「射程 vs 攻速」取捨,沒有任何一個屬性在數值上單方面完勝另一個。
 export const TOWER_DEFS: Record<Element, TowerDef> = {
-  metal: { element: 'metal', cost: 70, damage: 14, rangeFp: 2300, cooldownTicks: 22 },
-  wood: { element: 'wood', cost: 70, damage: 6, rangeFp: 2800, cooldownTicks: 12 },
-  earth: { element: 'earth', cost: 70, damage: 10, rangeFp: 2200, cooldownTicks: 18 },
+  metal: { element: 'metal', cost: 70, damage: 14, rangeFp: 2300, cooldownTicks: 25 },
+  wood: { element: 'wood', cost: 70, damage: 6, rangeFp: 2800, cooldownTicks: 13 },
+  earth: { element: 'earth', cost: 70, damage: 10, rangeFp: 2200, cooldownTicks: 17 },
   water: { element: 'water', cost: 70, damage: 8, rangeFp: 2500, cooldownTicks: 16 },
-  fire: { element: 'fire', cost: 70, damage: 12, rangeFp: 2000, cooldownTicks: 20 },
+  fire: { element: 'fire', cost: 70, damage: 12, rangeFp: 2000, cooldownTicks: 18 },
 };
 
 /** 隨機英雄選擇 UI 顯示用的角色名(參考 WC3 TD 的手塔風味),不影響任何數值判定。 */

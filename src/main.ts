@@ -1127,6 +1127,8 @@ function renderWaveHud(state: SimulationState): void {
 
   if (state.endlessMode) {
     // 無限模式永遠有下一波、永遠有預覽,不會是 null;沒有加碼波這個機制。
+    skipWaveBtn.disabled = false;
+    skipWaveBtn.title = '提早呼叫下一波(場上怪物不會被清掉,兩波會疊在一起)';
     const ticksLeft = ticksUntilNextWaveEndless(tick);
     nextWaveEl.textContent = `${Math.ceil((ticksLeft * currentTickRateMs) / 1000)}s`;
     const upcoming = upcomingWaveDefEndless(tick);
@@ -1139,6 +1141,11 @@ function renderWaveHud(state: SimulationState): void {
   }
 
   const ticksLeft = ticksUntilNextWave(tick);
+  // 已經是最後一波就沒有下一波可以跳,把按鈕停用+換提示文字,不會讓玩家點了沒反應搞不清楚
+  // 是不是壞了(submitAction 那邊送出去本來就會被 simulation.ts 安全忽略,但完全沒有 UI
+  // 回饋對玩家不友善)。
+  skipWaveBtn.disabled = ticksLeft === null;
+  skipWaveBtn.title = ticksLeft === null ? '已經是最後一波了' : '提早呼叫下一波(場上怪物不會被清掉,兩波會疊在一起)';
   nextWaveEl.textContent =
     ticksLeft === null ? '最後一波' : `${Math.ceil((ticksLeft * currentTickRateMs) / 1000)}s`;
   const upcoming = upcomingWaveDef(tick);
