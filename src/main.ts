@@ -1090,7 +1090,7 @@ function renderLivesHud(state: SimulationState): void {
       // 同樣只有那條路徑快歸零時才顯示。
       const healBtn =
         lives <= EMERGENCY_HEAL_THRESHOLD
-          ? `<button class="hud-skip-wave-btn" type="button" data-heal-path="${pathId}" title="花 ${EMERGENCY_HEAL_COST} 金幣補這條路徑幾條命"><svg class="icon"><use href="#icon-heart" /></svg> 補命</button>`
+          ? `<button class="hud-action-btn" type="button" data-heal-path="${pathId}" title="花 ${EMERGENCY_HEAL_COST} 金幣補這條路徑幾條命"><svg class="icon"><use href="#icon-heart" /></svg> 補命</button>`
           : '';
       return `
         <div class="hud-stat">

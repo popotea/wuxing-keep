@@ -394,7 +394,7 @@
       .hud-stat-wave { color: var(--muted); }
       .hud-stat-wave b { color: var(--text); font-weight: bold; }
       /* #hud 整體 pointer-events:none 是為了不擋地圖點擊,這顆按鈕要單獨蓋回 auto 才點得到。 */
-      .hud-skip-wave-btn {
+      .hud-action-btn {
         pointer-events: auto;
         margin-left: 6px;
         background: rgba(255, 255, 255, 0.08);
@@ -406,10 +406,10 @@
         cursor: pointer;
         transition: border-color 0.15s, color 0.15s;
       }
-      .hud-skip-wave-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-      .hud-skip-wave-btn:disabled { opacity: 0.4; cursor: default; }
-      .hud-skip-wave-btn .icon { width: 0.9em; height: 0.9em; vertical-align: -0.1em; }
-      body.hud-compact .hud-skip-wave-btn { background: rgba(0, 0, 0, 0.4); }
+      .hud-action-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+      .hud-action-btn:disabled { opacity: 0.4; cursor: default; }
+      .hud-action-btn .icon { width: 0.9em; height: 0.9em; vertical-align: -0.1em; }
+      body.hud-compact .hud-action-btn { background: rgba(0, 0, 0, 0.4); }
       .lives-bar-outer { width: 110px; height: 10px; background: #333; border-radius: 6px; overflow: hidden; }
       #livesBar { height: 100%; width: 100%; background: var(--wood); transition: width 0.2s, background 0.2s; }
       .lives-bar-outer.lives-critical { animation: pulse-danger 1s ease-in-out infinite; }
@@ -890,7 +890,7 @@
         <div id="teamLivesStat" class="hud-stat">
           <svg class="icon" style="color: var(--fire)"><use href="#icon-heart" /></svg>
           <div class="lives-bar-outer"><div id="livesBar"></div></div> <span id="lives">-</span>
-          <button id="emergencyHealBtn" class="hud-skip-wave-btn" type="button" hidden title="生命快歸零時的最後手段,花費較高">
+          <button id="emergencyHealBtn" class="hud-action-btn" type="button" hidden title="生命快歸零時的最後手段,花費較高">
             <svg class="icon"><use href="#icon-heart" /></svg> 緊急補命
           </button>
         </div>
@@ -899,7 +899,7 @@
         <div id="pathLivesStats" hidden></div>
         <div class="hud-stat hud-stat-wave">
           第 <b><span id="waveNumber">-</span></b> 波 ｜ 下一波 <span id="nextWaveElement">-</span> · <span id="nextWave">-</span>
-          <button id="skipWaveBtn" class="hud-skip-wave-btn" type="button" title="提早呼叫下一波(場上怪物不會被清掉,兩波會疊在一起)">
+          <button id="skipWaveBtn" class="hud-action-btn" type="button" title="提早呼叫下一波(場上怪物不會被清掉,兩波會疊在一起)">
             <svg class="icon"><use href="#icon-enter" /></svg> 呼叫下一波
           </button>
         </div>
