@@ -44,6 +44,15 @@ import {
   type UpgradePath,
 } from './sim/towers';
 
+// 頁面上刻意不放 tick/checksum 這種除錯資訊(不是給一般玩家看的東西),但多人連線真的跑飛
+// 時還是需要比對兩邊的值——掛在 window 上,要查的時候在瀏覽器主控台(F12)打
+// window.__wuxingDebug 看,平常不會佔畫面。
+declare global {
+  interface Window {
+    __wuxingDebug?: { tick: number; checksum: string };
+  }
+}
+
 const BASE_MATCH_CONFIG = {
   tickRateMs: 50,
   inputDelayTicks: 6,
@@ -120,7 +129,6 @@ const livesBarEl = $<HTMLDivElement>('livesBar');
 const teamLivesStatEl = $<HTMLDivElement>('teamLivesStat');
 const pathLivesStatsEl = $<HTMLDivElement>('pathLivesStats');
 const emergencyHealBtn = $<HTMLButtonElement>('emergencyHealBtn');
-const tickEl = $<HTMLSpanElement>('tick');
 const nextWaveEl = $<HTMLSpanElement>('nextWave');
 const waveNumberEl = $<HTMLSpanElement>('waveNumber');
 const nextWaveElementEl = $<HTMLSpanElement>('nextWaveElement');
@@ -135,9 +143,7 @@ const scoreboardMetaEl = $<HTMLDivElement>('scoreboardMeta');
 const bestRecordEl = $<HTMLSpanElement>('bestRecord');
 const dailyBestEl = $<HTMLSpanElement>('dailyBest');
 const achievementsEl = $<HTMLDivElement>('achievements');
-const checksumEl = $<HTMLSpanElement>('checksum');
 const resultBannerEl = $<HTMLDivElement>('resultBanner');
-const logEl = $<HTMLPreElement>('log');
 
 let room: Room | null = null;
 let hostEngine: HostLockstepEngine | null = null;
@@ -725,8 +731,9 @@ window.addEventListener('keydown', (ev) => {
   openMenu?.querySelectorAll<HTMLButtonElement>('button.choice-option')[slot - 1]?.click();
 });
 
+/** 連線/對局事件記錄——原本畫在頁面上的 #log 區塊拿掉了(頁面不放除錯資訊),改進瀏覽器主控台。 */
 function log(msg: string): void {
-  logEl.textContent = `${new Date().toLocaleTimeString()} ${msg}\n${logEl.textContent ?? ''}`;
+  console.log(`[wuxing-keep] ${msg}`);
 }
 
 function iceConfigFromForm(): IceConfig {
@@ -1183,8 +1190,10 @@ function endLocalMatch(): void {
 const lockstepHandlers: LockstepHandlers = {
   onStateUpdated: (state) => {
     latestState = state;
-    tickEl.textContent = String(state.tick);
-    checksumEl.textContent = state.checksum;
+    // 頁面上不放 tick/checksum 這種除錯資訊,但多人連線真的跑飛時還是需要比對兩邊的值——
+    // 改成掛在 window 上,要查的時候自己在瀏覽器主控台打 window.__wuxingDebug 看,不會
+    // 平常就佔一塊畫面。
+    window.__wuxingDebug = { tick: state.tick, checksum: state.checksum };
     goldEl.textContent = String(state.gold[myPlayerId()] ?? 0);
     renderLivesHud(state);
     renderWaveHud(state);

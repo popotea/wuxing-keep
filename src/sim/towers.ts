@@ -111,22 +111,6 @@ export function sellValue(tower: Tower): number {
   return Math.floor(TOWER_DEFS[tower.element].cost / 2);
 }
 
-/**
- * 組合建築玩法(圖騰):範圍內(RUNE_TOTEM_RANGE_FP,距離平方比較,不用 sqrt)只要有一座
- * 符文圖騰,不分誰蓋的都吃得到加成——跟塔的分岐路線/相生加成是各自獨立疊加的效果,不互斥。
- */
-export function hasNearbyTotem(tower: Tower, runeTotems: readonly RuneTotem[]): boolean {
-  const towerXFp = tower.x * FP_SCALE;
-  const towerYFp = tower.y * FP_SCALE;
-  const rangeSq = RUNE_TOTEM_RANGE_FP * RUNE_TOTEM_RANGE_FP;
-  for (const totem of runeTotems) {
-    const dx = towerXFp - totem.x * FP_SCALE;
-    const dy = towerYFp - totem.y * FP_SCALE;
-    if (dx * dx + dy * dy <= rangeSq) return true;
-  }
-  return false;
-}
-
 export interface TotemEffect {
   /** 0 = 沒有加成。多座圖騰在範圍內同時生效時取最大值,不會疊加相加(避免堆圖騰數值爆炸)。 */
   damageBonusPercent: number;
@@ -299,7 +283,7 @@ export interface CombatEvent {
  * 讓一座塔嘗試攻擊一次。有打中就直接扣目標血量(呼叫端傳進來的 monster 物件會被修改),
  * 回傳這次攻擊產生的所有事件給 UI 顯示飄動傷害數字用(通常 1 個,splash 路線可能多個);
  * 沒打中回傳空陣列。allTowers 是全場所有塔(含自己),用來算鄰接加成(見 hasGeneratingNeighbor);
- * runeTotems 是全場所有符文圖騰,用來算圖騰增傷(見 hasNearbyTotem)。
+ * runeTotems 是全場所有符文圖騰,用來算圖騰增傷/加速(見 nearbyTotemEffect)。
  */
 export function tryAttack(
   tower: Tower,

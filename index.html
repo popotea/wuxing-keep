@@ -42,9 +42,7 @@
         align-items: center;
         padding: 16px;
       }
-      /* 對局中要像真的裝了一套遊戲那樣滿版,不能整頁還能上下左右拖曳/滾動——
-         #gameScreen 底下的 #advancedPanel(除錯用)在對局中因此會被裁掉看不到,
-         這是刻意的,除錯資訊本來就設計成不佔主畫面,選單畫面才需要看得到它。 */
+      /* 對局中要像真的裝了一套遊戲那樣滿版,不能整頁還能上下左右拖曳/滾動。 */
       body.game-active { overflow: hidden; }
       h1 {
         margin: 12px 0 4px;
@@ -575,29 +573,30 @@
       #towerSellBtn { background: linear-gradient(160deg, #b9924a, #7a5f2a); border-color: #7a5f2a; }
       #towerDeselectBtn { flex: 0 0 auto; padding: 8px 12px; }
 
-      /* ---- 進階/除錯(收合,不佔主畫面) ---- */
-      #advancedPanel {
-        width: 100%;
-        max-width: 640px;
-        margin-top: 28px;
+      /* ---- 連線疑難排解(收合,不是除錯用,是給連不上的人真的能用的功能) ---- */
+      #connectionTroubleshoot { margin-top: 10px; }
+      #connectionTroubleshoot summary {
+        cursor: pointer;
+        font-size: 12.5px;
         color: var(--muted);
-        font-size: 13px;
+        padding: 4px 0;
       }
-      #advancedPanel summary { cursor: pointer; padding: 6px 0; }
-      #advancedPanel section { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
-      #advancedPanel h2 { font-size: 14px; margin: 0 0 8px; color: var(--text); }
-      #advancedPanel input { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 4px 6px; }
-      #log {
-        white-space: pre-wrap;
-        max-height: 200px;
-        overflow-y: auto;
+      #connectionTroubleshoot summary:hover { color: var(--text); }
+      #connectionTroubleshoot .ts-body {
         border: 1px solid var(--border);
-        padding: 8px;
-        background: #0f1216;
-        border-radius: 6px;
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin-top: 6px;
+        font-size: 12.5px;
+        color: var(--muted);
       }
-      #log::-webkit-scrollbar { width: 8px; }
-      #log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+      #connectionTroubleshoot input {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 4px;
+        padding: 4px 6px;
+      }
 
       @keyframes fade-in-up {
         from { opacity: 0; transform: translateY(6px); }
@@ -854,6 +853,19 @@
             <datalist id="recentRoomsList"></datalist>
             <button id="joinBtn" class="btn"><svg class="icon"><use href="#icon-enter" /></svg> 加入房間</button>
           </div>
+
+          <!-- 連不上的話才需要展開,平常收合不佔版面。填了才會加 TURN 中繼伺服器,
+               沒填就只用 STUN 直連(多數家用網路夠用)。 -->
+          <details id="connectionTroubleshoot">
+            <summary>連不上朋友的房間?點這裡</summary>
+            <div class="ts-body">
+              部分網路環境(公司/校園網路、某些行動網路)光靠直連會連不上,需要中繼伺服器才能穿透。
+              到 <a href="https://www.metered.ca/tools/openrelay/" target="_blank" rel="noopener">openrelay.metered.ca</a>
+              免費註冊拿到自己的帳密後填在這裡(雙方都要填):
+              <label>Username: <input id="turnUser" /></label>
+              <label>Credential: <input id="turnCred" /></label>
+            </div>
+          </details>
         </div>
 
         <div id="multiLobby" hidden>
@@ -990,27 +1002,6 @@
         </div>
       </div>
     </section>
-
-    <details id="advancedPanel">
-      <summary>進階:除錯資訊</summary>
-
-      <section>
-        <h2>ICE 設定(選填,測試 TURN fallback 才需要)</h2>
-        <label>Open Relay Username: <input id="turnUser" /></label>
-        <label>Open Relay Credential: <input id="turnCred" /></label>
-      </section>
-
-      <section>
-        <h2>除錯數值</h2>
-        <div>目前 tick: <span id="tick">-</span></div>
-        <div>Checksum: <span id="checksum">-</span>(兩邊分頁這個值要一直相同,不同就代表跑飛了)</div>
-      </section>
-
-      <section>
-        <h2>Log</h2>
-        <pre id="log"></pre>
-      </section>
-    </details>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

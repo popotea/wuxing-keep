@@ -63,7 +63,7 @@ export interface SimulationState {
   /**
    * 非攻擊型放置物:陷阱只能蓋在路徑格,踩到會減速;資源建築規則跟塔一樣蓋在非路徑格,定期給
    * owner 被動金幣;符文圖騰規則也跟塔一樣蓋在非路徑格,自己不攻擊,範圍內的塔(不分誰的)
-   * 攻擊力都會提升(見 towers.ts 的 hasNearbyTotem)。
+   * 攻擊力/攻速都可能提升(見 towers.ts 的 nearbyTotemEffect)。
    */
   traps: Trap[];
   resourceBuildings: ResourceBuilding[];
