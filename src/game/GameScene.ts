@@ -22,7 +22,11 @@ const EDGE_PAN_MARGIN_PX = 32;
 const EDGE_PAN_SPEED_PX_PER_SEC = 480;
 
 // 小地圖:固定貼在畫面右下角、跟鏡頭捲動無關(scrollFactor=0),縮小倍率讓整張地圖一次看完。
-const MINIMAP_SCALE = 0.1;
+// 這是桌面版的縮小倍率上限,手機直式螢幕畫布很小時會再往下縮(見 GameScene.minimapScale),
+// 不然固定 0.1 倍算出來的小地圖在小畫布上會佔掉快一半畫面,喧賓奪主。
+const MINIMAP_SCALE_MAX = 0.1;
+/** 小地圖大小最多佔畫布這個比例(寬高分別算,取比較保守的一邊),避免小畫布上小地圖過大。 */
+const MINIMAP_MAX_CANVAS_RATIO = 0.2;
 const MINIMAP_MARGIN_PX = 8;
 
 const ELEMENT_COLORS: Record<Element, number> = {
@@ -145,6 +149,8 @@ export class GameScene extends Phaser.Scene {
   private selectedTowerId: number | null = null;
   /** 滑鼠是否在遊戲畫布範圍內——游標跑到畫布外的 HTML UI(HUD/塔面板)時要停止邊緣平移跟預覽。 */
   private pointerInsideCanvas = false;
+  /** 小地圖實際使用的縮小倍率,每次 applyViewportZoom() 依畫布尺寸重算,見 MINIMAP_MAX_CANVAS_RATIO。 */
+  private minimapScale = MINIMAP_SCALE_MAX;
 
   constructor() {
     super('game');
@@ -229,29 +235,44 @@ export class GameScene extends Phaser.Scene {
    * (2026-07-16 改的)。取寬高比例較保守的那一邊,確保地圖完整塞得下不會被裁掉。
    * 這樣一來 update() 裡的邊緣平移計算會自動變成 no-op(maxScrollX/Y 算出來就是 0,
    * 因為 worldView 已經跟整張地圖一樣大或更大),不用另外刪那段程式碼。
+   *
+   * **2026-07-21 手機直式螢幕的置中問題,改在 CSS 解決,不是這裡**:縮放取「較保守的那一邊」
+   * 代表另一軸的視野通常會比地圖大(例如手機直式畫布很窄很高,地圖是 40x24 橫向比例),曾經
+   * 嘗試在這個函式裡用 scrollX/scrollY 或 setViewport 手動置中那一軸,但這個版本的 Phaser
+   * (4.2.1)在 zoom!=1 時,useBounds 的內建 clampX/clampY 跟 setViewport+setZoom 的疊加計算
+   * 都對不太上(實測會把手動置中的結果整個蓋掉,或算出跟預期不符的縮放結果),換了好幾種寫法
+   * 都繞不過去。改成從根源避免「視野比地圖大」這個情況發生:`index.html` 的 `#gameCanvasWrap`
+   * 用 `aspect-ratio` 固定成跟地圖一樣的比例(GRID_WIDTH:GRID_HEIGHT),讓縮放後的畫布尺寸
+   * 永遠跟地圖同比例,zoomX 恆等於 zoomY,不會有任何一軸留白——這裡維持原本最簡單的寫法就好。
    */
   private applyViewportZoom(): void {
     const zoomX = this.scale.width / (GRID_WIDTH * TILE_PX);
     const zoomY = this.scale.height / (GRID_HEIGHT * TILE_PX);
     this.cameras.main.setZoom(Math.min(zoomX, zoomY));
+    // 小地圖固定像素大小(MINIMAP_SCALE_MAX 倍率)在桌面版夠小夠不起眼,但手機直式畫布本身
+    // 就很小,固定倍率算出來的小地圖會佔掉快一半畫面——夾在「最多佔畫布 MINIMAP_MAX_CANVAS_RATIO
+    // 比例」跟桌面倍率之間取較小值,小畫布上自動縮得更小,大畫布上維持原本手感不變。
+    const maxByWidth = (this.scale.width * MINIMAP_MAX_CANVAS_RATIO) / (GRID_WIDTH * TILE_PX);
+    const maxByHeight = (this.scale.height * MINIMAP_MAX_CANVAS_RATIO) / (GRID_HEIGHT * TILE_PX);
+    this.minimapScale = Math.min(MINIMAP_SCALE_MAX, maxByWidth, maxByHeight);
   }
 
   /** 小地圖左上角在螢幕座標系(scrollFactor=0)裡的位置,固定貼在畫布右下角。 */
   private minimapOrigin(): { x: number; y: number } {
-    const w = GRID_WIDTH * TILE_PX * MINIMAP_SCALE;
-    const h = GRID_HEIGHT * TILE_PX * MINIMAP_SCALE;
+    const w = GRID_WIDTH * TILE_PX * this.minimapScale;
+    const h = GRID_HEIGHT * TILE_PX * this.minimapScale;
     return { x: this.scale.width - w - MINIMAP_MARGIN_PX, y: this.scale.height - h - MINIMAP_MARGIN_PX };
   }
 
   /** 點在小地圖範圍內就把主鏡頭跳過去(以點擊處為中心),回傳 true 代表這次點擊已經處理掉、不用再當成蓋塔/選塔。 */
   private jumpCameraFromMinimapClick(pointer: Phaser.Input.Pointer): boolean {
     const { x: ox, y: oy } = this.minimapOrigin();
-    const w = GRID_WIDTH * TILE_PX * MINIMAP_SCALE;
-    const h = GRID_HEIGHT * TILE_PX * MINIMAP_SCALE;
+    const w = GRID_WIDTH * TILE_PX * this.minimapScale;
+    const h = GRID_HEIGHT * TILE_PX * this.minimapScale;
     if (pointer.x < ox || pointer.x > ox + w || pointer.y < oy || pointer.y > oy + h) return false;
 
-    const worldX = (pointer.x - ox) / MINIMAP_SCALE;
-    const worldY = (pointer.y - oy) / MINIMAP_SCALE;
+    const worldX = (pointer.x - ox) / this.minimapScale;
+    const worldY = (pointer.y - oy) / this.minimapScale;
     const cam = this.cameras.main;
     // 鏡頭有 zoom 時,螢幕實際看得到的世界範圍是 cam.worldView(已經把 zoom 算進去),
     // 不能直接用 cam.width/height(那是螢幕像素,zoom!=1 時跟世界座標範圍不一樣)。
@@ -269,8 +290,8 @@ export class GameScene extends Phaser.Scene {
     const g = this.minimapLayer;
     g.clear();
     const { x: ox, y: oy } = this.minimapOrigin();
-    const w = GRID_WIDTH * TILE_PX * MINIMAP_SCALE;
-    const h = GRID_HEIGHT * TILE_PX * MINIMAP_SCALE;
+    const w = GRID_WIDTH * TILE_PX * this.minimapScale;
+    const h = GRID_HEIGHT * TILE_PX * this.minimapScale;
 
     g.fillStyle(0x0b0d10, 0.75);
     g.fillRect(ox, oy, w, h);
@@ -281,10 +302,10 @@ export class GameScene extends Phaser.Scene {
         const [ax, ay] = waypoints[i];
         const [bx, by] = waypoints[i + 1];
         g.fillRect(
-          ox + Math.min(ax, bx) * TILE_PX * MINIMAP_SCALE,
-          oy + Math.min(ay, by) * TILE_PX * MINIMAP_SCALE,
-          (Math.abs(bx - ax) + 1) * TILE_PX * MINIMAP_SCALE,
-          (Math.abs(by - ay) + 1) * TILE_PX * MINIMAP_SCALE,
+          ox + Math.min(ax, bx) * TILE_PX * this.minimapScale,
+          oy + Math.min(ay, by) * TILE_PX * this.minimapScale,
+          (Math.abs(bx - ax) + 1) * TILE_PX * this.minimapScale,
+          (Math.abs(by - ay) + 1) * TILE_PX * this.minimapScale,
         );
       }
     }
@@ -292,17 +313,17 @@ export class GameScene extends Phaser.Scene {
     if (this.pendingState) {
       for (const t of this.pendingState.towers) {
         g.fillStyle(ELEMENT_COLORS[t.element], 1);
-        g.fillCircle(ox + (t.x + 0.5) * TILE_PX * MINIMAP_SCALE, oy + (t.y + 0.5) * TILE_PX * MINIMAP_SCALE, 2);
+        g.fillCircle(ox + (t.x + 0.5) * TILE_PX * this.minimapScale, oy + (t.y + 0.5) * TILE_PX * this.minimapScale, 2);
       }
       g.fillStyle(0x8a8a8a, 1);
       for (const trap of this.pendingState.traps) {
-        g.fillCircle(ox + (trap.x + 0.5) * TILE_PX * MINIMAP_SCALE, oy + (trap.y + 0.5) * TILE_PX * MINIMAP_SCALE, 1.5);
+        g.fillCircle(ox + (trap.x + 0.5) * TILE_PX * this.minimapScale, oy + (trap.y + 0.5) * TILE_PX * this.minimapScale, 1.5);
       }
       g.fillStyle(0xd4af37, 1);
       for (const building of this.pendingState.resourceBuildings) {
         g.fillCircle(
-          ox + (building.x + 0.5) * TILE_PX * MINIMAP_SCALE,
-          oy + (building.y + 0.5) * TILE_PX * MINIMAP_SCALE,
+          ox + (building.x + 0.5) * TILE_PX * this.minimapScale,
+          oy + (building.y + 0.5) * TILE_PX * this.minimapScale,
           2,
         );
       }
@@ -310,8 +331,8 @@ export class GameScene extends Phaser.Scene {
         const { xFp, yFp } = worldPositionFp(m.pos);
         g.fillStyle(m.isBoss ? 0xffe98a : 0xe0433a, 1);
         g.fillCircle(
-          ox + (xFp / FP_SCALE) * TILE_PX * MINIMAP_SCALE,
-          oy + (yFp / FP_SCALE) * TILE_PX * MINIMAP_SCALE,
+          ox + (xFp / FP_SCALE) * TILE_PX * this.minimapScale,
+          oy + (yFp / FP_SCALE) * TILE_PX * this.minimapScale,
           m.isBoss ? 3 : 1.5,
         );
       }
@@ -324,10 +345,10 @@ export class GameScene extends Phaser.Scene {
     g.lineStyle(1.5, 0xffffff, 0.9);
     // 白框要標示「世界座標裡實際看得到的範圍」,zoom!=1 時得用 worldView,不能直接用 cam.width/height。
     g.strokeRect(
-      ox + cam.scrollX * MINIMAP_SCALE,
-      oy + cam.scrollY * MINIMAP_SCALE,
-      cam.worldView.width * MINIMAP_SCALE,
-      cam.worldView.height * MINIMAP_SCALE,
+      ox + cam.scrollX * this.minimapScale,
+      oy + cam.scrollY * this.minimapScale,
+      cam.worldView.width * this.minimapScale,
+      cam.worldView.height * this.minimapScale,
     );
   }
 
@@ -921,7 +942,7 @@ export class GameScene extends Phaser.Scene {
     if (!key) {
       this.towerSprites.get(t.id)?.destroy();
       this.towerSprites.delete(t.id);
-      this.drawTower(g, t.id, t.x, t.y, t.element, t.level, ownerMark);
+      this.drawTower(g, t.id, t.x, t.y, t.element, t.level, ownerMark, t.secondElement);
       return;
     }
     const cx = t.x * TILE_PX + TILE_PX / 2;
@@ -937,6 +958,7 @@ export class GameScene extends Phaser.Scene {
     sprite.setTexture(key).setPosition(cx, cy).setDisplaySize(displaySize, displaySize);
     this.drawOwnerMark(g, cx, cy, ownerMark);
     this.drawLevelLabel(this.towerLevelTexts, t.id, cx, cy, t.level);
+    this.drawSecondElementBadge(g, cx, cy, t.secondElement);
   }
 
   /** 多人模式下在建築底部畫一圈識別色橢圓,一眼看出這是誰蓋的;單人模式/顏色為 null 時不畫。 */
@@ -944,6 +966,21 @@ export class GameScene extends Phaser.Scene {
     if (ownerMark === null) return;
     g.lineStyle(2.5 * SCALE, ownerMark, 0.95);
     g.strokeEllipse(cx, cy + 9 * SCALE, 22 * SCALE, 6 * SCALE);
+  }
+
+  /**
+   * 雙屬性塔(towers.ts 的 Tower.secondElement)在塔身右上角畫一個第二屬性顏色的小圓點——
+   * 不用另外做新美術,靠既有的 ELEMENT_COLORS 就能一眼看出這座塔同時吃兩種屬性判定,
+   * 跟 drawOwnerMark() 一樣是每 tick 重畫的 Graphics,不需要額外的 id-keyed GameObject 追蹤。
+   */
+  private drawSecondElementBadge(g: Phaser.GameObjects.Graphics, cx: number, cy: number, secondElement?: Element): void {
+    if (!secondElement) return;
+    const bx = cx + TILE_PX / 2 - 6 * SCALE;
+    const by = cy - TILE_PX / 2 + 6 * SCALE;
+    g.fillStyle(ELEMENT_COLORS[secondElement], 1);
+    g.fillCircle(bx, by, 5 * SCALE);
+    g.lineStyle(1.5 * SCALE, 0xffffff, 0.9);
+    g.strokeCircle(bx, by, 5 * SCALE);
   }
 
   /**
@@ -1122,6 +1159,7 @@ export class GameScene extends Phaser.Scene {
     element: Element,
     level: number,
     ownerMark: number | null,
+    secondElement?: Element,
   ): void {
     const cx = gridX * TILE_PX + TILE_PX / 2;
     const cy = gridY * TILE_PX + TILE_PX / 2;
@@ -1150,6 +1188,7 @@ export class GameScene extends Phaser.Scene {
 
     this.drawOwnerMark(g, cx, cy, ownerMark);
     this.drawLevelLabel(this.towerLevelTexts, id, cx, cy, level);
+    this.drawSecondElementBadge(g, cx, cy, secondElement);
   }
 
   /** 圓身 + 小眼睛 + 頭上血條。首領怪(isBoss)整隻放大 1.8 倍再加一圈金框。沒有正式美術圖時的備援畫法。 */

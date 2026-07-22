@@ -3,7 +3,7 @@
 
 import type { IceConfig } from './net/net';
 import { HostLockstepEngine, ClientLockstepEngine, type LockstepHandlers } from './net/lockstep';
-import { Room, type RoomHandlers } from './net/room';
+import { Room, type MatchConfig, type RoomHandlers } from './net/room';
 import type { Action, PlayerInfo } from './net/protocol';
 import { createGameRenderer, type HoverInfo } from './game/PhaserGame';
 import { isMultiplayer, ownerColorCss } from './game/playerColors';
@@ -34,11 +34,19 @@ import {
   TRAP_SLOW_PERCENT_BY_LEVEL,
   trapUpgradeCost,
 } from './sim/placements';
-import { EMERGENCY_HEAL_COST, EMERGENCY_HEAL_THRESHOLD, STARTING_LIVES, type SimulationState } from './sim/simulation';
+import {
+  EMERGENCY_HEAL_COST,
+  EMERGENCY_HEAL_THRESHOLD,
+  STARTING_LIVES,
+  effectiveWaveTick,
+  type SimulationState,
+} from './sim/simulation';
 import {
   describeTower,
+  dualTowerStats,
   TOWER_CHARACTER_NAMES,
   TOWER_DEFS,
+  towerDisplayName,
   UPGRADE_PATH_LEVEL,
   UPGRADE_PATH_NAMES,
   type UpgradePath,
@@ -153,6 +161,11 @@ let matchActive = false;
 let currentTickRateMs = BASE_MATCH_CONFIG.tickRateMs;
 let latestState: SimulationState | null = null;
 let selectedTowerId: number | null = null;
+/** 對局開始當下的設定,換房主時新蓋的 HostLockstepEngine 要用同一份(見 attemptRehost 流程),
+ * 不會因為換房主而改變(tickRateMs 等等是整場對局固定的)。 */
+let lastMatchConfig: MatchConfig | null = null;
+/** 避免同時收到好幾次「跟房主的連線斷了」事件(理論上只會有一條 hostConn,但保守起見防重入)。 */
+let rehostInProgress = false;
 
 function submitAction(action: Action): void {
   if (localEngine) localEngine.submitCommand(action);
@@ -355,10 +368,10 @@ function showFloatingBuildMenu(canvasX: number, canvasY: number, options: Choice
   const pageX = (canvasRect?.left ?? 0) + canvasX;
   const pageY = (canvasRect?.top ?? 0) + canvasY;
   // 夾在視窗範圍內,避免選單超出畫面邊緣被裁掉看不到(選單實際大小要等內容塞進去後才知道,
-  // 這裡用保守的估計值當夾取上限,足夠應付目前最多 7 個選項的版面:5 種屬性都固定顯示
-  // 不再隨機抽 3 個,加上資源建築跟符文圖騰)。
+  // 這裡用保守的估計值當夾取上限,足夠應付目前最多 8 個選項的版面:5 種屬性都固定顯示
+  // 不再隨機抽 3 個,加上雙屬性塔、資源建築、符文圖騰)。
   const MENU_WIDTH_GUESS = 180;
-  const MENU_HEIGHT_GUESS = 400;
+  const MENU_HEIGHT_GUESS = 450;
   floatingBuildMenuEl.style.left = `${Math.max(8, Math.min(pageX, window.innerWidth - MENU_WIDTH_GUESS))}px`;
   floatingBuildMenuEl.style.top = `${Math.max(8, Math.min(pageY, window.innerHeight - MENU_HEIGHT_GUESS))}px`;
 
@@ -409,7 +422,10 @@ function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: n
       rows.push(`<div class="tooltip-row" style="color: var(--accent)">圖騰加速中(+${stats.totemHastePercent}% 攻速)</div>`);
     }
     rows.push(`<div class="tooltip-row">建造者:${escapeHtml(displayNameFor(tower.ownerId))}</div>`);
-    html = `<div class="tooltip-title">${escapeHtml(TOWER_CHARACTER_NAMES[tower.element])}(${ELEMENT_NAMES[tower.element]}塔)Lv.${tower.level}</div>${rows.join('')}`;
+    const elementLabel = tower.secondElement
+      ? `${ELEMENT_NAMES[tower.element]}×${ELEMENT_NAMES[tower.secondElement]}`
+      : `${ELEMENT_NAMES[tower.element]}塔`;
+    html = `<div class="tooltip-title">${escapeHtml(towerDisplayName(tower))}(${elementLabel})Lv.${tower.level}</div>${rows.join('')}`;
   } else if (info.kind === 'monster') {
     const m = state.monsters.find((x) => x.id === info.id);
     if (!m) {
@@ -556,7 +572,7 @@ const gameRenderer = createGameRenderer(
         },
       });
     } else {
-      // 非路徑格:隨機英雄選擇(最多 3 個屬性,WC3 TD 手塔風味)+ 資源建築。
+      // 非路徑格:固定列出玩家允許的全部屬性(WC3 TD 手塔風味)+ 雙屬性塔 + 資源建築 + 符文圖騰。
       for (const element of buildableTowerElements()) {
         const cost = TOWER_DEFS[element].cost;
         options.push({
@@ -569,6 +585,47 @@ const gameRenderer = createGameRenderer(
               return;
             }
             submitAction({ kind: 'build_tower', params: { x, y, element } });
+          },
+        });
+      }
+      // 雙屬性塔:至少要選好 2 種允許屬性才有組合可選,單一屬性(單人模式常見)沒有意義就不顯示。
+      if (buildableTowerElements().length >= 2) {
+        options.push({
+          label: '雙屬性塔',
+          sublabel: '兩種屬性擇優判定,不會出現弱勢傷害',
+          onChoose: () => {
+            const allowed = buildableTowerElements();
+            showChoiceModal(
+              '雙屬性塔:選第一種屬性',
+              allowed.map((e1) => ({
+                label: TOWER_CHARACTER_NAMES[e1],
+                sublabel: ELEMENT_NAMES[e1],
+                onChoose: () => {
+                  const remaining = allowed.filter((e2) => e2 !== e1);
+                  showChoiceModal(
+                    '雙屬性塔:選第二種屬性',
+                    remaining.map((e2) => {
+                      const dualDef = dualTowerStats(e1, e2);
+                      return {
+                        label: TOWER_CHARACTER_NAMES[e2],
+                        sublabel: `${ELEMENT_NAMES[e1]}×${ELEMENT_NAMES[e2]} · ${dualDef.cost} 金幣`,
+                        disabled: (latestState?.gold[myPlayerId()] ?? 0) < dualDef.cost,
+                        onChoose: () => {
+                          if ((latestState?.gold[myPlayerId()] ?? 0) < dualDef.cost) {
+                            showToast(`金幣不足!建造雙屬性塔需要 ${dualDef.cost} 金幣`);
+                            return;
+                          }
+                          submitAction({
+                            kind: 'build_dual_tower',
+                            params: { x, y, element: e1, secondElement: e2 },
+                          });
+                        },
+                      };
+                    }),
+                  );
+                },
+              })),
+            );
           },
         });
       }
@@ -619,7 +676,10 @@ function renderTowerPanel(): void {
 
   const stats = describeTower(tower, latestState?.towers ?? [], latestState?.runeTotems ?? []);
   const myGold = latestState?.gold[myPlayerId()] ?? 0;
-  towerPanelElementEl.textContent = `${TOWER_CHARACTER_NAMES[tower.element]}(${ELEMENT_NAMES[tower.element]}塔)`;
+  const elementLabel = tower.secondElement
+    ? `${ELEMENT_NAMES[tower.element]}×${ELEMENT_NAMES[tower.secondElement]}`
+    : `${ELEMENT_NAMES[tower.element]}塔`;
+  towerPanelElementEl.textContent = `${towerDisplayName(tower)}(${elementLabel})`;
   towerPanelElementEl.className = `element-${tower.element}`;
   towerPanelOwnerEl.textContent = displayNameFor(tower.ownerId);
   towerPanelLevelEl.textContent = String(tower.level);
@@ -722,7 +782,7 @@ window.addEventListener('keydown', (ev) => {
     return;
   }
   const slot = Number(ev.key);
-  if (!Number.isInteger(slot) || slot < 1 || slot > 7) return;
+  if (!Number.isInteger(slot) || slot < 1 || slot > 8) return;
   const openMenu = floatingBuildMenuEl.classList.contains('show')
     ? floatingBuildMenuEl
     : choiceModalOverlayEl.classList.contains('show')
@@ -1125,11 +1185,14 @@ function showResult(text: string, variant: 'victory' | 'defeat'): void {
 
 /** 兩種模式都適用的「目前第幾波」,無限模式沒有上限、固定模式封頂在 WAVES.length。 */
 function currentWaveNumberFor(state: SimulationState): number {
-  return state.endlessMode ? currentWaveNumberEndless(state.tick) : currentWaveNumber(state.tick);
+  // 「呼叫下一波」動的是 waveTickOffset,只有 effectiveWaveTick 會反映跳波後的結果,
+  // 直接用 state.tick 算的話,按下按鈕後波數顯示會完全沒反應,要等真實時間追上才會變。
+  const waveTick = effectiveWaveTick(state);
+  return state.endlessMode ? currentWaveNumberEndless(waveTick) : currentWaveNumber(waveTick);
 }
 
 function renderWaveHud(state: SimulationState): void {
-  const tick = state.tick;
+  const tick = effectiveWaveTick(state);
   waveNumberEl.textContent = String(currentWaveNumberFor(state));
 
   if (state.endlessMode) {
@@ -1142,7 +1205,10 @@ function renderWaveHud(state: SimulationState): void {
     const bossBadge = upcoming.isBoss
       ? `<svg class="icon" style="color: var(--accent)"><use href="#icon-crown" /></svg> `
       : '';
-    nextWaveElementEl.innerHTML = `${bossBadge}${ELEMENT_NAMES[upcoming.element]}${upcoming.isBoss ? '首領' : ''}`;
+    // 三種首領造型給不同文字提示,玩家才知道接下來要準備的是耐力戰、群體戰還是反應戰。
+    const bossLabel =
+      upcoming.bossType === 'group' ? '首領小隊' : upcoming.bossType === 'swift' ? '迅捷首領' : '首領';
+    nextWaveElementEl.innerHTML = `${bossBadge}${ELEMENT_NAMES[upcoming.element]}${upcoming.isBoss ? bossLabel : ''}`;
     bonusWaveEl.innerHTML = '';
     return;
   }
@@ -1248,20 +1314,16 @@ const roomHandlers: RoomHandlers = {
     if (!room) return;
     const me = payload.roster.find((p) => p.playerId === room?.getMyPlayerId());
     myElementCountThisMatch = me?.elements.length ?? 5;
+    lastMatchConfig = {
+      tickRateMs: payload.tickRateMs,
+      inputDelayTicks: payload.inputDelayTicks,
+      countdownMs: payload.countdownMs,
+      difficultyPercent: payload.difficultyPercent,
+      endlessMode: payload.endlessMode,
+      individualLivesMode: payload.individualLivesMode,
+    };
     if (room.getRole() === 'host') {
-      hostEngine = new HostLockstepEngine(
-        room,
-        {
-          tickRateMs: payload.tickRateMs,
-          inputDelayTicks: payload.inputDelayTicks,
-          countdownMs: payload.countdownMs,
-          difficultyPercent: payload.difficultyPercent,
-          endlessMode: payload.endlessMode,
-          individualLivesMode: payload.individualLivesMode,
-        },
-        payload.seed,
-        lockstepHandlers,
-      );
+      hostEngine = new HostLockstepEngine(room, lastMatchConfig, payload.seed, lockstepHandlers);
       hostEngine.start();
     } else {
       clientEngine = new ClientLockstepEngine(
@@ -1278,22 +1340,69 @@ const roomHandlers: RoomHandlers = {
   onRoomEnded: (reasonText) => {
     log(`房間結束:${reasonText}`);
     if (matchActive) {
-      // 對局進行中房主斷線:MVP 決定直接結束對局,遊戲畫面留著讓玩家按「回到選單」自己收尾
-      matchActive = false;
-      hostEngine?.stop();
-      hostEngine = null;
-      clientEngine = null;
-      readyBtn.disabled = true;
-      startBtn.disabled = true;
-      backToMenuBtn.style.display = 'inline-block';
+      // 走到這裡代表對局進行中真的沒救了(換房主也失敗,或這個事件本來就不是「跟房主斷線」
+      // 這種可以嘗試換房主的情境,例如自己整個網路都斷了),遊戲畫面留著讓玩家按「回到選單」自己收尾。
+      endMatchAfterUnrecoverableDisconnect();
     } else {
       // 還在 Lobby 階段就斷線(例如房主關掉分頁):直接退回設定表單重新來過
       resetToMultiSetup();
     }
   },
+  onHostConnectionLost: () => {
+    if (rehostInProgress || !room || !lastMatchConfig) return;
+    rehostInProgress = true;
+    showToast('房主斷線,正在嘗試自動換房主...');
+    room
+      .attemptRehost()
+      .then((outcome) => {
+        rehostInProgress = false;
+        if (outcome === 'promoted') {
+          // 換我方接手:場上塔/怪物/金幣是舊 ClientLockstepEngine 手上最新的那份(lockstep
+          // 保證所有人模擬結果位元級相同,不用跟任何人要資料),原本待送出但還沒被舊房主排進
+          // 已廣播 TICK 的指令會遺失——這是換房主接受的代價,見 lockstep.ts 的 LockstepSnapshot 註解。
+          const resume = clientEngine?.exportForPromotion();
+          clientEngine = null;
+          hostEngine = new HostLockstepEngine(room!, lastMatchConfig!, 0, lockstepHandlers, resume);
+          hostEngine.start();
+          showToast('你已接手成為新房主,繼續遊戲!');
+        } else if (outcome === 'reconnected') {
+          // 還是客戶端,只是換了個房主連——場上進度不會馬上動,要等新房主回應 REJOIN 送來的
+          // RESYNC(見 onResync)整份取代 state 才會真的接上,不能自己在這裡假設已經對齊了。
+          showToast('已切換新房主,正在同步進度...');
+        } else {
+          endMatchAfterUnrecoverableDisconnect();
+        }
+      })
+      .catch(() => {
+        rehostInProgress = false;
+        endMatchAfterUnrecoverableDisconnect();
+      });
+  },
+  onRejoinRequest: (playerId) => {
+    // 只有真的是房主(換房主接手後的新房主,或原本就是房主)且有跑起來的 HostLockstepEngine
+    // 才有快照可給;playerId 目前用不到(REJOIN 已經在 room.ts 內部驗證過是已知玩家),
+    // 保留參數是因為之後如果要做「不同玩家給不同資料」還有擴充空間。
+    void playerId;
+    return hostEngine?.getSnapshot() ?? null;
+  },
+  onResync: (tick, state) => {
+    clientEngine?.applyResync(tick, state);
+    showToast('已同步新房主的進度,繼續遊戲!');
+  },
   onCommand: (cmd) => hostEngine?.enqueueRemoteCommand(cmd),
   onTick: (tick) => clientEngine?.receiveTick(tick),
 };
+
+/** 對局進行中真的沒辦法繼續(換房主失敗、或整個房間結束):停掉引擎,畫面留著讓玩家自己按「回到選單」。 */
+function endMatchAfterUnrecoverableDisconnect(): void {
+  matchActive = false;
+  hostEngine?.stop();
+  hostEngine = null;
+  clientEngine = null;
+  readyBtn.disabled = true;
+  startBtn.disabled = true;
+  backToMenuBtn.style.display = 'inline-block';
+}
 
 soloBtn.addEventListener('click', () => {
   const elements = selectedElements(soloPanelEl);

@@ -2,6 +2,7 @@
 // 只負責「線路上會出現哪些訊息長什麼樣子」以及「怎麼安全地解析外來資料」。
 
 import { isElement, type Element } from '../sim/elements';
+import type { SimulationState } from '../sim/simulation';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -27,7 +28,7 @@ export interface TimedCommand {
   action: Action;
 }
 
-export type RejectReason = 'room_full' | 'match_in_progress' | 'version_mismatch';
+export type RejectReason = 'room_full' | 'match_in_progress' | 'version_mismatch' | 'unknown_player';
 
 export interface HelloMsg {
   type: 'HELLO';
@@ -39,6 +40,18 @@ export interface HelloMsg {
 export interface RejectMsg {
   type: 'REJECT';
   reason: RejectReason;
+}
+
+/**
+ * 房主斷線自動換房主(見 room.ts 的 attemptRehost()):對局中重新連上新房主時送這個,
+ * 不是 HELLO——HELLO 是「全新加入房間」,REJOIN 是「我是已經在 roster 裡的既有玩家,
+ * 只是連線層斷了重新接上」,帶著原本的 playerId 讓新房主重新對應這條新連線,不會被
+ * 誤判成新玩家、也不會影響 roster(不觸發 PLAYER_JOINED)。
+ */
+export interface RejoinMsg {
+  type: 'REJOIN';
+  protocolVersion: number;
+  playerId: PlayerId;
 }
 
 export interface WelcomeMsg {
@@ -111,9 +124,24 @@ export interface ChecksumMsg {
   hash: string;
 }
 
+/**
+ * 房主斷線自動換房主(見 room.ts 的 attemptRehost()):新房主回應 REJOIN 時附上目前的權威
+ * 模擬狀態,重連的客戶端要整份取代自己手上的 state,不能只跳號對齊 tick 編號——只跳號但
+ * 沒換 state 的話,tick 計數器跟實際模擬內容會對不上(計數器說「已經算到 tick N 了」,但
+ * state 內容其實還停在斷線那一刻,中間漏算的 tick 永遠補不回來),兩個客戶端後續的模擬
+ * 結果會跑飛(checksum 對不起來)。整份 state 直接照抄 sim/simulation.ts 的 SimulationState,
+ * 都是 plain object/array/Record,JSON 序列化不會遺失資訊。
+ */
+export interface ResyncMsg {
+  type: 'RESYNC';
+  tick: number;
+  state: SimulationState;
+}
+
 export type NetMessage =
   | HelloMsg
   | RejectMsg
+  | RejoinMsg
   | WelcomeMsg
   | PlayerJoinedMsg
   | PlayerLeftMsg
@@ -124,7 +152,8 @@ export type NetMessage =
   | TickMsg
   | PingMsg
   | PongMsg
-  | ChecksumMsg;
+  | ChecksumMsg
+  | ResyncMsg;
 
 export function encode(msg: NetMessage): string {
   return JSON.stringify(msg);
@@ -193,9 +222,16 @@ export function parse(raw: unknown): NetMessage | null {
       if (
         o.reason === 'room_full' ||
         o.reason === 'match_in_progress' ||
-        o.reason === 'version_mismatch'
+        o.reason === 'version_mismatch' ||
+        o.reason === 'unknown_player'
       ) {
         return { type: 'REJECT', reason: o.reason };
+      }
+      return null;
+
+    case 'REJOIN':
+      if (typeof o.protocolVersion === 'number' && typeof o.playerId === 'string') {
+        return { type: 'REJOIN', protocolVersion: o.protocolVersion, playerId: o.playerId };
       }
       return null;
 
@@ -289,6 +325,14 @@ export function parse(raw: unknown): NetMessage | null {
         typeof o.hash === 'string'
       ) {
         return { type: 'CHECKSUM', tick: o.tick, playerId: o.playerId, hash: o.hash };
+      }
+      return null;
+
+    case 'RESYNC':
+      // state 只做最基本的「是個物件」檢查,不逐欄位驗證——朋友間連線的信任制慣例(跟
+      // Action.params 同一套標準),而且這個訊息只會來自剛接手的新房主,不是外來未知輸入。
+      if (typeof o.tick === 'number' && typeof o.state === 'object' && o.state !== null) {
+        return { type: 'RESYNC', tick: o.tick, state: o.state as SimulationState };
       }
       return null;
 

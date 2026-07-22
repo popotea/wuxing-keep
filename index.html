@@ -2,7 +2,10 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- maximum-scale/user-scalable=no:對局中畫面已經自動縮放塞滿整張地圖(見 GameScene.ts 的
+         applyViewportZoom),手機上如果還能瀏覽器層級雙指縮放/雙擊縮放,只會把這個「剛好塞滿」
+         的版面弄亂,不是使用者想要的「放大看細節」——遊戲內沒有任何依賴瀏覽器縮放的內容。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#12151a" />
     <link
       rel="icon"
@@ -43,7 +46,10 @@
         padding: 16px;
       }
       /* 對局中要像真的裝了一套遊戲那樣滿版,不能整頁還能上下左右拖曳/滾動。 */
-      body.game-active { overflow: hidden; }
+      /* touch-action:none 擋掉手機瀏覽器對這塊區域的預設手勢(拖曳捲動、雙指縮放、下拉刷新)——
+         沒有這條,iOS Safari 的橡皮筋捲動/下拉刷新會在點地圖時偶發搶走觸控事件,tap 蓋塔會漏拍。
+         overflow:hidden 只能擋 body 本身捲動,擋不了這種手勢層級的干擾,兩個要一起加。 */
+      body.game-active { overflow: hidden; touch-action: none; }
       h1 {
         margin: 12px 0 4px;
         letter-spacing: 6px;
@@ -496,17 +502,47 @@
       }
       .scoreboard-gift-btn:hover { border-color: var(--accent); }
       .scoreboard-gift-btn .icon { width: 0.85em; height: 0.85em; vertical-align: -0.1em; }
-      #gameCanvas {
+
+      /* ---- 觸控裝置:對局中的操作按鈕平常刻意做得精簡小巧(見上面 HUD 相關規則的註解),
+         但小於 ~40px 的熱區在手機上很容易點不準/點到旁邊的東西。只在 pointer:coarse(觸控
+         為主的裝置,包含大多數手機/平板)放大這些按鈕的熱區,滑鼠/軌跡板裝置的精簡尺寸不受影響。 ---- */
+      @media (pointer: coarse) {
+        .hud-action-btn { padding: 8px 14px; font-size: 13px; }
+        .tower-panel-actions button { padding: 12px 8px; }
+        #towerDeselectBtn { padding: 12px 16px; }
+        .scoreboard-gift-btn { padding: 6px 10px; }
+        .tower-panel-strategy select { padding: 8px 10px; }
+      }
+
+      /* 寬高比固定跟地圖一樣(src/sim/map.ts 的 GRID_WIDTH:GRID_HEIGHT = 40:24 = 5:3)——
+         2026-07-21 加的:GameScene.ts 的 applyViewportZoom() 會把地圖縮放到「剛好塞滿畫布」,
+         取寬高比較保守的那一邊決定縮放倍率;如果畫布本身跟地圖比例不一樣(例如手機直式螢幕
+         很窄很高),縮放後另一軸就會留下大片空白。與其在 Phaser 鏡頭那邊做置中(試過幾種寫法,
+         這個版本的 Phaser 在 zoom!=1 時鏡頭 bounds/viewport 的內部計算對不太上,詳見
+         GameScene.ts 的註解),不如從根源讓畫布永遠跟地圖同比例,縮放後自然剛好貼合、不會有
+         任何一軸留白。max-height:100% 讓瀏覽器在「寬度撐滿」或「高度撐滿」兩種情況間自動選
+         比較保守的那個(等同 CSS 版的 object-fit: contain),#gameScreen 原本就有的
+         align-items:center 負責水平置中,這裡另外用 margin-block:auto 讓垂直方向也置中
+         (column flex 預設貼齊頂端,auto margin 才會置中)。 */
+      #gameCanvasWrap {
         border: 2px solid var(--border);
         border-radius: 6px;
         overflow: hidden;
         line-height: 0;
         box-shadow: var(--shadow-soft);
-        /* 滿版:寬度用滿、高度吃掉 #gameScreen 這個 flex column 裡除了 HUD/建塔列/塔面板以外
-           的剩餘空間。PhaserGame.ts 用 Scale.RESIZE,畫布會自動跟著這個容器的實際尺寸調整。 */
+        aspect-ratio: 40 / 24;
         width: 100%;
-        flex: 1 1 auto;
+        max-height: 100%;
+        margin-block: auto;
+        flex: 0 1 auto;
         min-height: 0;
+      }
+      #gameCanvas {
+        /* PhaserGame.ts 用 Scale.RESIZE,畫布會跟著這個容器的實際尺寸調整,Phaser 自己會把
+           這個 div 的 inline style 設成 width:100%;height:100%(見上面 gameCanvasWrap 的註解),
+           這裡不用再重複宣告。 */
+        width: 100%;
+        height: 100%;
       }
       #resultBanner { font-size: 22px; font-weight: bold; min-height: 1.4em; }
       #resultBanner.result-victory {
@@ -921,7 +957,13 @@
         <button id="scoreboardBtn" class="hud-compact-toggle" type="button">記分板</button>
         <button id="hudCompactBtn" class="hud-compact-toggle" type="button">精簡檢視</button>
       </div>
-      <div id="gameCanvas"></div>
+      <!-- gameCanvasWrap 負責寬高比/置中,gameCanvas 是 PhaserGame.ts 交給 Phaser 掛載的容器——
+           兩層分開是因為 Phaser 的 Scale.RESIZE 模式會直接把 gameCanvas 的 inline style 設成
+           width:100%;height:100%(蓋過任何寫在 <style> 裡的 CSS,包括 aspect-ratio),沒辦法在
+           gameCanvas 本身套用寬高比,只能在它外面再包一層 Phaser 不會碰的元素。 -->
+      <div id="gameCanvasWrap">
+        <div id="gameCanvas"></div>
+      </div>
       <div id="toast"></div>
       <!-- 滑鼠移到塔/怪物/陷阱/資源建築上面浮動顯示的物件說明,純顯示不用互動,跟著游標走。 -->
       <div id="objectTooltip"></div>

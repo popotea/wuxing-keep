@@ -33,6 +33,7 @@ import {
   type Trap,
 } from './placements';
 import {
+  dualTowerStats,
   sellValue,
   TARGET_STRATEGIES,
   TOWER_DEFS,
@@ -284,6 +285,41 @@ function applyBuildTower(state: SimulationState, playerId: PlayerId, action: Act
   });
 }
 
+/**
+ * 雙屬性塔(元素組合玩法):蓋塔當下就要指定兩個不同的屬性,兩個都要在這個玩家自己允許蓋的
+ * 屬性清單內(跟一般建塔同一條規則,不能繞過分工限制),而且兩個屬性不能相同(不然就只是
+ * 包裝過的單屬性塔,浪費雙屬性溢價的造價)。造價/基礎數值用 dualTowerStats() 算,跟
+ * describeTower()/tryAttack() 內部用的 baseTowerDef() 是同一套公式,避免兩邊算法各改各的漂掉。
+ */
+function applyBuildDualTower(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const x = asFiniteInt(action.params.x);
+  const y = asFiniteInt(action.params.y);
+  const element = action.params.element;
+  const secondElement = action.params.secondElement;
+  if (x === null || y === null || !isElement(element) || !isElement(secondElement)) return;
+  if (element === secondElement) return;
+  if (!inBounds(x, y) || isOnPath(x, y)) return;
+  if (!isBuildableTileFree(state, x, y)) return;
+  const allowed = state.playerElements[playerId];
+  if (allowed && (!allowed.includes(element) || !allowed.includes(secondElement))) return;
+  const def = dualTowerStats(element as Element, secondElement as Element);
+  const gold = state.gold[playerId] ?? 0;
+  if (gold < def.cost) return;
+  state.gold[playerId] = gold - def.cost;
+  state.towers.push({
+    id: state.nextTowerId++,
+    element: element as Element,
+    secondElement: secondElement as Element,
+    x,
+    y,
+    level: 1,
+    ticksSinceLastAttack: 0,
+    ownerId: playerId,
+    targetStrategy: 'first',
+    upgradePath: 'none',
+  });
+}
+
 /** 賣塔只有蓋的本人能賣(避免動到別人的投資),退回的錢算他自己的。 */
 function applySellTower(state: SimulationState, playerId: PlayerId, action: Action): void {
   const towerId = asFiniteInt(action.params.towerId);
@@ -476,6 +512,7 @@ function applyEmergencyHeal(state: SimulationState, playerId: PlayerId, action: 
 
 function applyCommand(state: SimulationState, playerId: PlayerId, action: Action): void {
   if (action.kind === 'build_tower') applyBuildTower(state, playerId, action);
+  else if (action.kind === 'build_dual_tower') applyBuildDualTower(state, playerId, action);
   else if (action.kind === 'sell_tower') applySellTower(state, playerId, action);
   else if (action.kind === 'upgrade_tower') applyUpgradeTower(state, playerId, action);
   else if (action.kind === 'set_target_strategy') applySetTargetStrategy(state, action);
@@ -505,7 +542,7 @@ function computeChecksum(state: SimulationState): string {
     .map((id) => `${id}:${state.gold[id]}`)
     .join(',');
   const towerPart = state.towers
-    .map((t) => `${t.id}:${t.x}:${t.y}:${t.element}:${t.level}:${t.targetStrategy}:${t.upgradePath}`)
+    .map((t) => `${t.id}:${t.x}:${t.y}:${t.element}:${t.secondElement ?? ''}:${t.level}:${t.targetStrategy}:${t.upgradePath}`)
     .join(';');
   const monsterPart = state.monsters
     .map((m) => `${m.id}:${m.hp}:${m.pos.pathId}:${m.pos.segmentIndex}:${m.pos.distanceIntoSegmentFp}`)

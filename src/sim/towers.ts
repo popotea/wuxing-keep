@@ -1,6 +1,6 @@
 // 塔:五行各一種基礎塔,攻擊判定全部用整數距離平方比較,不用 sqrt/float。
 
-import { applyElementalDamage, GENERATED_BY, type Element } from './elements';
+import { applyDualElementalDamage, applyElementalDamage, GENERATED_BY, type Element } from './elements';
 import { FP_SCALE, remainingDistanceFp, worldPositionFp } from './map';
 import type { Monster, MoveType } from './monsters';
 import {
@@ -23,6 +23,16 @@ export function canTargetMoveType(element: Element, moveType: MoveType): boolean
   if (moveType === 'air') return element !== 'earth';
   if (moveType === 'water') return element !== 'fire';
   return true;
+}
+
+/**
+ * 雙屬性塔(Tower.secondElement)的移動類型判定:只要兩個屬性其中一個打得到就算打得到(OR,
+ * 不是 AND)——只有土/火個別各被 1 種移動類型擋住,而且擋的不是同一種(土擋空、火擋水),
+ * 所以雙屬性塔任兩個屬性組合起來都不會真的被完全擋死,呼應「沒有致命對位」的設計方向
+ * (跟 elements.ts 的 bestElementRelation 同一個精神,只是套用在移動類型而不是傷害倍率)。
+ */
+export function canDualTargetMoveType(e1: Element, e2: Element, moveType: MoveType): boolean {
+  return canTargetMoveType(e1, moveType) || canTargetMoveType(e2, moveType);
 }
 
 export interface TowerDef {
@@ -59,6 +69,40 @@ export const TOWER_CHARACTER_NAMES: Record<Element, string> = {
   fire: '烈焰武士',
   earth: '磐石守衛',
 };
+
+/** 雙屬性塔基礎傷害只有兩屬性平均值的這個百分比——換取「不會出現弱勢傷害」的一致性,代價是輸出打折。 */
+export const DUAL_TOWER_DAMAGE_PERCENT = 80;
+/** 雙屬性塔造價是兩屬性平均造價的這個百分比(180 = 1.8 倍)——比蓋兩座單屬性塔便宜,但比蓋一座貴不少。 */
+export const DUAL_TOWER_COST_MULTIPLIER_PERCENT = 180;
+
+/**
+ * 雙屬性塔的基礎數值:cost/damage 是兩屬性平均後再套用上面兩個百分比,rangeFp/cooldownTicks
+ * 單純取平均、不額外調整(射程/攻速的取捨已經留給玩家選的兩個屬性本身去體現,不用再疊一層折扣)。
+ * `element` 欄位純粹沿用 e1 給型別相容,不代表這個 def 只吃 e1 的傷害判定
+ * (真正的傷害/移動類型判定要看 Tower.element + Tower.secondElement 兩個,見 tryAttack/findTarget)。
+ */
+export function dualTowerStats(e1: Element, e2: Element): TowerDef {
+  const d1 = TOWER_DEFS[e1];
+  const d2 = TOWER_DEFS[e2];
+  return {
+    element: e1,
+    cost: Math.floor(((d1.cost + d2.cost) * DUAL_TOWER_COST_MULTIPLIER_PERCENT) / 200),
+    damage: Math.floor(((d1.damage + d2.damage) * DUAL_TOWER_DAMAGE_PERCENT) / 200),
+    rangeFp: Math.floor((d1.rangeFp + d2.rangeFp) / 2),
+    cooldownTicks: Math.floor((d1.cooldownTicks + d2.cooldownTicks) / 2),
+  };
+}
+
+/** 塔目前實際吃的基礎數值——單屬性塔查表,雙屬性塔改用兩屬性平均後的折扣/溢價數值。 */
+function baseTowerDef(tower: Pick<Tower, 'element' | 'secondElement'>): TowerDef {
+  return tower.secondElement ? dualTowerStats(tower.element, tower.secondElement) : TOWER_DEFS[tower.element];
+}
+
+/** UI 顯示用的塔名稱,雙屬性塔顯示兩個角色名組合,不用另外設計新的角色名。 */
+export function towerDisplayName(tower: Pick<Tower, 'element' | 'secondElement'>): string {
+  if (!tower.secondElement) return TOWER_CHARACTER_NAMES[tower.element];
+  return `${TOWER_CHARACTER_NAMES[tower.element]}×${TOWER_CHARACTER_NAMES[tower.secondElement]}`;
+}
 
 export const MAX_TOWER_LEVEL = 5;
 
@@ -98,17 +142,25 @@ export interface Tower {
   targetStrategy: TargetStrategy;
   /** 升級分岐路線,新蓋的塔是 'none',升到 UPGRADE_PATH_LEVEL 那一級才會定案、之後不能改。 */
   upgradePath: UpgradePath;
+  /**
+   * 雙屬性塔(2026-07-21 加的,元素組合玩法):蓋塔當下就定案、之後不能改(跟升級分岐不同,
+   * 這個不是升級解鎖的,是建塔時的另一種選項)。不存在代表一般的單屬性塔。傷害/移動類型判定
+   * 都改吃「兩個屬性各自算、取比較好的那個」(見 elements.ts 的 bestElementRelation、
+   * towers.ts 的 canDualTargetMoveType),基礎數值則是兩屬性平均後套用折扣/溢價
+   * (見 dualTowerStats)。
+   */
+  secondElement?: Element;
 }
 
 /** 升級花費:每一級都用原始建造價當漲幅單位,越高級越貴。已滿級回傳 null。 */
 export function upgradeCost(tower: Tower): number | null {
   if (tower.level >= MAX_TOWER_LEVEL) return null;
-  return TOWER_DEFS[tower.element].cost * tower.level;
+  return baseTowerDef(tower).cost * tower.level;
 }
 
 /** 賣出可以拿回的金幣;跟 simulation.ts 的 applySellTower 共用同一個公式,避免兩邊算法各改各的漂掉。 */
 export function sellValue(tower: Tower): number {
-  return Math.floor(TOWER_DEFS[tower.element].cost / 2);
+  return Math.floor(baseTowerDef(tower).cost / 2);
 }
 
 export interface TotemEffect {
@@ -153,7 +205,7 @@ export function nearbyTotemEffect(tower: Tower, runeTotems: readonly RuneTotem[]
  * 圖騰的傷害加成(見 nearbyTotemEffect())在等級/路線加成算完之後才乘,兩者疊加。
  */
 function effectiveDamage(tower: Tower, runeTotems: readonly RuneTotem[]): number {
-  const def = TOWER_DEFS[tower.element];
+  const def = baseTowerDef(tower);
   let base = def.damage * tower.level;
   if (tower.level >= UPGRADE_PATH_LEVEL && tower.upgradePath === 'burst') {
     base = Math.floor((base * BURST_DAMAGE_PERCENT) / 100);
@@ -189,7 +241,7 @@ const ADJACENCY_COOLDOWN_PERCENT = 85;
  * 不是只算比較大的那個):相生鄰接固定折扣、圖騰疾風折扣依 `nearbyTotemEffect()` 算。
  */
 function effectiveCooldownTicks(tower: Tower, allTowers: readonly Tower[], runeTotems: readonly RuneTotem[]): number {
-  let base = TOWER_DEFS[tower.element].cooldownTicks;
+  let base = baseTowerDef(tower).cooldownTicks;
   if (hasGeneratingNeighbor(tower, allTowers)) {
     base = Math.floor((base * ADJACENCY_COOLDOWN_PERCENT) / 100);
   }
@@ -217,7 +269,7 @@ export interface TowerStats {
 
 /** 給 UI 顯示用(WC3 式選取面板):這座塔目前的實際數值(已套用等級加成+鄰接加成+圖騰加成)+ 升級/賣出的花費。 */
 export function describeTower(tower: Tower, allTowers: readonly Tower[], runeTotems: readonly RuneTotem[]): TowerStats {
-  const def = TOWER_DEFS[tower.element];
+  const def = baseTowerDef(tower);
   const totemEffect = nearbyTotemEffect(tower, runeTotems);
   return {
     damage: effectiveDamage(tower, runeTotems),
@@ -254,6 +306,20 @@ function isBetterTarget(strategy: TargetStrategy, candidate: Monster, current: M
   return isFurtherAlongPath(candidate, current); // 'first':classic TD 的「打最前面」
 }
 
+/** 這座塔打不打得到這種移動類型——單屬性查表,雙屬性改用 canDualTargetMoveType(OR 邏輯)。 */
+function towerCanTargetMoveType(tower: Pick<Tower, 'element' | 'secondElement'>, moveType: MoveType): boolean {
+  return tower.secondElement
+    ? canDualTargetMoveType(tower.element, tower.secondElement, moveType)
+    : canTargetMoveType(tower.element, moveType);
+}
+
+/** 這座塔打中 defender 時的傷害倍率判定——單屬性用一般的 elementRelation,雙屬性取兩屬性較好的那個。 */
+function towerElementalDamage(tower: Pick<Tower, 'element' | 'secondElement'>, baseDamage: number, defender: Element): number {
+  return tower.secondElement
+    ? applyDualElementalDamage(baseDamage, tower.element, tower.secondElement, defender)
+    : applyElementalDamage(baseDamage, tower.element, defender);
+}
+
 /** 範圍內依塔的集火策略選一個目標(預設 first=最靠近終點)。 */
 function findTarget(monsters: readonly Monster[], tower: Tower, def: TowerDef): Monster | null {
   const towerXFp = tower.x * FP_SCALE;
@@ -261,7 +327,7 @@ function findTarget(monsters: readonly Monster[], tower: Tower, def: TowerDef): 
   const rangeSq = def.rangeFp * def.rangeFp;
   let best: Monster | null = null;
   for (const m of monsters) {
-    if (!canTargetMoveType(tower.element, m.moveType)) continue;
+    if (!towerCanTargetMoveType(tower, m.moveType)) continue;
     const { xFp, yFp } = worldPositionFp(m.pos);
     const dx = towerXFp - xFp;
     const dy = towerYFp - yFp;
@@ -291,13 +357,13 @@ export function tryAttack(
   allTowers: readonly Tower[],
   runeTotems: readonly RuneTotem[],
 ): CombatEvent[] {
-  const def = TOWER_DEFS[tower.element];
+  const def = baseTowerDef(tower);
   tower.ticksSinceLastAttack += 1;
   if (tower.ticksSinceLastAttack < effectiveCooldownTicks(tower, allTowers, runeTotems)) return [];
   const target = findTarget(monsters, tower, def);
   if (!target) return [];
   tower.ticksSinceLastAttack = 0;
-  const damage = applyElementalDamage(effectiveDamage(tower, runeTotems), tower.element, target.element);
+  const damage = towerElementalDamage(tower, effectiveDamage(tower, runeTotems), target.element);
   target.hp -= damage;
   const targetPosFp = worldPositionFp(target.pos);
   const events: CombatEvent[] = [{ monsterId: target.id, xFp: targetPosFp.xFp, yFp: targetPosFp.yFp, damage }];
@@ -308,14 +374,14 @@ export function tryAttack(
     const splashRangeSq = SPLASH_RANGE_FP * SPLASH_RANGE_FP;
     for (const m of monsters) {
       if (m.id === target.id) continue;
-      if (!canTargetMoveType(tower.element, m.moveType)) continue;
+      if (!towerCanTargetMoveType(tower, m.moveType)) continue;
       const { xFp, yFp } = worldPositionFp(m.pos);
       const dx = targetPosFp.xFp - xFp;
       const dy = targetPosFp.yFp - yFp;
       if (dx * dx + dy * dy > splashRangeSq) continue;
-      const splashDamage = applyElementalDamage(
+      const splashDamage = towerElementalDamage(
+        tower,
         Math.floor((effectiveDamage(tower, runeTotems) * SPLASH_DAMAGE_PERCENT) / 100),
-        tower.element,
         m.element,
       );
       m.hp -= splashDamage;

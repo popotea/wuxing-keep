@@ -167,12 +167,27 @@ export const ENDLESS_BOSS_INTERVAL = 5;
 const ENDLESS_BASE_HP = 50;
 const ENDLESS_BASE_SPEED_FP = 60;
 const ENDLESS_BASE_BOUNTY = 8; // 2026-07-16 跟著固定模式的賞金調降一起降(約 -30%)
-const ENDLESS_WAVE_MONSTER_COUNT = 8;
+const ENDLESS_WAVE_MONSTER_COUNT_BASE = 8;
+/** 每隔幾波,非首領波的隻數 +1(呼應血量/速度「持續變強」的設計,單靠數值成長撐不了太久場面感)。 */
+const ENDLESS_MONSTER_COUNT_GROWTH_INTERVAL = 2;
+/**
+ * 隻數上限。硬限制是 WAVE_INTERVAL_TICKS / SPAWN_INTERVAL_TICKS = 20(超過的話最後幾隻的生怪
+ * tick 會落在下一波的時間範圍內,被下一波的排程蓋掉、永遠不會生出來),這裡刻意留緩衝不頂到硬限制。
+ */
+const ENDLESS_WAVE_MONSTER_COUNT_CAP = 16;
 /** 血量/賞金每波 +12%(對第 0 波基準值線性疊加,不封頂——就是要讓怪物「持續變強」)。 */
 const ENDLESS_HP_GROWTH_PERCENT = 12;
 /** 速度每波 +3%,但封頂在基準值的 160%,避免無限模式後期怪物快到玩家反應不過來/定點數運算異常。 */
 const ENDLESS_SPEED_GROWTH_PERCENT = 3;
 const ENDLESS_SPEED_GROWTH_CAP_PERCENT = 60;
+
+/**
+ * 首領波造型三選一,靠 waveHash 決定(見下面 generateEndlessWave):
+ * 'single' 是原本就有的單隻厚血慢速;'group' 是三隻一組的首領小隊,考驗玩家能不能同時分散火力;
+ * 'swift' 是血薄速度快的迅捷首領,考驗集火反應速度而不是耐力——三種造型輪流出現避免每次首領波
+ * 都是同一套「站著慢慢打」的節奏。
+ */
+type EndlessBossType = 'single' | 'group' | 'swift';
 
 /**
  * 純函式的決定性雜湊(不是密碼學等級,風格跟 GameScene.ts 的 tileHash() 一致):同樣的
@@ -197,6 +212,8 @@ interface EndlessWave {
   bounty: number;
   count: number;
   isBoss: boolean;
+  /** 只有 isBoss 為 true 時才有意義,給 UI 顯示不同首領造型的提示用。 */
+  bossType?: EndlessBossType;
 }
 
 /** 純函式:無限模式第 waveIndex 波(0-based,沒有上限)要生什麼怪,同樣的 waveIndex 到哪都算出同一份結果。 */
@@ -210,13 +227,41 @@ function generateEndlessWave(waveIndex: number): EndlessWave {
   const isBoss = waveIndex > 0 && (waveIndex + 1) % ENDLESS_BOSS_INTERVAL === 0;
   if (isBoss) {
     const element = ALL_ELEMENTS[waveHash(waveIndex, 1) % ALL_ELEMENTS.length];
+    const archetypes: readonly EndlessArchetype[] = [{ element, moveType: 'ground' }];
+    const bossTypeRoll = waveHash(waveIndex, 3) % 3;
+    if (bossTypeRoll === 1) {
+      // group:三隻一組的首領小隊,單隻血量沒有 single 型誇張,但同時要分散顧三個目標,
+      // 總賞金維持跟 single 型同一個量級(除以隻數),不是三倍收入。
+      return {
+        archetypes,
+        hp: hp * 4,
+        speedFp,
+        bounty: Math.floor((bounty * 10) / 3),
+        count: 3,
+        isBoss: true,
+        bossType: 'group',
+      };
+    }
+    if (bossTypeRoll === 2) {
+      // swift:血薄速度快,考驗集火反應速度而不是耐力,賞金維持跟 single 型同一個量級。
+      return {
+        archetypes,
+        hp: hp * 6,
+        speedFp: Math.floor(speedFp * 1.3),
+        bounty: bounty * 10,
+        count: 1,
+        isBoss: true,
+        bossType: 'swift',
+      };
+    }
     return {
-      archetypes: [{ element, moveType: 'ground' }],
+      archetypes,
       hp: hp * 12, // 首領血量大幅放大,呼應固定模式最終首領波的「單隻厚血」收尾感
       speedFp: Math.floor(speedFp * 0.7), // 首領慢一點,拉長對戰時間(跟固定模式首領波同樣的設計理由)
       bounty: bounty * 10,
       count: 1,
       isBoss: true,
+      bossType: 'single',
     };
   }
 
@@ -231,7 +276,12 @@ function generateEndlessWave(waveIndex: number): EndlessWave {
     archetypes.push({ element, moveType });
   }
 
-  return { archetypes, hp, speedFp, bounty, count: ENDLESS_WAVE_MONSTER_COUNT, isBoss: false };
+  const count = Math.min(
+    ENDLESS_WAVE_MONSTER_COUNT_BASE + Math.floor(waveIndex / ENDLESS_MONSTER_COUNT_GROWTH_INTERVAL),
+    ENDLESS_WAVE_MONSTER_COUNT_CAP,
+  );
+
+  return { archetypes, hp, speedFp, bounty, count, isBoss: false };
 }
 
 /** 無限模式版的 getSpawnEventsForTick——只算「現在這一波」該生什麼,O(1) 不會隨對局拉長而變慢。 */
@@ -270,8 +320,10 @@ export function ticksUntilNextWaveEndless(tick: number): number {
 }
 
 /** 無限模式版的下一波預覽(給 HUD 顯示用):只給主要元素跟是否首領波,不細列混波的第二種元素。 */
-export function upcomingWaveDefEndless(tick: number): { element: Element; isBoss: boolean } {
+export function upcomingWaveDefEndless(
+  tick: number,
+): { element: Element; isBoss: boolean; bossType?: EndlessBossType } {
   const nextWaveIndex = Math.floor(tick / WAVE_INTERVAL_TICKS) + 1;
   const wave = generateEndlessWave(nextWaveIndex);
-  return { element: wave.archetypes[0].element, isBoss: wave.isBoss };
+  return { element: wave.archetypes[0].element, isBoss: wave.isBoss, bossType: wave.bossType };
 }
