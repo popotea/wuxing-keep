@@ -311,6 +311,84 @@ console.log('\n[7] 技能冷卻');
 }
 
 // ---------------------------------------------------------------------------
+console.log('\n[8] 資源建築座數上限');
+{
+  const placementsMod = await loadModule('src/sim/placements.ts', 'placements.mjs');
+  const cap = placementsMod.MAX_RESOURCE_BUILDINGS_PER_PLAYER;
+  const cost = placementsMod.RESOURCE_BUILDING_COST;
+  mapMod.setActiveMap(mapMod.DEFAULT_MAP_ID);
+
+  // 找 cap+2 個非路徑空格
+  const spots = [];
+  for (let x = 0; x < mapMod.GRID_WIDTH && spots.length < cap + 2; x++) {
+    for (let y = 0; y < mapMod.GRID_HEIGHT && spots.length < cap + 2; y++) {
+      if (!mapMod.isOnPath(x, y)) spots.push([x, y]);
+    }
+  }
+
+  let s = sim.createInitialState(3, 100, { p1: ['fire'], p2: ['water'] }, false, false, mapMod.DEFAULT_MAP_ID);
+  s.gold.p1 = 999999;
+  s.gold.p2 = 999999;
+  const goldBefore = s.gold.p1;
+  // p1 連發 cap+2 個建造指令(超過上限的部分應該是完整 no-op:不建成也不扣錢)
+  const cmds = spots.map(([x, y]) => ({ playerId: 'p1', action: { kind: 'build_resource_building', params: { x, y } } }));
+  s = sim.step(s, 0, cmds);
+  check(`p1 蓋滿上限就停(${cap} 座)`, s.resourceBuildings.length === cap, `實際 ${s.resourceBuildings.length}`);
+  check('超限的指令不會扣錢', goldBefore - s.gold.p1 === cap * cost, `實扣 ${goldBefore - s.gold.p1},預期 ${cap * cost}`);
+  // 上限是「每位玩家」不是「全隊」——p2 還是可以蓋自己的
+  s = sim.step(s, 1, [
+    { playerId: 'p2', action: { kind: 'build_resource_building', params: { x: spots[cap][0], y: spots[cap][1] } } },
+  ]);
+  check('上限是每位玩家各自計算(p2 仍可蓋)', s.resourceBuildings.length === cap + 1);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[9] 呼叫下一波(狂按防護)');
+{
+  mapMod.setActiveMap(mapMod.DEFAULT_MAP_ID);
+  const skip = { playerId: 'p1', action: { kind: 'skip_to_next_wave', params: {} } };
+
+  // 狂按:每個 tick 都塞 5 個 skip 指令,跑完整場,斷言每一波的怪都真的生出來(不會整波蒸發)
+  let s = sim.createInitialState(5, 100, { p1: ['fire'] }, false, false, mapMod.DEFAULT_MAP_ID);
+  let spawnedTotal = 0;
+  let prevCount = 0;
+  let victoryTick = -1;
+  for (let t = 0; t < 12000 && !s.victory && !s.gameOver; t++) {
+    s = sim.step(s, t, [skip, skip, skip, skip, skip]);
+    if (s.monsters.length > prevCount) spawnedTotal += s.monsters.length - prevCount;
+    prevCount = s.monsters.length;
+    if (s.victory) victoryTick = t;
+  }
+  // 分裂小怪會讓實際出現數 > 波次定義總數,所以斷言「至少」等於定義總數
+  const definedTotal = monsterMod.WAVES.reduce((sum, w) => sum + w.count, 0);
+  check(
+    `狂按下一波不會讓怪整波蒸發(生出 ${spawnedTotal} >= 定義的 ${definedTotal})`,
+    spawnedTotal >= definedTotal,
+    `實際只生出 ${spawnedTotal}`,
+  );
+  check('狂按下一波不會不勞而獲拿勝利(沒塔應該 gameOver)', s.gameOver && !s.victory, `victory@${victoryTick}`);
+
+  // 這一波還在出怪時按 skip 應該是 no-op(offset 不動)
+  let s2 = sim.createInitialState(5, 100, { p1: ['fire'] }, false, false, mapMod.DEFAULT_MAP_ID);
+  s2 = sim.step(s2, 0, []);
+  s2 = sim.step(s2, 1, [skip]);
+  check('第 1 波還在出怪時按下一波被忽略', s2.waveTickOffset === 0);
+
+  // 出完怪之後按就會真的跳到下一波
+  const lastSpawn = monsterMod.lastSpawnTickOfWave(0, false);
+  let s3 = sim.createInitialState(5, 100, { p1: ['fire'] }, false, false, mapMod.DEFAULT_MAP_ID);
+  let t3 = 0;
+  while (t3 <= lastSpawn) s3 = sim.step(s3, t3++, []);
+  s3 = sim.step(s3, t3++, [skip]);
+  check('出完怪後按下一波會跳', s3.waveTickOffset > 0, `offset=${s3.waveTickOffset}`);
+  check(
+    '跳完剛好落在下一波起點',
+    sim.effectiveWaveTick(s3) === monsterMod.WAVE_INTERVAL_TICKS,
+    `effTick=${sim.effectiveWaveTick(s3)}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 rmSync(outDir, { recursive: true, force: true });
 console.log(`\n${failures === 0 ? '全部通過' : `${failures} 項失敗`}\n`);
 process.exit(failures === 0 ? 0 : 1);

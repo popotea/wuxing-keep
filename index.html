@@ -5,7 +5,8 @@
     <!-- maximum-scale/user-scalable=no:對局中畫面已經自動縮放塞滿整張地圖(見 GameScene.ts 的
          applyViewportZoom),手機上如果還能瀏覽器層級雙指縮放/雙擊縮放,只會把這個「剛好塞滿」
          的版面弄亂,不是使用者想要的「放大看細節」——遊戲內沒有任何依賴瀏覽器縮放的內容。 -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <!-- viewport-fit=cover 讓瀏海/圓角機種可以用 env(safe-area-inset-*) 佈局(HUD/技能列有搭配 inset)。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#12151a" />
     <link
       rel="icon"
@@ -33,7 +34,10 @@
       * { box-sizing: border-box; }
       body {
         margin: 0;
+        /* 行動瀏覽器的 100vh 是「最大視口」(含被工具列蓋住的區域),工具列展開時版面會比
+           實際可視高度高、底部被裁掉——dvh 才是動態可視高度,舊瀏覽器不支援就退回 vh。 */
         min-height: 100vh;
+        min-height: 100dvh;
         background:
           radial-gradient(ellipse 900px 500px at 50% -10%, #232b3a 0%, transparent 60%),
           radial-gradient(ellipse 1200px 800px at 50% 100%, #161c26 0%, transparent 70%),
@@ -180,6 +184,16 @@
         box-shadow: var(--shadow-soft);
       }
       #floatingBuildMenu.show { display: flex; }
+      /* 塔的浮動操作選單標頭(renderTowerMenu):塔名/等級/核心數值,觸控裝置沒有 hover
+         tooltip,一定要在這裡看得到數值。 */
+      .floating-menu-header {
+        padding: 2px 4px 8px;
+        border-bottom: 1px solid var(--border);
+        font-size: 14px;
+        line-height: 1.5;
+        max-width: 260px;
+      }
+      .floating-menu-header small { display: block; color: var(--muted); font-size: 11.5px; }
 
       /* ---- 金幣不足等訊息提示(toast) ---- */
       /* 不用 hidden 屬性控制顯示(opacity 淡入淡出需要一直是 display:block 才能轉場),
@@ -363,6 +377,7 @@
         gap: 10px;
         width: 100%;
         height: calc(100vh - 32px); /* 扣掉 body 上下各 16px padding,撐滿可視高度 */
+        height: calc(100dvh - 32px); /* 行動瀏覽器工具列收放時的動態可視高度(見 body 的說明) */
         animation: fade-in-up 0.3s ease-out;
       }
       #gameScreen[hidden] { display: none; }
@@ -371,13 +386,17 @@
          反正裡面全是純顯示文字不用互動。 */
       #hud {
         position: fixed;
-        top: 14px;
+        top: calc(14px + env(safe-area-inset-top, 0px));
         left: 50%;
         transform: translateX(-50%);
         z-index: 10;
         display: flex;
         align-items: center;
-        gap: 8px;
+        justify-content: center;
+        /* 窄螢幕(手機)整條 HUD 比視窗寬時換行置中,不要讓左右兩端被裁掉又不能捲動 */
+        flex-wrap: wrap;
+        max-width: calc(100vw - 16px);
+        gap: 4px 8px;
         font-size: 15px;
         pointer-events: none;
       }
@@ -451,7 +470,7 @@
       #skillBar {
         position: fixed;
         left: 50%;
-        bottom: 14px;
+        bottom: calc(14px + env(safe-area-inset-bottom, 0px));
         transform: translateX(-50%);
         z-index: 10;
         display: flex;
@@ -459,11 +478,8 @@
         pointer-events: none;
       }
       #skillBar:empty { display: none; }
-      /* 選了塔的時候塔面板會從畫面下緣升起來,技能列固定在 bottom:14px 會被壓在它底下
-         (實測截圖看到兩者疊在一起)——選取狀態下把技能列跟說明整組往上推到面板上方。
-         用 body class 而不是 :has() 選擇器,不依賴瀏覽器對 :has() 的支援。 */
-      body.tower-panel-open #skillBar { bottom: 200px; }
-      body.tower-panel-open #skillHint { bottom: 278px; }
+      /* 塔面板(#towerPanel)2026-07-23 移除後,原本「選塔時把技能列往上推」的
+         body.tower-panel-open 規則不再需要——塔的操作改成浮動選單,不佔畫面下緣。 */
       /* 技能說明:浮在技能列正上方置中。:empty 時整個不佔位置(跟 #bonusWave 同一套做法)。 */
       #skillHint {
         position: fixed;
@@ -520,7 +536,7 @@
          這兩顆本來就是操作用的按鈕,理當跟純顯示的數值分開放。 */
       #hudToggles {
         position: fixed;
-        top: 14px;
+        top: calc(14px + env(safe-area-inset-top, 0px));
         right: 14px;
         z-index: 10;
         display: flex;
@@ -591,45 +607,75 @@
          為主的裝置,包含大多數手機/平板)放大這些按鈕的熱區,滑鼠/軌跡板裝置的精簡尺寸不受影響。 ---- */
       @media (pointer: coarse) {
         .hud-action-btn { padding: 8px 14px; font-size: 13px; }
-        .tower-panel-actions button { padding: 12px 8px; }
-        #towerDeselectBtn { padding: 12px 16px; }
         .scoreboard-gift-btn { padding: 6px 10px; }
-        .tower-panel-strategy select { padding: 8px 10px; }
         /* 技能按鈕在手機上是最需要點得準的東西之一(施放時機常常很緊急),熱區給大一點 */
         .skill-btn { min-width: 88px; padding: 10px 14px; font-size: 13px; }
       }
 
-      /* 寬高比固定跟地圖一樣(src/sim/map.ts 的 GRID_WIDTH:GRID_HEIGHT = 40:24 = 5:3)——
-         2026-07-21 加的:GameScene.ts 的 applyViewportZoom() 會把地圖縮放到「剛好塞滿畫布」,
-         取寬高比較保守的那一邊決定縮放倍率;如果畫布本身跟地圖比例不一樣(例如手機直式螢幕
-         很窄很高),縮放後另一軸就會留下大片空白。與其在 Phaser 鏡頭那邊做置中(試過幾種寫法,
-         這個版本的 Phaser 在 zoom!=1 時鏡頭 bounds/viewport 的內部計算對不太上,詳見
-         GameScene.ts 的註解),不如從根源讓畫布永遠跟地圖同比例,縮放後自然剛好貼合、不會有
-         任何一軸留白。max-height:100% 讓瀏覽器在「寬度撐滿」或「高度撐滿」兩種情況間自動選
-         比較保守的那個(等同 CSS 版的 object-fit: contain),#gameScreen 原本就有的
-         align-items:center 負責水平置中,這裡另外用 margin-block:auto 讓垂直方向也置中
-         (column flex 預設貼齊頂端,auto margin 才會置中)。 */
+      /* ---- 小螢幕(手機)版面調整:把空間還給畫布、避免固定定位的 HUD 互相重疊 ---- */
+      @media (max-width: 700px) {
+        body { padding: 6px; }
+        #gameScreen { height: calc(100vh - 12px); height: calc(100dvh - 12px); gap: 6px; }
+        #hud { font-size: 13px; }
+        .hud-stat { padding: 4px 10px; gap: 4px; }
+        .lives-bar-outer { width: 70px; }
+        /* 右上角的操作鈕跟置中的 HUD 在窄螢幕會同線重疊,移到右下(技能列置中,右下通常是空的) */
+        #hudToggles {
+          top: auto;
+          bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+          right: 10px;
+        }
+        /* 選單/記分板卡片不要比螢幕寬(360-390px 手機會水平溢出) */
+        .menu-card { min-width: min(360px, 100%); width: 100%; padding: 20px 16px; }
+        .scoreboard-panel { min-width: min(380px, calc(100vw - 24px)); }
+      }
+
+      /* ---- 手機直式提醒(2026-07-23 加的):地圖 5:3 橫向,直式螢幕畫布只剩約 1/4 高度。
+         只在「對局中 + 直式 + 觸控裝置」顯示,body.rotate-hint-dismissed 之後不再出現。 ---- */
+      #rotateHint {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 40;
+        background: rgba(8, 10, 14, 0.9);
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      @media (orientation: portrait) and (pointer: coarse) {
+        body.game-active:not(.rotate-hint-dismissed) #rotateHint { display: flex; }
+      }
+      .rotate-hint-box {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 28px 24px;
+        text-align: center;
+        max-width: 320px;
+      }
+      .rotate-hint-icon { font-size: 40px; margin-bottom: 10px; }
+      .rotate-hint-box p { font-size: 15px; line-height: 1.6; }
+      .rotate-hint-box b { color: var(--accent); }
+
+      /* 畫布區域佔滿 #gameScreen 剩餘空間(任何比例都行),真正的 5:3 畫布(#gameCanvasWrap)
+         由 main.ts 的 layoutGameCanvas() 用 JS 算 contain 尺寸絕對定位置中。
+         2026-07-23 改成 JS 計算:原本用 CSS aspect-ratio + height:100% + max-width:100%,
+         但 CSS 規範裡 aspect-ratio 的軸間轉移只在兩軸皆 auto 時發生——高度是 definite(100%)
+         時,寬度被 max-width 夾住後高度**不會**跟著縮,視窗比 5:3 窄的時候比例整個破掉
+         (畫布變窄高、地圖貼上緣、下方一塊背景色)。之前 2026-07-21/07-23 兩次都只是把破比例
+         的情境從一軸搬到另一軸,JS 算 contain 才是兩軸都對。 */
+      #gameCanvasArea {
+        flex: 1 1 auto;
+        min-height: 0;
+        width: 100%;
+        position: relative;
+      }
       #gameCanvasWrap {
+        position: absolute;
         border: 2px solid var(--border);
         border-radius: 6px;
         overflow: hidden;
         line-height: 0;
         box-shadow: var(--shadow-soft);
-        aspect-ratio: 40 / 24;
-        /* 2026-07-23 修水平置中:原本是 width:100% + max-height:100%,高度受限時
-           aspect-ratio 會把「畫出來的內容」縮窄(例如 1280 → 955),但這個 flex item 的
-           box 仍然佔著 100% 的寬度,於是內容整個靠左、右邊留一大塊黑(實測截圖看到的,
-           塔面板一開就特別明顯,因為可用高度變小、寬度縮得更多)。
-           改成讓寬度由高度推算(height:100% + width:auto),box 本身就是內容的實際寬度,
-           再用 margin:auto 讓水平/垂直都置中。max-width:100% 負責另一個方向:視窗很扁時
-           改由寬度決定,不會超出畫面。 */
-        height: 100%;
-        width: auto;
-        max-width: 100%;
-        max-height: 100%;
-        margin: auto;
-        flex: 0 1 auto;
-        min-height: 0;
       }
       #gameCanvas {
         /* PhaserGame.ts 用 Scale.RESIZE,畫布會跟著這個容器的實際尺寸調整,Phaser 自己會把
@@ -661,52 +707,8 @@
       }
       #backToMenuBtn:hover { border-color: var(--accent); transform: translateY(-1px); }
 
-      /* ---- 塔選取面板(魔獸爭霸式,選塔才顯示,不是點下去就直接動作) ---- */
-      .tower-panel {
-        width: 100%;
-        /* 2026-07-23 從 460 加寬:多了「加第二屬性」按鈕之後,四顆按鈕平分寬度會把
-           比較長的按鈕文字擠到換行、被面板邊界切掉(實測截圖看到的)。 */
-        max-width: 560px;
-        border: 2px solid var(--accent);
-        border-radius: 10px;
-        padding: 10px 16px;
-        box-shadow: var(--shadow-soft), 0 0 20px -8px rgba(212, 175, 55, 0.4);
-        animation: fade-in-up 0.2s ease-out;
-      }
-      .tower-panel-header { display: flex; justify-content: space-between; align-items: center; font-size: 17px; font-weight: bold; margin-bottom: 6px; }
-      .tower-panel-level { color: var(--muted); font-weight: normal; font-size: 14px; }
-      .tower-panel-owner { color: var(--muted); font-weight: normal; font-size: 13px; margin-left: 4px; }
-      .tower-panel-stats { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-bottom: 10px; flex-wrap: wrap; }
-      .tower-panel-adjacency { color: var(--accent); font-weight: bold; }
-      .tower-panel-strategy { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
-      .tower-panel-strategy select {
-        background: var(--panel-2);
-        border: 1px solid var(--border);
-        color: var(--text);
-        border-radius: 4px;
-        padding: 4px 6px;
-        font-size: 13px;
-      }
-      .tower-panel-actions { display: flex; gap: 8px; }
-      .tower-panel-actions button {
-        flex: 1;
-        /* 按鈕文字一律不換行:換行的話第二行會超出按鈕高度被切掉,只看得到半個字 */
-        white-space: nowrap;
-        font-size: 13px;
-        padding: 8px;
-        border-radius: 6px;
-        border: 1px solid var(--border);
-        background: var(--panel-2);
-        color: var(--text);
-        cursor: pointer;
-        font-weight: bold;
-        transition: filter 0.15s, transform 0.15s;
-      }
-      .tower-panel-actions button:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.1); }
-      .tower-panel-actions button:disabled { opacity: 0.4; cursor: default; transform: none; }
-      #towerUpgradeBtn { background: linear-gradient(160deg, #3a9d3a, #256b25); border-color: #256b25; }
-      /* 加第二屬性:用紫色跟一般升級(綠)區分開,它是「換一種塔」不是單純變強 */
-      #towerSecondElementBtn { background: linear-gradient(160deg, #7d5bb5, #4e357a); border-color: #4e357a; }
+      /* 塔選取面板(#towerPanel)2026-07-23 移除,塔的操作改成浮動選單(見 #floatingBuildMenu
+         與 main.ts 的 renderTowerMenu()),tower-panel 系列樣式一併清掉。 */
 
       /* ---- 「金幣不足」的專用樣式 ----
          單純的 :disabled 只是整顆變淡,玩家看不出到底是「條件還沒到」還是「只差錢」。
@@ -719,9 +721,6 @@
         border-color: #8a3a3a;
         color: #ffb4b4;
       }
-      .tower-panel-actions button.cost-unaffordable:disabled { filter: none; }
-      #towerSellBtn { background: linear-gradient(160deg, #b9924a, #7a5f2a); border-color: #7a5f2a; }
-      #towerDeselectBtn { flex: 0 0 auto; padding: 8px 12px; }
 
       /* ---- 連線疑難排解(收合,不是除錯用,是給連不上的人真的能用的功能) ---- */
       #connectionTroubleshoot { margin-top: 10px; }
@@ -1160,12 +1159,24 @@
         <button id="scoreboardBtn" class="hud-compact-toggle" type="button">記分板</button>
         <button id="hudCompactBtn" class="hud-compact-toggle" type="button">精簡檢視</button>
       </div>
-      <!-- gameCanvasWrap 負責寬高比/置中,gameCanvas 是 PhaserGame.ts 交給 Phaser 掛載的容器——
-           兩層分開是因為 Phaser 的 Scale.RESIZE 模式會直接把 gameCanvas 的 inline style 設成
-           width:100%;height:100%(蓋過任何寫在 <style> 裡的 CSS,包括 aspect-ratio),沒辦法在
-           gameCanvas 本身套用寬高比,只能在它外面再包一層 Phaser 不會碰的元素。 -->
-      <div id="gameCanvasWrap">
-        <div id="gameCanvas"></div>
+      <!-- gameCanvasArea 佔滿剩餘空間;gameCanvasWrap 是 JS 算出的 5:3 contain 畫布
+           (main.ts 的 layoutGameCanvas() + ResizeObserver);gameCanvas 是 PhaserGame.ts 交給
+           Phaser 掛載的容器——wrap/canvas 兩層分開是因為 Phaser 的 Scale.RESIZE 模式會直接把
+           gameCanvas 的 inline style 設成 width:100%;height:100%(蓋過任何寫在 <style> 裡的
+           CSS),尺寸只能設在它外面 Phaser 不會碰的元素上。 -->
+      <div id="gameCanvasArea">
+        <div id="gameCanvasWrap">
+          <div id="gameCanvas"></div>
+        </div>
+      </div>
+      <!-- 手機直式提醒:地圖是 5:3 橫向,直式螢幕畫布只剩約 1/4 高度,轉橫向才玩得舒服。
+           可以關掉繼續直式玩(main.ts 綁 click),不是強制。 -->
+      <div id="rotateHint">
+        <div class="rotate-hint-box panel-frame">
+          <div class="rotate-hint-icon">📱↻</div>
+          <p>地圖是橫向的——把裝置轉成<b>橫向</b>畫面會大很多!</p>
+          <button id="rotateHintDismiss" class="btn" type="button">知道了,繼續直式玩</button>
+        </div>
       </div>
       <div id="toast"></div>
       <!-- 滑鼠移到塔/怪物/陷阱/資源建築上面浮動顯示的物件說明,純顯示不用互動,跟著游標走。 -->
@@ -1197,47 +1208,9 @@
       <div id="floatingBuildBackdrop"></div>
       <div id="floatingBuildMenu"></div>
 
-      <div id="towerPanel" class="tower-panel panel-frame" hidden>
-        <div class="tower-panel-header">
-          <span id="towerPanelElement"></span>
-          <span class="tower-panel-owner">(<span id="towerPanelOwner">-</span>)</span>
-          <span class="tower-panel-level">Lv. <span id="towerPanelLevel">-</span></span>
-        </div>
-        <div class="tower-panel-stats">
-          <div><svg class="icon"><use href="#icon-sword" /></svg> 攻擊力 <span id="towerPanelDamage">-</span></div>
-          <div><svg class="icon"><use href="#icon-target" /></svg> 範圍 <span id="towerPanelRange">-</span> 格</div>
-          <div><svg class="icon"><use href="#icon-clock" /></svg> 攻速 <span id="towerPanelCooldown">-</span>s</div>
-          <div id="towerPanelPathRow" hidden><svg class="icon"><use href="#icon-star" /></svg> <span id="towerPanelPath">-</span></div>
-          <div id="towerPanelAdjacencyRow" class="tower-panel-adjacency" hidden>
-            <svg class="icon"><use href="#icon-spark" /></svg> 相生加速中(+15% 攻速)
-          </div>
-          <div id="towerPanelTotemRow" class="tower-panel-adjacency" hidden>
-            <svg class="icon"><use href="#icon-star" /></svg> <span id="towerPanelTotemText">-</span>
-          </div>
-        </div>
-        <label class="tower-panel-strategy">
-          集火:
-          <select id="towerPanelStrategy">
-            <option value="first">最前面</option>
-            <option value="lowest_hp">血量最少</option>
-            <option value="highest_hp">血量最多</option>
-          </select>
-        </label>
-        <div class="tower-panel-actions">
-          <button id="towerUpgradeBtn">
-            <svg class="icon"><use href="#icon-up" /></svg> 升級(<span id="towerUpgradeCost">-</span>)
-          </button>
-          <!-- 加第二屬性:只有塔到了 DUAL_ELEMENT_MIN_LEVEL 且還沒有第二屬性時才顯示
-               (main.ts 的 renderTowerPanel() 控制),見 sim/towers.ts 的說明 -->
-          <button id="towerSecondElementBtn" hidden>
-            <svg class="icon"><use href="#icon-spark" /></svg> 加第二屬性(<span id="towerSecondElementCost">-</span>)
-          </button>
-          <button id="towerSellBtn">
-            <svg class="icon"><use href="#icon-coin" /></svg> 賣出(+<span id="towerSellValue">-</span>)
-          </button>
-          <button id="towerDeselectBtn"><svg class="icon"><use href="#icon-close" /></svg></button>
-        </div>
-      </div>
+      <!-- 塔的操作(升級/賣出/集火策略)2026-07-23 改成浮動選單:點塔後直接浮現在塔旁邊,
+           跟建造選單共用 #floatingBuildMenu(main.ts 的 renderTowerMenu()),原本固定在
+           畫面下緣的 #towerPanel 面板已整個移除。 -->
 
       <div id="resultBanner"></div>
       <button id="backToMenuBtn">回到選單</button>

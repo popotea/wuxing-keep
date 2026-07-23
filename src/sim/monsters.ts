@@ -457,6 +457,26 @@ export function getEndlessSpawnEventsForTick(tick: number): SpawnEvent[] {
   return events;
 }
 
+/**
+ * 第 waveIndex 波最後一隻怪的生怪 tick。「呼叫下一波」要等目前這波出完怪才能跳
+ * (見 simulation.ts 的 applySkipToNextWave):offset 一跳,中間的生怪 tick 永遠不會被
+ * step() 評估,那些怪會整批憑空消失——狂按下一波可以把好幾波怪全部跳掉直接拿勝利。
+ * 固定/無限兩套生怪規則的 count 來源不同,統一包在這裡,UI 跟模擬層共用同一個判定。
+ */
+export function lastSpawnTickOfWave(waveIndex: number, endlessMode: boolean): number {
+  const waveStartTick = waveIndex * WAVE_INTERVAL_TICKS;
+  const count = endlessMode ? generateEndlessWave(waveIndex).count : (WAVES[waveIndex]?.count ?? 1);
+  return waveStartTick + (count - 1) * SPAWN_INTERVAL_TICKS;
+}
+
+/** 目前這一波(依 tick 推算)是否已經出完怪——「呼叫下一波」按鈕的啟用條件,UI 端顯示用。
+ * **嚴格大於**:step() 裡指令先於生怪套用,tick 剛好等於最後生怪 tick 時跳波,會把當
+ * tick 這隻怪跳掉(實測過每波恰好少一隻),所以要等那個 tick 過了才算出完。 */
+export function waveFullySpawned(tick: number, endlessMode: boolean): boolean {
+  const waveIndex = Math.floor(tick / WAVE_INTERVAL_TICKS);
+  return tick > lastSpawnTickOfWave(waveIndex, endlessMode);
+}
+
 /** 無限模式版的「目前第幾波」,不像固定模式封頂在 WAVES.length,永遠照實際 tick 往上算。 */
 export function currentWaveNumberEndless(tick: number): number {
   return Math.floor(tick / WAVE_INTERVAL_TICKS) + 1;

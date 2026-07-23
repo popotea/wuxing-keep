@@ -28,7 +28,7 @@ npm run assets     # AI 美術產圖工具(獨立於遊戲本體,不會被 build
 | 指令 | 涵蓋範圍 | 前置需求 |
 |---|---|---|
 | `npm run verify` | 地圖定義合法性、擊退邊界、雜湊決定性、每張地圖跑兩次 2600 tick 比對 checksum 序列、各機制真的會發生 | 無(esbuild 來自 vite 的傳遞依賴) |
-| `npm run verify:browser` | 三張地圖的單人流程、換地圖時靜態層有沒有重畫(解碼截圖像素)、多人 2 玩家 checksum 一致性 | 另開終端機跑 `npm run dev`;Playwright 要自己裝(`npm i -D playwright && npx playwright install chromium`,刻意不列進專案依賴——會連帶下載數百 MB 瀏覽器) |
+| `npm run verify:browser` | 三張地圖的單人流程、換地圖時靜態層有沒有重畫(解碼截圖像素)、多人 2 玩家 checksum 一致性 + **加入者建塔真的生效**(checksum 一致證明不了指令有進模擬) | 另開終端機跑 `npm run preview`(**不要用 dev server**——任何工具碰 `src/*.ts` 都會觸發全頁 reload 把房間毀掉)+ `WUXING_VERIFY_URL=http://localhost:4173/`;Playwright 要自己裝(`npm i -D playwright && npx playwright install chromium`,刻意不列進專案依賴——會連帶下載數百 MB 瀏覽器) |
 
 **改過 `src/sim/` 一定要跑 `npm run verify`。** 多人同步的驗證方法論見 `multiplayer-verify` skill——**單一瀏覽器分頁測不出 lockstep 跑飛問題**。
 
@@ -55,7 +55,7 @@ src/
 | `room.ts` | 房號/roster/準備流程/房主權威開局/斷線偵測與換房主 |
 | `lockstep.ts` | Tick 引擎:`HostLockstepEngine` / `ClientLockstepEngine` |
 
-房主中途斷線會**自動換房主**(2026-07-21 加的,殘存玩家各自獨立算出同一個接手人選),失敗才落回結束對局。位置/操作採**信任制,不做防作弊驗證**(朋友間連線,不是公開對戰)。
+房主中途斷線會**自動換房主**(2026-07-21 加的,殘存玩家各自獨立算出同一個接手人選),失敗才落回結束對局。位置/操作採**信任制,不做防作弊驗證**(朋友間連線,不是公開對戰)。2026-07-23 加了兩層防護:**版本檢查**(build 時注入 git hash,`HELLO`/`REJOIN` 比對不一致就明確拒絕——新舊 bundle 混連會靜默跑飛)與**跑飛偵測**(客戶端定期回報 checksum,房主同 tick 比對,對不上就廣播 `DESYNC` 中止對局)。
 
 → 完整機制、心跳偵測、`RESYNC`、已知限制:**`docs/NETWORKING.md`**
 
@@ -96,11 +96,12 @@ src/
 
 - 選單分「單人模式 / 多人連線」兩頁籤,多人再分設定表單與房間 Lobby;兩邊都可選地圖
 - **建造是點地圖格子才浮現的浮動選單**(舊的固定建塔列 `#buildBar` 已拿掉),選項依格子是不是路徑格動態決定
-- 點已有的塔是**選取**(WC3 式),升級/賣出要在 `#towerPanel` 面板操作
+- 點已有的塔是**選取**(WC3 式),升級/賣出/集火策略在**塔旁的浮動選單**操作(2026-07-23 從固定的 `#towerPanel` 面板改的,面板已移除)
 - **主動技能列 `#skillBar`** 貼畫面下緣,兩段式操作(點技能 → 點地圖選位置),`Esc` 取消
 - HUD 浮動貼在畫面上方置中,操作按鈕獨立在右上 `#hudToggles`
 - 渲染用 Phaser 3,塔/怪物/地形都已經是正式美術(Q 版可愛,參考 Kingdom Rush),**保留幾何圖形備援路徑**
-- 畫面固定顯示整張地圖(自動縮放),支援觸控裝置
+- 預設顯示整張地圖,支援**滾輪/雙指縮放 + 拖曳平移**(2026-07-23 加的)與觸控裝置
+- ⚠️ **每 tick 用 innerHTML 整段重畫的區塊,裡面的按鈕會點不到**(mousedown/mouseup 落在不同節點,click 不派發)——要用「結構只建一次、每 tick 只更新內容」模式,見 `docs/UI_RENDERING.md`
 
 → 完整細節、踩過的坑(Phaser 疊放順序、`Scale.RESIZE` 蓋掉 CSS、`resetCamera()` 清理清單):**`docs/UI_RENDERING.md`**
 

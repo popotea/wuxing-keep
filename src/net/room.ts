@@ -7,8 +7,10 @@ import type { Element } from '../sim/elements';
 import type { SimulationState } from '../sim/simulation';
 import { NetPeer, type IceConfig, type NetError } from './net';
 import {
+  APP_VERSION,
   PROTOCOL_VERSION,
   type Action,
+  type ChecksumMsg,
   type CmdMsg,
   type NetMessage,
   type PlayerId,
@@ -111,6 +113,10 @@ export interface RoomHandlers {
   onCommand?: (cmd: CmdMsg) => void;
   /** 客戶端:收到房主廣播的 tick,交給 lockstep 處理 */
   onTick?: (tick: TickMsg) => void;
+  /** 房主端:收到客戶端定期回報的 checksum,交給 lockstep 比對(見 HostLockstepEngine.receiveChecksum)。 */
+  onChecksum?: (msg: ChecksumMsg) => void;
+  /** 所有人:房主廣播「偵測到跑飛」,呼叫端應中止對局並提示(playerId 是對不上的那個玩家)。 */
+  onDesync?: (playerId: PlayerId, tick: number) => void;
   /**
    * 新房主端:收到既有玩家的 REJOIN,同步回呼叫端(main.ts)要目前的權威模擬快照
    * (見 lockstep.ts 的 HostLockstepEngine.getSnapshot())——回傳 null 代表還沒有可用的快照
@@ -204,7 +210,13 @@ export class Room {
     room.roomCode = roomCode;
     const conn = await room.net.join(randomClientPeerId(), roomCode);
     room.hostConn = conn;
-    room.net.send(conn, { type: 'HELLO', protocolVersion: PROTOCOL_VERSION, name: myName, elements });
+    room.net.send(conn, {
+      type: 'HELLO',
+      protocolVersion: PROTOCOL_VERSION,
+      appVersion: APP_VERSION,
+      name: myName,
+      elements,
+    });
     return room;
   }
 
@@ -274,6 +286,18 @@ export class Room {
     this.net.broadcast(tick);
   }
 
+  /** 客戶端專用:定期把自己的模擬 checksum 回報給房主比對(ClientLockstepEngine 呼叫)。 */
+  sendChecksum(tick: number, hash: string): void {
+    if (this.role !== 'client' || !this.hostConn) return; // 對局中連線可能剛好斷掉,安靜跳過即可
+    this.net.send(this.hostConn, { type: 'CHECKSUM', tick, playerId: this.myPlayerId, hash });
+  }
+
+  /** 房主專用:廣播「偵測到跑飛」讓所有人一起中止對局(見 protocol.ts 的 DesyncMsg)。 */
+  broadcastDesync(tick: number, playerId: PlayerId): void {
+    if (this.role !== 'host') return;
+    this.net.broadcast({ type: 'DESYNC', tick, playerId });
+  }
+
   destroy(): void {
     this.stopHostWatchdog();
     this.net.destroy();
@@ -323,7 +347,9 @@ export class Room {
   private handleHostMessage(conn: DataConnection, msg: NetMessage): void {
     switch (msg.type) {
       case 'HELLO': {
-        if (msg.protocolVersion !== PROTOCOL_VERSION) {
+        // appVersion(build 的 git hash)也要一致——PROTOCOL_VERSION 只管訊息格式,
+        // 模擬規則一改新舊版本混連就會靜默跑飛,必須在門口就明確拒絕(見 protocol.ts 的 APP_VERSION)。
+        if (msg.protocolVersion !== PROTOCOL_VERSION || msg.appVersion !== APP_VERSION) {
           this.net.send(conn, { type: 'REJECT', reason: 'version_mismatch' });
           this.net.closeConnection(conn.peer);
           return;
@@ -355,7 +381,7 @@ export class Room {
       case 'REJOIN': {
         // 換房主後的重連,不是新玩家加入——只重新對應連線,不動 roster、不廣播 PLAYER_JOINED
         // (roster 內容沒有變,其他人不用知道這件事)。
-        if (msg.protocolVersion !== PROTOCOL_VERSION) {
+        if (msg.protocolVersion !== PROTOCOL_VERSION || msg.appVersion !== APP_VERSION) {
           this.net.send(conn, { type: 'REJECT', reason: 'version_mismatch' });
           this.net.closeConnection(conn.peer);
           return;
@@ -382,6 +408,9 @@ export class Room {
       }
       case 'CMD':
         this.handlers.onCommand?.(msg);
+        return;
+      case 'CHECKSUM':
+        this.handlers.onChecksum?.(msg);
         return;
       default:
         return; // 房主不處理 WELCOME/TICK 這類只該由房主自己送出的訊息
@@ -420,6 +449,9 @@ export class Room {
         return;
       case 'TICK':
         this.handlers.onTick?.(msg);
+        return;
+      case 'DESYNC':
+        this.handlers.onDesync?.(msg.playerId, msg.tick);
         return;
       case 'RESYNC':
         this.handlers.onResync?.(msg.tick, msg.state);
@@ -489,7 +521,12 @@ export class Room {
       try {
         const conn = await this.net.join(randomClientPeerId(), newHostPeerId);
         this.hostConn = conn;
-        this.net.send(conn, { type: 'REJOIN', protocolVersion: PROTOCOL_VERSION, playerId: this.myPlayerId });
+        this.net.send(conn, {
+          type: 'REJOIN',
+          protocolVersion: PROTOCOL_VERSION,
+          appVersion: APP_VERSION,
+          playerId: this.myPlayerId,
+        });
         this.startHostWatchdog(); // 繼續當客戶端,重新開始追蹤新房主的心跳(以防新房主之後也掛了)
         return 'reconnected';
       } catch {

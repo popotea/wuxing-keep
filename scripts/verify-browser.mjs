@@ -257,7 +257,43 @@ console.log('\n=== (C) 多人 2 玩家 checksum ===');
   await castOn(host);
   await guest.waitForTimeout(500);
   await castOn(guest);
-  await host.waitForTimeout(6000);
+  await host.waitForTimeout(1000);
+
+  // 加入者(guest)蓋一座塔:驗證「client 的指令真的有進模擬」——checksum 一致只證明兩邊
+  // 一樣,證明不了指令生效(client 指令被丟掉時兩邊一致地沒有那座塔,checksum 照樣過,
+  // 這正是 2026-07-23「加入者不能玩」回報原本測不到的原因)。塔數走 window.__wuxingDebug.towers。
+  const tryBuildTower = async (page) => {
+    const box = await page.locator('#gameCanvas canvas').first().boundingBox();
+    for (const [fx, fy] of [
+      [0.3, 0.3],
+      [0.7, 0.35],
+      [0.4, 0.7],
+      [0.6, 0.6],
+      [0.25, 0.55],
+    ]) {
+      await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
+      await page.waitForTimeout(300);
+      const menu = page.locator('#floatingBuildMenu.show');
+      if ((await menu.count()) === 0) continue;
+      const buttons = menu.locator('button.choice-option');
+      // 非路徑格的建造選單至少有 5 屬性 + 資源建築 + 圖騰;只有 1-2 個選項代表點到路徑格
+      // (只有陷阱)或塔選單,關掉換下一格。
+      if ((await buttons.count()) >= 3) {
+        await buttons.first().click();
+        return true;
+      }
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(150);
+    }
+    return false;
+  };
+  const guestBuilt = await tryBuildTower(guest);
+  check('加入者能開建造選單蓋塔', guestBuilt);
+  await host.waitForTimeout(1500);
+  const hostView = await host.evaluate(() => window.__wuxingDebug);
+  check('加入者的建塔指令有進模擬(房主端看得到那座塔)', (hostView?.towers ?? 0) >= 1, `host towers=${hostView?.towers}`);
+
+  await host.waitForTimeout(4000);
 
   // 各自取一連串 (tick -> checksum),再找共同 tick 比對——一定要在**同一個 tick** 上比,
   // 不同 tick 的兩個值沒有比較意義。

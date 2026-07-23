@@ -25,12 +25,12 @@ import {
   createSplitChild,
   getEndlessSpawnEventsForTick,
   getSpawnEventsForTick,
+  lastSpawnTickOfWave,
   HEALER_HEAL_PERCENT,
   HEALER_INTERVAL_TICKS,
   HEALER_RANGE_FP,
   SPAWN_INTERVAL_TICKS,
   SPLITTER_CHILD_COUNT,
-  totalWaveTicks,
   WAVE_INTERVAL_TICKS,
   WAVES,
   type Monster,
@@ -48,6 +48,7 @@ import {
 } from './skills';
 import { applyBossResist, BURN_INTERVAL_TICKS, CHILL_SLOW_PERCENT } from './statuses';
 import {
+  MAX_RESOURCE_BUILDINGS_PER_PLAYER,
   MAX_RUNE_TOTEM_LEVEL,
   RESOURCE_BUILDING_COST,
   RESOURCE_BUILDING_INCOME,
@@ -468,6 +469,10 @@ function applyBuildResourceBuilding(state: SimulationState, playerId: PlayerId, 
   if (x === null || y === null) return;
   if (!inBounds(x, y) || isOnPath(x, y)) return;
   if (!isBuildableTileFree(state, x, y)) return;
+  // 座數上限用「從現有陣列過濾 ownerId」的衍生值判斷,刻意不在 state 加計數欄位——
+  // 衍生值天生決定性,resourceBuildings 陣列本來就在 checksum 內,不用動 computeChecksum。
+  const owned = state.resourceBuildings.filter((r) => r.ownerId === playerId).length;
+  if (owned >= MAX_RESOURCE_BUILDINGS_PER_PLAYER) return;
   const gold = state.gold[playerId] ?? 0;
   if (gold < RESOURCE_BUILDING_COST) return;
   state.gold[playerId] = gold - RESOURCE_BUILDING_COST;
@@ -530,6 +535,12 @@ function applySkipToNextWave(state: SimulationState): void {
   const current = effectiveWaveTick(state);
   const currentWaveIndex = Math.floor(current / WAVE_INTERVAL_TICKS);
   if (!state.endlessMode && currentWaveIndex + 1 >= WAVES.length) return;
+  // 目前這波還沒出完怪之前不能跳(2026-07-23 加的):offset 一跳,中間的生怪 tick 永遠
+  // 不會被評估,那些怪整批憑空消失——狂按下一波可以把七波怪全部跳掉、只面對首領直接拿
+  // 勝利(實測重現過)。等出完怪才能跳的話,連按第二下時下一波必然正在出怪,自然是
+  // no-op,不用另外做防連點。**用 <=(不是 <)**:step() 裡指令先於生怪套用,current
+  // 剛好等於最後生怪 tick 時放行的話,會把當 tick 這隻怪跳掉(實測過每波恰好少一隻)。
+  if (current <= lastSpawnTickOfWave(currentWaveIndex, state.endlessMode)) return;
   const nextWaveStartTick = (currentWaveIndex + 1) * WAVE_INTERVAL_TICKS;
   state.waveTickOffset += nextWaveStartTick - current;
 }
@@ -922,8 +933,16 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   const teamWiped = next.individualLivesMode ? next.pathLives.every((l) => l <= 0) : next.lives <= 0;
   if (teamWiped) {
     next.gameOver = true;
-  } else if (!next.endlessMode && waveTick >= totalWaveTicks() && next.monsters.length === 0) {
+  } else if (
+    !next.endlessMode &&
+    waveTick >= lastSpawnTickOfWave(WAVES.length - 1, false) &&
+    next.monsters.length === 0
+  ) {
     // 無限模式沒有「破完」這回事,永遠不會走到這個分支,只有團隊守不住的 gameOver。
+    // 判定點是「最後一波已全部生出 + 場上清空」而不是等到最後一波的時間窗整個走完
+    // (2026-07-23 改的)——原本用 totalWaveTicks(),提早殺光首領後要空等最多 20 秒
+    // 才跳勝利,玩家體感像當機。生怪階段在這個判定之前,所以最後一隻怪生出來的那個
+    // tick 不會誤判(monsters.length 還不是 0)。
     next.victory = true;
   }
 

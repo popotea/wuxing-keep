@@ -7,6 +7,17 @@ import type { SimulationState } from '../sim/simulation';
 
 export const PROTOCOL_VERSION = 1;
 
+/**
+ * 應用版本識別(build 時由 vite.config.ts 注入 git commit hash)。跟 PROTOCOL_VERSION
+ * 是兩層不同的檢查:PROTOCOL_VERSION 管「訊息格式」,APP_VERSION 管「模擬規則」——
+ * lockstep 要求所有 peer 跑同一份 step(),src/sim/ 隨便一改新舊 bundle 就會分岔跑飛,
+ * 但訊息格式往往沒變。2026-07-23 排查「加入者不能玩」確認過:GitHub Pages 快取讓兩人
+ * 拿到不同版本 bundle 是真實會發生的情境,必須在 HELLO/REJOIN 就明確拒絕,不能放進來
+ * 靜默分裂。verify 腳本用 esbuild 打包(沒有 vite 的 define)拿不到這個值,退回 'dev'。
+ */
+declare const __APP_VERSION__: string | undefined;
+export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
+
 export type PlayerId = string;
 
 export interface PlayerInfo {
@@ -34,6 +45,8 @@ export type RejectReason = 'room_full' | 'match_in_progress' | 'version_mismatch
 export interface HelloMsg {
   type: 'HELLO';
   protocolVersion: number;
+  /** build 版本(git hash),跟房主不同就會被 REJECT(version_mismatch)——見 APP_VERSION。 */
+  appVersion: string;
   name: string;
   elements: Element[];
 }
@@ -52,6 +65,8 @@ export interface RejectMsg {
 export interface RejoinMsg {
   type: 'REJOIN';
   protocolVersion: number;
+  /** 同 HelloMsg.appVersion——換房主重連也要驗,新房主可能剛好是不同版本。 */
+  appVersion: string;
   playerId: PlayerId;
 }
 
@@ -128,6 +143,18 @@ export interface ChecksumMsg {
 }
 
 /**
+ * 房主偵測到某個客戶端的 checksum 跟自己對不上(lockstep 跑飛)時廣播,所有人收到就
+ * 中止對局並提示。跑飛沒辦法自動修(RESYNC 是設計給換房主用的,拿來救 desync 只會把
+ * 「兩邊規則不同」的根本問題藏起來),只報錯不自動救。
+ */
+export interface DesyncMsg {
+  type: 'DESYNC';
+  tick: number;
+  /** checksum 對不上的那個玩家(顯示用)。 */
+  playerId: PlayerId;
+}
+
+/**
  * 房主斷線自動換房主(見 room.ts 的 attemptRehost()):新房主回應 REJOIN 時附上目前的權威
  * 模擬狀態,重連的客戶端要整份取代自己手上的 state,不能只跳號對齊 tick 編號——只跳號但
  * 沒換 state 的話,tick 計數器跟實際模擬內容會對不上(計數器說「已經算到 tick N 了」,但
@@ -156,6 +183,7 @@ export type NetMessage =
   | PingMsg
   | PongMsg
   | ChecksumMsg
+  | DesyncMsg
   | ResyncMsg;
 
 export function encode(msg: NetMessage): string {
@@ -217,7 +245,15 @@ export function parse(raw: unknown): NetMessage | null {
   switch (o.type) {
     case 'HELLO':
       if (typeof o.protocolVersion === 'number' && typeof o.name === 'string' && isElementArray(o.elements)) {
-        return { type: 'HELLO', protocolVersion: o.protocolVersion, name: o.name, elements: o.elements };
+        // appVersion 缺漏(舊版 bundle 不會送)當空字串——比對時自然不等於任何真實版本,
+        // 會被房主明確 REJECT,而不是解析失敗被靜默丟掉(那樣加入者只會看到沒反應)。
+        return {
+          type: 'HELLO',
+          protocolVersion: o.protocolVersion,
+          appVersion: typeof o.appVersion === 'string' ? o.appVersion : '',
+          name: o.name,
+          elements: o.elements,
+        };
       }
       return null;
 
@@ -234,7 +270,12 @@ export function parse(raw: unknown): NetMessage | null {
 
     case 'REJOIN':
       if (typeof o.protocolVersion === 'number' && typeof o.playerId === 'string') {
-        return { type: 'REJOIN', protocolVersion: o.protocolVersion, playerId: o.playerId };
+        return {
+          type: 'REJOIN',
+          protocolVersion: o.protocolVersion,
+          appVersion: typeof o.appVersion === 'string' ? o.appVersion : '',
+          playerId: o.playerId,
+        };
       }
       return null;
 
@@ -330,6 +371,12 @@ export function parse(raw: unknown): NetMessage | null {
         typeof o.hash === 'string'
       ) {
         return { type: 'CHECKSUM', tick: o.tick, playerId: o.playerId, hash: o.hash };
+      }
+      return null;
+
+    case 'DESYNC':
+      if (typeof o.tick === 'number' && typeof o.playerId === 'string') {
+        return { type: 'DESYNC', tick: o.tick, playerId: o.playerId };
       }
       return null;
 

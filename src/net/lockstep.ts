@@ -5,12 +5,33 @@ import type { Element } from '../sim/elements';
 import { setActiveMap } from '../sim/map';
 import { createInitialState, step, type SimulationState } from '../sim/simulation';
 import type { MatchConfig, Room } from './room';
-import type { Action, CmdMsg, PlayerId, PlayerInfo, TickMsg, TimedCommand } from './protocol';
+import type { Action, ChecksumMsg, CmdMsg, PlayerId, PlayerInfo, TickMsg, TimedCommand } from './protocol';
 
 export interface LockstepHandlers {
   onStateUpdated?: (state: SimulationState) => void;
   /** 客戶端專用:目前這個 tick 還沒收到確認,模擬正在暫停等待房主 */
   onWaitingForTick?: (tick: number) => void;
+  /** 房主專用:某個客戶端回報的 checksum 跟自己對不上(lockstep 跑飛)——呼叫端應廣播 DESYNC 並中止對局。 */
+  onDesyncDetected?: (playerId: PlayerId, tick: number) => void;
+}
+
+/** 客戶端每隔這麼多 tick 回報一次 checksum 給房主(50ms/tick 下約 2 秒一次,頻寬負擔可忽略)。 */
+const CHECKSUM_REPORT_INTERVAL_TICKS = 40;
+/** 房主保留最近這麼多 tick 的 checksum 供比對——要涵蓋客戶端最大落後量(網路延遲 + drain 節奏)。 */
+const CHECKSUM_HISTORY_TICKS = 200;
+
+/**
+ * 呼叫 UI 端的 onStateUpdated 一律包這層:handler 裡是一大串 UI 工作(Phaser 重繪、
+ * localStorage 寫入……),丟一次例外不能中斷 lockstep——沒包的話 client 端 drain() 會
+ * 「tick 已消費但計數器沒進位」永久凍結(只有這個玩家畫面停住,其他人都正常,2026-07-23
+ * 排查「加入者不能玩」時確認過的真實故障模式);host 端更慘,會重複廣播同一 tick。
+ */
+function notifyStateUpdated(handlers: LockstepHandlers, state: SimulationState): void {
+  try {
+    handlers.onStateUpdated?.(state);
+  } catch (err) {
+    console.error('[lockstep] onStateUpdated 例外(已忽略,不中斷 lockstep):', err);
+  }
 }
 
 /** roster 裡每個玩家開局前選好的屬性集合,轉成 step() 看得懂的 playerId -> elements 對照表。 */
@@ -41,6 +62,10 @@ export class HostLockstepEngine {
   private currentTick: number;
   private pending = new Map<number, TimedCommand[]>();
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** 最近 CHECKSUM_HISTORY_TICKS 個 tick 的 checksum,收到客戶端回報時同 tick 比對用。 */
+  private recentChecksums = new Map<number, string>();
+  /** 跑飛只通報一次就好——中止流程觸發後,後續遲到的 CHECKSUM 不用再各報一次。 */
+  private desyncReported = false;
 
   constructor(
     private room: Room,
@@ -91,6 +116,19 @@ export class HostLockstepEngine {
     this.enqueue(cmd.playerId, cmd.action);
   }
 
+  /**
+   * 收到客戶端定期回報的 checksum(外部把 Room 的 onChecksum 接到這裡):**一定要同 tick
+   * 比對**,不同 tick 的 checksum 沒有比較意義。太舊(超出保留窗)或還沒算到的 tick 安靜
+   * 跳過;對不上就通知呼叫端(只報一次),lockstep 跑飛沒辦法自動救,交給 UI 中止對局。
+   */
+  receiveChecksum(msg: ChecksumMsg): void {
+    if (this.desyncReported) return;
+    const mine = this.recentChecksums.get(msg.tick);
+    if (mine === undefined || mine === msg.hash) return;
+    this.desyncReported = true;
+    this.handlers.onDesyncDetected?.(msg.playerId, msg.tick);
+  }
+
   /** 房主自己的操作,直接進佇列,不需要透過網路送給自己。 */
   submitLocalCommand(action: Action): void {
     this.enqueue(this.room.getMyPlayerId(), action);
@@ -104,13 +142,18 @@ export class HostLockstepEngine {
   }
 
   private advance(): void {
-    const commands = this.pending.get(this.currentTick) ?? [];
-    this.pending.delete(this.currentTick);
+    const tick = this.currentTick;
+    const commands = this.pending.get(tick) ?? [];
+    this.pending.delete(tick);
     // 空陣列也照樣送出(心跳 tick)——否則安靜期間客戶端會永遠等不到確認而卡住
-    this.room.broadcastTick({ type: 'TICK', tick: this.currentTick, commands });
-    this.state = step(this.state, this.currentTick, commands);
-    this.handlers.onStateUpdated?.(this.state);
-    this.currentTick += 1;
+    this.room.broadcastTick({ type: 'TICK', tick, commands });
+    this.state = step(this.state, tick, commands);
+    // tick 推進要在通知 UI **之前**完成(原子性):onStateUpdated 丟例外的話,推進沒做到
+    // 會讓下個 interval 重複廣播同一 tick、對自己的 state 重複 step,直接毀掉決定性。
+    this.currentTick = tick + 1;
+    this.recentChecksums.set(tick, this.state.checksum);
+    this.recentChecksums.delete(tick - CHECKSUM_HISTORY_TICKS);
+    notifyStateUpdated(this.handlers, this.state);
   }
 }
 
@@ -179,11 +222,19 @@ export class ClientLockstepEngine {
 
   private drain(): void {
     while (this.buffer.has(this.nextTickToApply)) {
-      const commands = this.buffer.get(this.nextTickToApply)!;
-      this.buffer.delete(this.nextTickToApply);
-      this.state = step(this.state, this.nextTickToApply, commands);
-      this.handlers.onStateUpdated?.(this.state);
-      this.nextTickToApply += 1;
+      const tick = this.nextTickToApply;
+      const commands = this.buffer.get(tick)!;
+      this.buffer.delete(tick);
+      this.state = step(this.state, tick, commands);
+      // 計數器推進要在通知 UI **之前**完成(原子性):onStateUpdated 丟一次例外的話,
+      // 這個 tick 已從 buffer 消費、state 已前進,但計數器沒進位——之後 buffer.has()
+      // 永遠 false,這個客戶端就永久凍結(其他人完全正常),見 notifyStateUpdated 的說明。
+      this.nextTickToApply = tick + 1;
+      // 定期把 checksum 回報給房主比對,跑飛才會被發現(不然兩邊各玩各的都以為自己正常)。
+      if (tick % CHECKSUM_REPORT_INTERVAL_TICKS === 0) {
+        this.room.sendChecksum(tick, this.state.checksum);
+      }
+      notifyStateUpdated(this.handlers, this.state);
     }
     this.handlers.onWaitingForTick?.(this.nextTickToApply);
   }

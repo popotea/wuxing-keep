@@ -133,6 +133,14 @@ function baseTowerDef(tower: Pick<Tower, 'element' | 'secondElement'>): TowerDef
   return tower.secondElement ? dualTowerStats(tower.element, tower.secondElement) : TOWER_DEFS[tower.element];
 }
 
+/**
+ * 這座塔的實際射程。給 UI 畫選取射程圈用——跟 findTarget 攻擊判定吃同一個 baseTowerDef,
+ * 雙屬性塔是兩屬性平均值,直接查 TOWER_DEFS 會畫錯(只畫到主屬性的射程)。
+ */
+export function towerRangeFp(tower: Pick<Tower, 'element' | 'secondElement'>): number {
+  return baseTowerDef(tower).rangeFp;
+}
+
 /** UI 顯示用的塔名稱,雙屬性塔顯示兩個角色名組合,不用另外設計新的角色名。 */
 export function towerDisplayName(tower: Pick<Tower, 'element' | 'secondElement'>): string {
   if (!tower.secondElement) return TOWER_CHARACTER_NAMES[tower.element];

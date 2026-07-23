@@ -18,7 +18,7 @@ import type { Monster } from '../sim/monsters';
 import { RUNE_TOTEM_RANGE_FP } from '../sim/placements';
 import { STATUS_NAMES, type StatusKind } from '../sim/statuses';
 import type { SimulationState } from '../sim/simulation';
-import { TOWER_DEFS, UPGRADE_PATH_LEVEL, type CombatEvent, type Tower, type UpgradePath } from '../sim/towers';
+import { towerRangeFp, UPGRADE_PATH_LEVEL, type CombatEvent, type Tower, type UpgradePath } from '../sim/towers';
 import { isMultiplayer, ownerColorHex } from './playerColors';
 
 export const TILE_PX = 40;
@@ -28,9 +28,17 @@ const SCALE = TILE_PX / 32;
 // 只用在 drawDecor*() 這幾個函式,不影響塔/怪物/HP 條等其他用到 SCALE 的地方。
 const DECOR_SCALE = SCALE * 1.6;
 
-// 世紀帝國式邊緣平移:滑鼠移到畫面邊緣這麼多 px 以內,鏡頭就朝該方向捲動。
-const EDGE_PAN_MARGIN_PX = 32;
-const EDGE_PAN_SPEED_PX_PER_SEC = 480;
+// ---- 滾輪/雙指縮放與拖曳平移(2026-07-23 加的,玩家反映畫面太小想拉近看)----
+// 舊的世紀帝國式邊緣平移已移除:預設 fit 全圖時它本來就是 no-op,加了縮放後它會「復活」
+// 變成游標貼邊就自己捲動(去點 HUD 的途中必經畫布邊緣),跟拖曳平移互相干擾,而且玩家
+// 2026-07-16 就反映過滑鼠邊緣平移不好操作。
+/** 滾輪每格的縮放倍率。 */
+const WHEEL_ZOOM_STEP = 1.15;
+/** 使用者縮放上限;下限固定 1(fit 全圖)——允許 <1 只會露出地圖外的空白,沒有意義。 */
+const MAX_USER_ZOOM = 3;
+/** 按下後移動超過這個距離(畫布 px)就當作拖曳平移,放開時不再觸發點擊(建造/選取)。觸控手指容易微顫,門檻放寬。 */
+const DRAG_THRESHOLD_PX = 6;
+const DRAG_THRESHOLD_TOUCH_PX = 10;
 
 // 小地圖(2026-07-23 移除):2026-07-16 把畫面改成「一次顯示整張地圖」之後,小地圖就變成
 // 純粹的重複資訊——它畫的縮小版全圖跟主畫面看到的是同一塊區域,標示鏡頭範圍的白框也幾乎
@@ -274,8 +282,21 @@ export class GameScene extends Phaser.Scene {
   private hoverX: number | null = null;
   private hoverY: number | null = null;
   private selectedTowerId: number | null = null;
-  /** 滑鼠是否在遊戲畫布範圍內——游標跑到畫布外的 HTML UI(HUD/塔面板)時要停止邊緣平移跟預覽。 */
+  /** 滑鼠是否在遊戲畫布範圍內——游標跑到畫布外的 HTML UI(HUD/塔面板)時要停止預覽/浮動說明。 */
   private pointerInsideCanvas = false;
+  /** 把整張地圖剛好塞進畫布的基準縮放(隨畫布尺寸變),實際鏡頭 zoom = fitZoom * userZoom。 */
+  private fitZoom = 1;
+  /** 使用者用滾輪/雙指調的縮放倍率,1 = 看全圖;跨對局要在 resetCamera() 歸 1。 */
+  private userZoom = 1;
+  /**
+   * 按下滑鼠/手指後的追蹤狀態:位移超過門檻就進入拖曳平移,放開時 dragging 為 true 的話
+   * 不觸發點擊(建造/選取)。點擊判定因此從 pointerdown 移到 pointerup——不然每次拖曳
+   * 結束都會彈出建造選單。lastX/lastY 是上一次 move 事件的位置,拖曳位移量用這個算,
+   * 不依賴 Phaser pointer.prevPosition(它的更新時機跟事件批次有關,不好推理)。
+   */
+  private pressState: { startX: number; startY: number; lastX: number; lastY: number; dragging: boolean } | null = null;
+  /** 雙指縮放:上一次兩指間距(畫布 px),null = 目前不在雙指狀態。 */
+  private pinchLastDist: number | null = null;
   /**
    * 靜態層(地板/路徑/描邊/格線/裝飾物)建立出來的所有 GameObject。
    * 這些東西原本只在 create() 畫一次就不管了,但**多地圖之後每場對局的路徑形狀可能不一樣**,
@@ -347,10 +368,55 @@ export class GameScene extends Phaser.Scene {
       this.pointerInsideCanvas = false;
       this.hoverX = null;
       this.hoverY = null;
+      this.pressState = null;
       this.drawPreview();
       this.onHoverInfoChanged?.(null, 0, 0);
     });
+
+    // 觸控雙指縮放需要第二個觸點(Phaser 預設只給 1 個 pointer)。
+    this.input.addPointer(1);
+
+    // 滾輪縮放,以游標位置為錨點。index.html 對局中已經 overflow:hidden,滾輪不會捲頁面。
+    this.input.on(
+      'wheel',
+      (pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, deltaY: number) => {
+        this.zoomAt(pointer.x, pointer.y, deltaY > 0 ? 1 / WHEEL_ZOOM_STEP : WHEEL_ZOOM_STEP);
+      },
+    );
+
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      // 觸控時 gameover/gameout 事件不一定會來(那是滑鼠 hover 的概念),按下就當作在畫布內。
+      this.pointerInsideCanvas = true;
+      this.pressState = { startX: pointer.x, startY: pointer.y, lastX: pointer.x, lastY: pointer.y, dragging: false };
+    });
+
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (!pointer.isDown || !this.pressState) return;
+      if (this.pinchLastDist !== null) return; // 雙指縮放中,不做單指拖曳
+      const press = this.pressState;
+      if (!press.dragging) {
+        const threshold = pointer.wasTouch ? DRAG_THRESHOLD_TOUCH_PX : DRAG_THRESHOLD_PX;
+        if (Phaser.Math.Distance.Between(pointer.x, pointer.y, press.startX, press.startY) < threshold) return;
+        press.dragging = true;
+        // 跨過門檻的那一小段位移不補平移(幾 px 而已),從這裡開始算
+        press.lastX = pointer.x;
+        press.lastY = pointer.y;
+        return;
+      }
+      const cam = this.cameras.main;
+      // 超界交給 useBounds 的 clamp(preRender 每影格會夾);fit 全圖時 clamp 範圍收斂成
+      // 單一點(等同強制置中),拖了也不會動,正好是想要的行為。
+      cam.scrollX -= (pointer.x - press.lastX) / cam.zoom;
+      cam.scrollY -= (pointer.y - press.lastY) / cam.zoom;
+      press.lastX = pointer.x;
+      press.lastY = pointer.y;
+    });
+
+    // 點擊判定在 pointerup(不是 pointerdown):拖曳平移放開時不該觸發建造/選取。
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      const press = this.pressState;
+      this.pressState = null;
+      if (!press || press.dragging) return;
       const { x, y } = this.tileUnderPointer(pointer);
       const tower = this.pendingState?.towers.find((t) => t.x === x && t.y === y);
       if (tower) {
@@ -390,12 +456,42 @@ export class GameScene extends Phaser.Scene {
   private applyViewportZoom(): void {
     const zoomX = this.scale.width / (GRID_WIDTH * TILE_PX);
     const zoomY = this.scale.height / (GRID_HEIGHT * TILE_PX);
-    this.cameras.main.setZoom(Math.min(zoomX, zoomY));
+    // 2026-07-23 加了使用者縮放:實際 zoom = fit 全圖的基準值 x 使用者倍率(滾輪/雙指調,
+    // 見 zoomAt())。userZoom=1 時跟原本行為完全相同。
+    this.fitZoom = Math.min(zoomX, zoomY);
+    this.cameras.main.setZoom(this.fitZoom * this.userZoom);
+  }
+
+  /**
+   * 以畫布座標 (canvasX, canvasY) 為錨點縮放:縮放後游標下方仍是同一個世界位置。
+   *
+   * scroll 超界不用自己夾——create() 有 setBounds,Phaser 的 useBounds clamp 在每次
+   * preRender 都會把 scrollX/Y 夾回合法範圍。讀過 4.2.1 的 clampX 原始碼確認過:公式
+   * `bx = (displayWidth - cam.width) / 2`、`bw = bx + bounds.width - displayWidth` 對任何
+   * zoom 都正確——fit 全圖時範圍收斂成單一點,等同強制置中(這正是目前 setScroll(0,0)
+   * 也能置中顯示的原因);放大後就是正常的邊界夾取。docs/UI_RENDERING.md 記載的
+   * 「zoom!=1 時 bounds 對不上」踩坑是想手動置中「視野比地圖大」的軸,跟這裡不同情境。
+   *
+   * 鏡頭 zoom 以畫布中心為原點(preRender 的矩陣:screen = zoom*(world - scroll - w/2) + w/2),
+   * 錨點公式由此反解。getWorldPoint 用的是上一影格的矩陣,要在 setZoom 之前取。
+   */
+  private zoomAt(canvasX: number, canvasY: number, factor: number): void {
+    const next = Phaser.Math.Clamp(this.userZoom * factor, 1, MAX_USER_ZOOM);
+    if (next === this.userZoom) return;
+    const cam = this.cameras.main;
+    const anchor = cam.getWorldPoint(canvasX, canvasY);
+    this.userZoom = next;
+    const zoom = this.fitZoom * this.userZoom;
+    cam.setZoom(zoom);
+    cam.setScroll(
+      anchor.x - cam.width / 2 - (canvasX - cam.width / 2) / zoom,
+      anchor.y - cam.height / 2 - (canvasY - cam.height / 2) / zoom,
+    );
   }
 
   /**
    * 螢幕座標轉成格子座標,一律透過鏡頭現在的捲動位置換算(不是直接用 pointer.worldX/Y)——
-   * 邊緣平移時鏡頭每影格都在動,但滑鼠沒動的話 Phaser 不一定會重算 worldX/Y,自己算才保證準。
+   * 拖曳平移/縮放時鏡頭每影格都在動,但滑鼠沒動的話 Phaser 不一定會重算 worldX/Y,自己算才保證準。
    */
   private tileUnderPointer(pointer: Phaser.Input.Pointer): { x: number; y: number } {
     const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
@@ -442,32 +538,33 @@ export class GameScene extends Phaser.Scene {
     return null;
   }
 
-  /** 每影格都跑:滑鼠停在畫布邊緣時捲動鏡頭(世紀帝國式,現在已經是 no-op),建造預覽格跟著同步更新。 */
-  update(_time: number, delta: number): void {
-    if (!this.pointerInsideCanvas) return;
+  /** 每影格都跑:雙指縮放偵測 + 建造預覽格/浮動說明的 hover 更新。 */
+  update(): void {
+    this.updatePinch();
 
+    if (!this.pointerInsideCanvas) return;
     const pointer = this.input.activePointer;
     const tile = this.tileUnderPointer(pointer);
     this.hoverX = tile.x;
     this.hoverY = tile.y;
     this.drawPreview();
     this.onHoverInfoChanged?.(this.computeHoverInfo(pointer), pointer.x, pointer.y);
+  }
 
-    const cam = this.cameras.main;
-    let dx = 0;
-    if (pointer.x <= EDGE_PAN_MARGIN_PX) dx = -1;
-    else if (pointer.x >= this.scale.width - EDGE_PAN_MARGIN_PX) dx = 1;
-    let dy = 0;
-    if (pointer.y <= EDGE_PAN_MARGIN_PX) dy = -1;
-    else if (pointer.y >= this.scale.height - EDGE_PAN_MARGIN_PX) dy = 1;
-    if (dx === 0 && dy === 0) return;
-
-    const dtSec = delta / 1000;
-    // 同上,zoom!=1 時要用 worldView(世界座標範圍)而不是 cam.width/height(螢幕像素)。
-    const maxScrollX = Math.max(0, GRID_WIDTH * TILE_PX - cam.worldView.width);
-    const maxScrollY = Math.max(0, GRID_HEIGHT * TILE_PX - cam.worldView.height);
-    cam.scrollX = Phaser.Math.Clamp(cam.scrollX + dx * EDGE_PAN_SPEED_PX_PER_SEC * dtSec, 0, maxScrollX);
-    cam.scrollY = Phaser.Math.Clamp(cam.scrollY + dy * EDGE_PAN_SPEED_PX_PER_SEC * dtSec, 0, maxScrollY);
+  /** 雙指縮放:兩指都按著時,依兩指間距的變化調整縮放,錨定在兩指中點。 */
+  private updatePinch(): void {
+    const p1 = this.input.pointer1;
+    const p2 = this.input.pointer2;
+    if (p1?.isDown && p2?.isDown) {
+      const dist = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
+      if (this.pinchLastDist !== null && this.pinchLastDist > 0 && dist > 0) {
+        this.zoomAt((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, dist / this.pinchLastDist);
+      }
+      this.pinchLastDist = dist;
+      this.pressState = null; // 第二指按下就取消單指的拖曳/點擊判定
+    } else {
+      this.pinchLastDist = null;
+    }
   }
 
   renderState(state: SimulationState): void {
@@ -567,6 +664,20 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * 格子座標(可帶小數,例如 x+1 代表塔的右緣)→ 畫布像素座標,tileUnderPointer 的逆運算。
+   * main.ts 用來把塔的浮動操作選單錨定在塔旁邊(建造選單有點擊當下的 pointer 座標可用,
+   * 塔選單則要能在升級後原地重建,所以由格子座標反算)。鏡頭 zoom 以畫布中心為原點
+   * (見 zoomAt() 的說明),讀的 scrollX/Y 是上一影格 preRender 夾過的值,已是合法範圍。
+   */
+  tileToCanvas(tileX: number, tileY: number): { x: number; y: number } {
+    const cam = this.cameras.main;
+    return {
+      x: (tileX * TILE_PX - cam.scrollX - cam.width / 2) * cam.zoom + cam.width / 2,
+      y: (tileY * TILE_PX - cam.scrollY - cam.height / 2) * cam.zoom + cam.height / 2,
+    };
+  }
+
   /** main.ts 賣塔/取消選取後也會呼叫這個,讓畫面跟資訊面板保持同步。 */
   setSelectedTower(towerId: number | null): void {
     this.selectedTowerId = towerId;
@@ -580,6 +691,9 @@ export class GameScene extends Phaser.Scene {
    * 可能被誤認成同 id 的新實體重複使用(貼圖沒換成新的元素)。
    */
   resetCamera(): void {
+    // 使用者縮放不跨對局殘留(Phaser.Game 整個網頁只建立一次、跨對局重複使用)。
+    this.userZoom = 1;
+    this.applyViewportZoom();
     this.cameras.main.setScroll(0, 0);
     // 多地圖:每場新對局的地圖可能不一樣,靜態層(地板/路徑/裝飾物)要照新地圖整個重畫。
     // main.ts 一定是在引擎建立完(createInitialState 已經呼叫過 setActiveMap)之後才呼叫
@@ -941,13 +1055,14 @@ export class GameScene extends Phaser.Scene {
       g.fillEllipse(px, py + 3 * SCALE * bossMul, 10 * SCALE * bossMul, 4 * SCALE * bossMul);
     }
 
-    // 符文圖騰的範圍圈固定顯示,不用選取就看得到覆蓋範圍——這是純支援建築,玩家要能一眼
-    // 判斷「蓋在這裡罩得到哪些塔」,不像塔的射程圈只在選取時才顯示(那是攻擊判定的細節,
-    // 圖騰範圍是擺放策略的核心資訊,顯示邏輯故意不一樣)。
-    if (state.runeTotems.length > 0) {
+    // 符文圖騰的範圍圈只在游標停在那座圖騰的格子上才顯示(2026-07-23 改的)——原本是全部
+    // 常駐顯示,圖騰一多畫面同時好幾個大圓圈,玩家反映跟塔的攻擊範圍混在一起太雜亂。
+    // 改成跟塔的射程圈同一套「指到/選到才顯示」的哲學;擺放策略評估靠 hover 逐座看。
+    if (state.runeTotems.length > 0 && this.hoverX !== null && this.hoverY !== null) {
       const rangePx = (RUNE_TOTEM_RANGE_FP / FP_SCALE) * TILE_PX;
       g.lineStyle(1.5 * SCALE, 0x9b59d0, 0.35);
       for (const totem of state.runeTotems) {
+        if (totem.x !== this.hoverX || totem.y !== this.hoverY) continue;
         const cx = totem.x * TILE_PX + TILE_PX / 2;
         const cy = totem.y * TILE_PX + TILE_PX / 2;
         g.strokeCircle(cx, cy, rangePx);
@@ -1050,8 +1165,10 @@ export class GameScene extends Phaser.Scene {
         g.lineStyle(3, 0xffffff, 0.9);
         g.strokeRect(selected.x * TILE_PX + 2, selected.y * TILE_PX + 2, TILE_PX - 4, TILE_PX - 4);
 
-        // 射程用紅色圓圈標示——實際判定是距離平方比較(圓形範圍),畫圓才準確反映真正打得到哪裡
-        const rangePx = (TOWER_DEFS[selected.element].rangeFp / FP_SCALE) * TILE_PX;
+        // 射程用紅色圓圈標示——實際判定是距離平方比較(圓形範圍),畫圓才準確反映真正打得到
+        // 哪裡。半徑走 towerRangeFp()(跟攻擊判定同一個資料源)——雙屬性塔的射程是兩屬性
+        // 平均值,直接查 TOWER_DEFS 會畫成主屬性的射程,跟面板數字對不上。
+        const rangePx = (towerRangeFp(selected) / FP_SCALE) * TILE_PX;
         const cx = selected.x * TILE_PX + TILE_PX / 2;
         const cy = selected.y * TILE_PX + TILE_PX / 2;
         g.lineStyle(2, 0xe0433a, 0.7);

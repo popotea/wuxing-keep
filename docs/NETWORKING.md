@@ -27,6 +27,24 @@
 - 位置/操作採**信任制,不做防作弊驗證**(朋友間連線,不是公開對戰)
 - 不支援對局中途加入
 
+## 版本檢查(APP_VERSION,2026-07-23 加的)
+
+排查「加入者不能玩、只剩房主正常」時確認的最可能根因:**新舊 bundle 混連的靜默分裂**。`PROTOCOL_VERSION` 只管訊息格式、從未升版,但模擬規則(`src/sim/`)大改過多次——lockstep 要求所有 peer 跑同一份 `step()`,GitHub Pages 的 HTML 有 `max-age=600` 快取,房主跟加入者拿到不同版本 bundle 的機率不低。爆法有兩種:(a) 舊版加入者不認得房主選的地圖,`START_MATCH` 的 `isMapId` 解析失敗整包被靜默丟棄 → 加入者永遠卡在 Lobby「等待房主開始對局」;(b) 規則數值不同 → 兩邊各自模擬、靜默跑飛。
+
+解法:`vite.config.ts` 在 build 時把 git commit hash 注入成 `__APP_VERSION__`(`protocol.ts` 的 `APP_VERSION`,esbuild 跑的 verify 腳本拿不到就退回 `'dev'`),`HELLO`/`REJOIN` 都帶上,房主比對不一致就回 `REJECT reason='version_mismatch'`;`main.ts` 的 `onRejected` 對每種 reason 顯示看得懂的 toast(版本不符會提示 Ctrl+F5 重新整理)。**綁 commit hash 就不用靠人記得升版**——任何一次 commit 後新舊版本互連都會被明確拒絕,不會靜默分裂。舊版 bundle 不會送 `appVersion` 欄位,parse 時當空字串,自然對不上任何真實版本、一樣被明確拒絕。
+
+## 跑飛偵測(CHECKSUM / DESYNC,2026-07-23 加的)
+
+原本 `ChecksumMsg` 是定義好但沒人用的死碼,對局中完全沒有跑飛偵測——真的 desync 時兩邊各玩各的,都以為自己正常。現在:
+
+- 客戶端每 `CHECKSUM_REPORT_INTERVAL_TICKS`(40 tick ≈ 2 秒)把 `state.checksum` 回報給房主(`Room.sendChecksum`)
+- 房主保留最近 `CHECKSUM_HISTORY_TICKS`(200)個 tick 的 checksum(`HostLockstepEngine.recentChecksums`),收到回報**同 tick 比對**(不同 tick 的 checksum 沒有比較意義;太舊/還沒算到的 tick 安靜跳過)
+- 對不上就走 `onDesyncDetected` → 房主廣播 `DESYNC` 訊息,所有人中止對局並提示(`main.ts` 的 `endMatchAfterDesync`)。**只報錯不自動救**——RESYNC 是設計給換房主用的,拿來救 desync 只會把「兩邊規則不同」的根本問題藏起來
+
+## `onStateUpdated` 的原子性(2026-07-23 修的)
+
+`drain()`/`advance()` 的 tick 計數器推進**一定要在通知 UI 之前完成**,而且 `onStateUpdated` 要包 try/catch(`notifyStateUpdated`):handler 裡是一大串 UI 工作(Phaser 重繪、localStorage 寫入……),丟一次例外的話——客戶端會「tick 已從 buffer 消費、state 已前進、但計數器沒進位」,之後 `buffer.has()` 永遠 false,**這個玩家永久凍結而其他人都正常**(精確符合「只剩房主能玩」的故障模式);房主端更慘,會重複廣播同一 tick 並對自己的 state 重複 step,直接毀掉決定性。
+
 ## 房主斷線自動換房主(2026-07-21 加的)
 
 對局中房主斷線,殘存玩家各自獨立算出同一個接手人選,不透過網路協商(房主已經斷線,協商也沒有管道)。

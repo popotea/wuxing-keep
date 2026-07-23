@@ -45,6 +45,14 @@ export interface ResourceBuilding {
 export const RESOURCE_BUILDING_COST = 90;
 export const RESOURCE_BUILDING_INCOME = 12;
 export const RESOURCE_BUILDING_INTERVAL_TICKS = 250; // 20 tick/秒 * 12.5 秒
+/**
+ * 每位玩家的資源建築座數上限(2026-07-23 加的)。原本不設限,玩家實測反應蓋一排就能快速
+ * 補資金,平衡整個歪掉——尤其無限模式對局時間沒上限,被動收入隨「座數 x 時間」線性放大。
+ * 取「每位玩家」而不是「全隊共用」:收入本來就只入 ownerId 自己的帳(金幣每人獨立),
+ * 而且全隊共用配額會出現「先蓋先贏、隊友互佔名額」的負面互動,違反「只做正面互助」原則。
+ * 3 座封頂 = 每 12.5 秒最多 +36 金幣,固定模式影響溫和,合作分工「有人專職經濟」仍可行。
+ */
+export const MAX_RESOURCE_BUILDINGS_PER_PLAYER = 3;
 
 /**
  * 符文圖騰:純支援型建築,自己不攻擊,範圍內的塔(不分誰的塔)會得到加成,規則跟塔/

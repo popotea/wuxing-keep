@@ -4,7 +4,7 @@
 import type { IceConfig } from './net/net';
 import { HostLockstepEngine, ClientLockstepEngine, type LockstepHandlers } from './net/lockstep';
 import { Room, type MatchConfig, type RoomHandlers } from './net/room';
-import type { Action, PlayerInfo } from './net/protocol';
+import type { Action, PlayerInfo, RejectReason } from './net/protocol';
 import { createGameRenderer, type HoverInfo } from './game/PhaserGame';
 import { isMultiplayer, ownerColorCss } from './game/playerColors';
 import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
@@ -26,8 +26,10 @@ import {
   ticksUntilNextWaveEndless,
   upcomingWaveDef,
   upcomingWaveDefEndless,
+  waveFullySpawned,
 } from './sim/monsters';
 import {
+  MAX_RESOURCE_BUILDINGS_PER_PLAYER,
   RESOURCE_BUILDING_COST,
   MAX_RUNE_TOTEM_LEVEL,
   RESOURCE_BUILDING_INCOME,
@@ -56,8 +58,10 @@ import {
   TOWER_CHARACTER_NAMES,
   TOWER_DEFS,
   towerDisplayName,
+  upgradeCost,
   UPGRADE_PATH_LEVEL,
   UPGRADE_PATH_NAMES,
+  type TargetStrategy,
   type UpgradePath,
 } from './sim/towers';
 
@@ -66,7 +70,9 @@ import {
 // window.__wuxingDebug 看,平常不會佔畫面。
 declare global {
   interface Window {
-    __wuxingDebug?: { tick: number; checksum: string };
+    /** towers 是給 verify-browser.mjs 驗證「client 的指令真的有進模擬」用的(checksum 一致
+     * 只證明兩邊一樣,不證明指令生效)。 */
+    __wuxingDebug?: { tick: number; checksum: string; towers: number };
   }
 }
 
@@ -128,26 +134,6 @@ const choiceModalOverlayEl = $<HTMLDivElement>('choiceModalOverlay');
 const choiceModalTitleEl = $<HTMLHeadingElement>('choiceModalTitle');
 const choiceModalOptionsEl = $<HTMLDivElement>('choiceModalOptions');
 const choiceModalCancelBtn = $<HTMLButtonElement>('choiceModalCancelBtn');
-const towerPanelEl = $<HTMLDivElement>('towerPanel');
-const towerPanelElementEl = $<HTMLSpanElement>('towerPanelElement');
-const towerPanelOwnerEl = $<HTMLSpanElement>('towerPanelOwner');
-const towerPanelLevelEl = $<HTMLSpanElement>('towerPanelLevel');
-const towerPanelDamageEl = $<HTMLSpanElement>('towerPanelDamage');
-const towerPanelRangeEl = $<HTMLSpanElement>('towerPanelRange');
-const towerPanelCooldownEl = $<HTMLSpanElement>('towerPanelCooldown');
-const towerPanelPathRowEl = $<HTMLDivElement>('towerPanelPathRow');
-const towerPanelPathEl = $<HTMLSpanElement>('towerPanelPath');
-const towerPanelAdjacencyRowEl = $<HTMLDivElement>('towerPanelAdjacencyRow');
-const towerPanelTotemRowEl = $<HTMLDivElement>('towerPanelTotemRow');
-const towerPanelTotemTextEl = $<HTMLSpanElement>('towerPanelTotemText');
-const towerPanelStrategySelect = $<HTMLSelectElement>('towerPanelStrategy');
-const towerUpgradeBtn = $<HTMLButtonElement>('towerUpgradeBtn');
-const towerUpgradeCostEl = $<HTMLSpanElement>('towerUpgradeCost');
-const towerSecondElementBtn = $<HTMLButtonElement>('towerSecondElementBtn');
-const towerSecondElementCostEl = $<HTMLSpanElement>('towerSecondElementCost');
-const towerSellBtn = $<HTMLButtonElement>('towerSellBtn');
-const towerSellValueEl = $<HTMLSpanElement>('towerSellValue');
-const towerDeselectBtn = $<HTMLButtonElement>('towerDeselectBtn');
 const goldEl = $<HTMLSpanElement>('gold');
 const livesEl = $<HTMLSpanElement>('lives');
 const livesBarEl = $<HTMLDivElement>('livesBar');
@@ -289,19 +275,75 @@ function formatElapsed(tick: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+/**
+ * 記分板列的持久 DOM 節點,依 playerId 保存。
+ *
+ * **不能整段 innerHTML 重畫**(2026-07-23 修的 bug):記分板開著時每個 tick(50ms)都會
+ * 重畫一次,整段換掉的話禮物按鈕的 DOM 每 50ms 就被銷毀重建——玩家 mousedown 按到的按鈕
+ * 在 mouseup 之前就被殺掉,瀏覽器根本不派發 click(mousedown/mouseup 要落在同一條存活的
+ * DOM 鏈上),「送金幣」點了幾乎永遠沒反應。跟技能列 renderSkillBar 同一套解法:列結構
+ * 只建一次,每 tick 只更新文字/樣式,順序變了才搬移既有節點(搬移不銷毀)。
+ */
+interface ScoreboardRowEls {
+  tr: HTMLTableRowElement;
+  rankEl: HTMLSpanElement;
+  dotEl: HTMLSpanElement | null;
+  goldTd: HTMLTableCellElement;
+  towerTd: HTMLTableCellElement;
+  killsTd: HTMLTableCellElement;
+  damageTd: HTMLTableCellElement;
+}
+
+const scoreboardRowEls = new Map<string, ScoreboardRowEls>();
+
+function buildScoreboardRow(playerId: string, multiplayer: boolean): ScoreboardRowEls {
+  const tr = document.createElement('tr');
+  const rankTd = document.createElement('td');
+  const rankEl = document.createElement('span');
+  rankEl.className = 'scoreboard-rank';
+  rankTd.appendChild(rankEl);
+
+  const nameTd = document.createElement('td');
+  let dotEl: HTMLSpanElement | null = null;
+  if (multiplayer) {
+    // 多人才需要用顏色點區分「這是誰」,跟塔/陷阱/資源建築底部的識別色同一套配色(ownerColorCss())。
+    dotEl = document.createElement('span');
+    dotEl.className = 'scoreboard-dot';
+    nameTd.appendChild(dotEl);
+  }
+  // 暱稱是別人打的(P2P 廣播過來),用 textContent/createTextNode 塞就不用跳脫。
+  nameTd.appendChild(document.createTextNode(displayNameFor(playerId)));
+  if (multiplayer && playerId !== myPlayerId()) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'scoreboard-gift-btn';
+    btn.dataset.giftTo = playerId;
+    btn.title = `送金幣給${displayNameFor(playerId)}`;
+    btn.innerHTML = '<svg class="icon"><use href="#icon-gift" /></svg>'; // 寫死的圖示,不是使用者輸入
+    nameTd.appendChild(btn);
+  }
+
+  const goldTd = document.createElement('td');
+  const towerTd = document.createElement('td');
+  const killsTd = document.createElement('td');
+  const damageTd = document.createElement('td');
+  tr.append(rankTd, nameTd, goldTd, towerTd, killsTd, damageTd);
+  return { tr, rankEl, dotEl, goldTd, towerTd, killsTd, damageTd };
+}
+
 /** 記分板(參考 WC3):按傷害由高到低排序,只有按鈕開著時才畫,tick 更新時才不用每次都算。
  * 波次/已進行時間跟玩家列表寫在同一塊,不用另外切去看 HUD。 */
 function renderScoreboard(): void {
   if (!latestState) return;
   const state = latestState;
   scoreboardMetaEl.textContent = `第 ${currentWaveNumberFor(state)} 波 · 已進行 ${formatElapsed(state.tick)}`;
+  const multiplayer = isMultiplayer(state);
   const rows = Object.keys(state.gold)
     .map((playerId) => {
       const stats = state.playerStats[playerId] ?? { damageDealt: 0, kills: 0 };
       const towerCount = state.towers.filter((t) => t.ownerId === playerId).length;
       return {
         playerId,
-        name: displayNameFor(playerId),
         gold: state.gold[playerId] ?? 0,
         towerCount,
         kills: stats.kills,
@@ -310,27 +352,31 @@ function renderScoreboard(): void {
     })
     .sort((a, b) => b.damage - a.damage);
 
-  // 多人才需要用顏色點區分「這是誰」——單人只有自己一列,不用畫。跟塔/陷阱/資源建築底部
-  // 的識別色是同一套配色(ownerColorCss()),同一個玩家在小地圖、塔、記分板上看到的顏色一致。
-  const multiplayer = isMultiplayer(state);
-  scoreboardBodyEl.innerHTML = rows
-    .map(
-      (r, i) => `
-        <tr class="${r.playerId === myPlayerId() ? 'scoreboard-me' : ''}">
-          <td><span class="scoreboard-rank ${i === 0 ? 'rank-1' : ''}">${i + 1}</span></td>
-          <td>${multiplayer ? `<span class="scoreboard-dot" style="background:${ownerColorCss(state, r.playerId)}"></span>` : ''}${escapeHtml(r.name)}${
-            multiplayer && r.playerId !== myPlayerId()
-              ? `<button class="scoreboard-gift-btn" type="button" data-gift-to="${escapeHtml(r.playerId)}" title="送金幣給${escapeHtml(r.name)}"><svg class="icon"><use href="#icon-gift" /></svg></button>`
-              : ''
-          }</td>
-          <td>${r.gold}</td>
-          <td>${r.towerCount}</td>
-          <td>${r.kills}</td>
-          <td>${r.damage}</td>
-        </tr>
-      `,
-    )
-    .join('');
+  // 玩家集合變了(開新局/有人離線)才整個重建列結構,平常每 tick 只更新內容。
+  const needRebuild =
+    scoreboardRowEls.size !== rows.length || rows.some((r) => !scoreboardRowEls.has(r.playerId));
+  if (needRebuild) {
+    scoreboardRowEls.clear();
+    for (const r of rows) scoreboardRowEls.set(r.playerId, buildScoreboardRow(r.playerId, multiplayer));
+    scoreboardBodyEl.replaceChildren(...rows.map((r) => scoreboardRowEls.get(r.playerId)!.tr));
+  }
+
+  rows.forEach((r, i) => {
+    const els = scoreboardRowEls.get(r.playerId)!;
+    els.tr.classList.toggle('scoreboard-me', r.playerId === myPlayerId());
+    els.rankEl.textContent = String(i + 1);
+    els.rankEl.classList.toggle('rank-1', i === 0);
+    if (els.dotEl) els.dotEl.style.background = ownerColorCss(state, r.playerId);
+    els.goldTd.textContent = String(r.gold);
+    els.towerTd.textContent = String(r.towerCount);
+    els.killsTd.textContent = String(r.kills);
+    els.damageTd.textContent = String(r.damage);
+  });
+
+  // 排名順序變了才搬移節點(搬移瞬間進行中的點擊一樣會失效,但頻率遠低於每 tick 全重建)。
+  const desired = rows.map((r) => scoreboardRowEls.get(r.playerId)!.tr);
+  const current = Array.from(scoreboardBodyEl.children);
+  if (desired.some((tr, i) => current[i] !== tr)) scoreboardBodyEl.append(...desired);
 }
 
 scoreboardBtn.addEventListener('click', () => {
@@ -354,6 +400,9 @@ function showGiftGoldModal(toPlayerId: string): void {
           return;
         }
         submitAction({ kind: 'gift_gold', params: { toPlayerId, amount } });
+        // sim 端對不合法指令是刻意的靜默 no-op,UI 不給回饋的話,玩家會把 input delay
+        // 的短暫延遲感知成「沒效果」——送出當下就先給個確認訊息。
+        showToast(`已送出 ${amount} 金幣給 ${toName}`);
       },
     })),
   );
@@ -374,6 +423,7 @@ emergencyHealBtn.addEventListener('click', () => {
     return;
   }
   submitAction({ kind: 'emergency_heal', params: {} });
+  showToast(`已花 ${EMERGENCY_HEAL_COST} 金幣緊急補命`);
 });
 
 pathLivesStatsEl.addEventListener('click', (ev) => {
@@ -384,6 +434,7 @@ pathLivesStatsEl.addEventListener('click', (ev) => {
     return;
   }
   submitAction({ kind: 'emergency_heal', params: { pathId: Number(btn.dataset.healPath) } });
+  showToast(`已花 ${EMERGENCY_HEAL_COST} 金幣補這條路徑的生命`);
 });
 
 /**
@@ -415,6 +466,11 @@ interface ChoiceOption {
    * 讓「存夠錢就能選」這件事一眼看得出來。
    */
   unaffordable?: boolean;
+  /**
+   * 點了之後選單不自動關閉(預設會關)。塔選單的「升級」「切換集火策略」用這個——
+   * WC3 式連點升級不用每按一次就重新點塔開選單。
+   */
+  keepOpen?: boolean;
   onChoose: () => void;
 }
 
@@ -453,8 +509,21 @@ choiceModalCancelBtn.addEventListener('click', hideChoiceModal);
  * 固定佔用畫面底部一整塊。floatingBuildBackdropEl 是透明的點擊接收層,點選單以外的
  * 地方會關掉選單,但不會讓畫面變暗(跟 showChoiceModal 的全螢幕黑幕彈窗不同用途)。
  */
-function showFloatingBuildMenu(canvasX: number, canvasY: number, options: ChoiceOption[]): void {
+function showFloatingBuildMenu(
+  canvasX: number,
+  canvasY: number,
+  options: ChoiceOption[],
+  headerHtml?: string,
+): void {
   floatingBuildMenuEl.innerHTML = '';
+  if (headerHtml) {
+    // 塔選單用:標頭顯示塔名/等級/核心數值(觸控裝置沒有 hover tooltip,一定要在這裡看得到)。
+    // headerHtml 由呼叫端組,動態內容(塔名/玩家名)要先 escapeHtml 過。
+    const header = document.createElement('div');
+    header.className = 'floating-menu-header';
+    header.innerHTML = headerHtml;
+    floatingBuildMenuEl.appendChild(header);
+  }
   for (const opt of options) {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -466,7 +535,7 @@ function showFloatingBuildMenu(canvasX: number, canvasY: number, options: Choice
       ? `${escapeHtml(opt.label)}<small>${escapeHtml(opt.sublabel)}</small>`
       : escapeHtml(opt.label);
     btn.addEventListener('click', () => {
-      hideFloatingBuildMenu();
+      if (!opt.keepOpen) hideFloatingBuildMenu();
       opt.onChoose();
     });
     floatingBuildMenuEl.appendChild(btn);
@@ -478,8 +547,8 @@ function showFloatingBuildMenu(canvasX: number, canvasY: number, options: Choice
   // 夾在視窗範圍內,避免選單超出畫面邊緣被裁掉看不到(選單實際大小要等內容塞進去後才知道,
   // 這裡用保守的估計值當夾取上限,足夠應付目前最多 8 個選項的版面:5 種屬性都固定顯示
   // 不再隨機抽 3 個,加上雙屬性塔、資源建築、符文圖騰)。
-  const MENU_WIDTH_GUESS = 180;
-  const MENU_HEIGHT_GUESS = 450;
+  const MENU_WIDTH_GUESS = 200;
+  const MENU_HEIGHT_GUESS = Math.min(450, 60 + options.length * 56);
   floatingBuildMenuEl.style.left = `${Math.max(8, Math.min(pageX, window.innerWidth - MENU_WIDTH_GUESS))}px`;
   floatingBuildMenuEl.style.top = `${Math.max(8, Math.min(pageY, window.innerHeight - MENU_HEIGHT_GUESS))}px`;
 
@@ -492,7 +561,12 @@ function hideFloatingBuildMenu(): void {
   floatingBuildBackdropEl.classList.remove('show');
 }
 
-floatingBuildBackdropEl.addEventListener('click', hideFloatingBuildMenu);
+floatingBuildBackdropEl.addEventListener('click', () => {
+  hideFloatingBuildMenu();
+  // 開著的是塔選單的話,關掉選單要一併取消選取——不然射程圈還亮著但選單沒了,而且
+  // renderTowerMenu 每 tick 的重建檢查會把選單又開回來。
+  if (selectedTowerId !== null) gameRenderer.setSelectedTower(null);
+});
 
 function hideObjectTooltip(): void {
   objectTooltipEl.classList.remove('show');
@@ -742,12 +816,25 @@ const gameRenderer = createGameRenderer(
           },
         });
       }
+      // 資源建築有每人座數上限(見 placements.ts 的 MAX_RESOURCE_BUILDINGS_PER_PLAYER),
+      // 選單上要標出「已蓋幾座/上限」——UI 只是體驗層,權威驗證仍在 sim 端(超限指令是 no-op)。
+      const myResourceCount =
+        latestState?.resourceBuildings.filter((r) => r.ownerId === myPlayerId()).length ?? 0;
+      const resourceCapReached = myResourceCount >= MAX_RESOURCE_BUILDINGS_PER_PLAYER;
       options.push({
         label: '資源建築',
-        sublabel: `${RESOURCE_BUILDING_COST} 金幣${myGold < RESOURCE_BUILDING_COST ? '(金幣不足)' : ''}`,
-        disabled: myGold < RESOURCE_BUILDING_COST,
-        unaffordable: myGold < RESOURCE_BUILDING_COST,
+        sublabel: resourceCapReached
+          ? `已達上限(${myResourceCount}/${MAX_RESOURCE_BUILDINGS_PER_PLAYER} 座)`
+          : `${RESOURCE_BUILDING_COST} 金幣 · ${myResourceCount}/${MAX_RESOURCE_BUILDINGS_PER_PLAYER} 座${myGold < RESOURCE_BUILDING_COST ? '(金幣不足)' : ''}`,
+        disabled: myGold < RESOURCE_BUILDING_COST || resourceCapReached,
+        unaffordable: myGold < RESOURCE_BUILDING_COST && !resourceCapReached,
         onChoose: () => {
+          // 選單開著時 state 可能已前進(多人時尤其),onChoose 內都要重查最新 state
+          const nowCount = latestState?.resourceBuildings.filter((r) => r.ownerId === myPlayerId()).length ?? 0;
+          if (nowCount >= MAX_RESOURCE_BUILDINGS_PER_PLAYER) {
+            showToast(`資源建築已達上限(每人最多 ${MAX_RESOURCE_BUILDINGS_PER_PLAYER} 座)`);
+            return;
+          }
           if ((latestState?.gold[myPlayerId()] ?? 0) < RESOURCE_BUILDING_COST) {
             showToast(`金幣不足!建造資源建築需要 ${RESOURCE_BUILDING_COST} 金幣`);
             return;
@@ -774,7 +861,7 @@ const gameRenderer = createGameRenderer(
   },
   (towerId) => {
     selectedTowerId = towerId;
-    renderTowerPanel();
+    renderTowerMenu();
   },
   renderObjectTooltip,
 );
@@ -783,154 +870,226 @@ skipWaveBtn.addEventListener('click', () => {
   submitAction({ kind: 'skip_to_next_wave', params: {} });
 });
 
-/** WC3 式選取面板:顯示選到的塔的即時數值,升級/賣出按鈕才會真的送出指令。 */
-function renderTowerPanel(): void {
-  const tower = selectedTowerId !== null ? latestState?.towers.find((t) => t.id === selectedTowerId) : undefined;
-  towerPanelEl.hidden = !tower;
-  // 塔面板會從畫面下緣升起來,蓋住固定在下緣的技能列——切一個 body class 讓 CSS 把
-  // 技能列往上推(見 index.html 的 body.tower-panel-open 規則)。
-  document.body.classList.toggle('tower-panel-open', !!tower);
-  if (!tower) return;
+// ---- 畫布尺寸:JS 算 5:3 contain(理由見 index.html #gameCanvasArea 的註解:CSS aspect-ratio
+// 在單軸 definite 時不會做軸間轉移,視窗比 5:3 窄的時候比例會破掉)。ResizeObserver 順便
+// 接住「非 window resize」的容器尺寸變化(行動瀏覽器工具列收放造成的 dvh 變動等),
+// 每次重排完主動叫 Phaser 重新量測。 ----
+const gameCanvasAreaEl = $<HTMLDivElement>('gameCanvasArea');
+const gameCanvasWrapEl = $<HTMLDivElement>('gameCanvasWrap');
 
-  const stats = describeTower(tower, latestState?.towers ?? [], latestState?.runeTotems ?? []);
-  const myGold = latestState?.gold[myPlayerId()] ?? 0;
-  const elementLabel = tower.secondElement
-    ? `${ELEMENT_NAMES[tower.element]}×${ELEMENT_NAMES[tower.secondElement]}`
-    : `${ELEMENT_NAMES[tower.element]}塔`;
-  towerPanelElementEl.textContent = `${towerDisplayName(tower)}(${elementLabel})`;
-  towerPanelElementEl.className = `element-${tower.element}`;
-  towerPanelOwnerEl.textContent = displayNameFor(tower.ownerId);
-  towerPanelLevelEl.textContent = String(tower.level);
-  towerPanelDamageEl.textContent = String(stats.damage);
-  towerPanelRangeEl.textContent = (stats.rangeFp / FP_SCALE).toFixed(1);
-  towerPanelCooldownEl.textContent = ((stats.cooldownTicks * currentTickRateMs) / 1000).toFixed(2);
-  towerSellValueEl.textContent = String(stats.sellValue);
-  towerPanelStrategySelect.value = tower.targetStrategy;
-
-  // 分岐路線一旦選定(到 UPGRADE_PATH_LEVEL 之後)才顯示這行,選之前不用佔面板版面。
-  towerPanelPathRowEl.hidden = tower.upgradePath === 'none';
-  if (tower.upgradePath !== 'none') towerPanelPathEl.textContent = UPGRADE_PATH_NAMES[tower.upgradePath];
-  towerPanelAdjacencyRowEl.hidden = !stats.adjacencyBonusActive;
-  const totemActive = stats.totemDamageBonusPercent > 0 || stats.totemHastePercent > 0;
-  towerPanelTotemRowEl.hidden = !totemActive;
-  if (totemActive) {
-    towerPanelTotemTextEl.textContent =
-      stats.totemHastePercent > 0
-        ? `圖騰加速中(+${stats.totemHastePercent}% 攻速)`
-        : `圖騰增傷中(+${stats.totemDamageBonusPercent}% 攻擊力)`;
+function layoutGameCanvas(): void {
+  const availW = gameCanvasAreaEl.clientWidth;
+  const availH = gameCanvasAreaEl.clientHeight;
+  if (availW <= 0 || availH <= 0) return; // display:none(還在選單畫面)時量到 0,先不動
+  // 比例跟地圖一致(sim/map.ts 的 GRID_WIDTH:GRID_HEIGHT = 40:24),GameScene 的
+  // applyViewportZoom 取保守軸縮放,畫布同比例時兩軸剛好貼合、不會有任何一軸留白。
+  const RATIO = 40 / 24;
+  let w = availW;
+  let h = w / RATIO;
+  if (h > availH) {
+    h = availH;
+    w = h * RATIO;
   }
-
-  // 升級不分誰的塔,誰都能幫忙出錢升級;賣塔限本人,避免動到別人的投資。
-  if (stats.upgradeCost === null) {
-    towerUpgradeCostEl.textContent = '已滿級';
-    towerUpgradeBtn.disabled = true;
-    towerUpgradeBtn.classList.remove('cost-unaffordable');
-  } else {
-    const poor = myGold < stats.upgradeCost;
-    towerUpgradeCostEl.textContent = String(stats.upgradeCost);
-    towerUpgradeBtn.disabled = poor;
-    // 「錢不夠」跟「不能做」要分得出來:單純 disabled 變淡的話,玩家看不出到底是
-    // 條件不符還是只差錢。錢不夠就另外標紅(見 .cost-unaffordable)。
-    towerUpgradeBtn.classList.toggle('cost-unaffordable', poor);
-  }
-
-  // 加第二屬性(2026-07-23 從建造選項改成升級解鎖,見 towers.ts 的 DUAL_ELEMENT_MIN_LEVEL):
-  // **等級還不到就整顆不顯示**(不是顯示成 disabled)——面板上擺一顆永遠按不下去的按鈕
-  // 只會讓玩家困惑「這什麼時候能按」,不如等真的能用了再出現。
-  // 已經有第二屬性(定案不能改)、或玩家可用屬性不足 2 種(沒有組合可選)也一樣不顯示。
-  const allowedElements = buildableTowerElements();
-  const canAddSecond =
-    !tower.secondElement && tower.level >= DUAL_ELEMENT_MIN_LEVEL && allowedElements.filter((e) => e !== tower.element).length > 0;
-  towerSecondElementBtn.hidden = !canAddSecond;
-  if (canAddSecond) {
-    // 費用依「選哪個第二屬性」而定,但目前所有屬性造價相同,取最便宜的當面板顯示值即可;
-    // 真正的扣款在 sim 端依實際選到的屬性算(見 secondElementCost)。
-    const cheapest = Math.min(
-      ...allowedElements.filter((e) => e !== tower.element).map((e) => secondElementCost(tower.element, e)),
-    );
-    const poor = myGold < cheapest;
-    towerSecondElementCostEl.textContent = String(cheapest);
-    towerSecondElementBtn.disabled = poor;
-    towerSecondElementBtn.classList.toggle('cost-unaffordable', poor);
-  }
-
-  towerSellBtn.disabled = tower.ownerId !== myPlayerId();
+  gameCanvasWrapEl.style.width = `${Math.floor(w)}px`;
+  gameCanvasWrapEl.style.height = `${Math.floor(h)}px`;
+  gameCanvasWrapEl.style.left = `${Math.floor((availW - w) / 2)}px`;
+  gameCanvasWrapEl.style.top = `${Math.floor((availH - h) / 2)}px`;
+  gameRenderer.refreshSize();
 }
 
-/** 升到 UPGRADE_PATH_LEVEL(分岐級)一定要先選路線,選完才送出真正的升級指令;其他級數直接升級。 */
-towerUpgradeBtn.addEventListener('click', () => {
-  if (selectedTowerId === null) return;
-  const towerId = selectedTowerId;
-  const tower = latestState?.towers.find((t) => t.id === towerId);
-  if (!tower) return;
+new ResizeObserver(layoutGameCanvas).observe(gameCanvasAreaEl);
 
-  if (tower.level + 1 === UPGRADE_PATH_LEVEL) {
-    const paths: UpgradePath[] = ['burst', 'splash'];
-    showChoiceModal(
-      '選擇升級路線(選定後無法更改)',
-      paths.map((path) => ({
-        label: UPGRADE_PATH_NAMES[path],
-        sublabel: path === 'burst' ? '傷害比一般線性升級更高,沒有範圍效果' : '攻擊會波及主目標周圍的怪物,單體傷害不額外加成',
-        onChoose: () => submitAction({ kind: 'upgrade_tower', params: { towerId, path } }),
-      })),
-    );
-    return;
-  }
-  submitAction({ kind: 'upgrade_tower', params: { towerId } });
+// 手機直式提醒(index.html 的 #rotateHint):點「知道了」之後這個 body class 讓它整場不再出現。
+$<HTMLButtonElement>('rotateHintDismiss').addEventListener('click', () => {
+  document.body.classList.add('rotate-hint-dismissed');
 });
 
 /**
- * 加第二屬性:跳選單讓玩家選要加哪一種(排除塔目前的主屬性,加同一種等於白花錢)。
- * 只列出這個玩家自己允許蓋的屬性——跟建塔同一條分工規則,不能靠這個繞過限制。
+ * 塔的浮動操作選單重建簽章:等級/費用/可負擔與否等會影響選單內容的欄位串起來,
+ * 變了才整個重建——每 tick 都重建的話,進行中的點擊會落在被銷毀的按鈕上而失效
+ * (跟記分板禮物按鈕同一個坑,見 renderScoreboard 的註解)。空字串 = 選單目前沒開。
  */
-towerSecondElementBtn.addEventListener('click', () => {
-  if (selectedTowerId === null) return;
-  const towerId = selectedTowerId;
-  const tower = latestState?.towers.find((t) => t.id === towerId);
-  if (!tower || tower.secondElement) return;
+let towerMenuSignature = '';
 
-  const candidates = buildableTowerElements().filter((e) => e !== tower.element);
-  showChoiceModal(
-    '選擇第二屬性(選定後無法更改)',
-    candidates.map((e2) => {
-      const cost = secondElementCost(tower.element, e2);
-      const poor = (latestState?.gold[myPlayerId()] ?? 0) < cost;
-      return {
-        label: `${ELEMENT_NAMES[tower.element]}×${ELEMENT_NAMES[e2]}`,
-        sublabel: `${TOWER_CHARACTER_NAMES[e2]} · ${cost} 金幣${poor ? '(金幣不足)' : ''}`,
-        disabled: poor,
-        unaffordable: poor,
-        onChoose: () => {
-          if ((latestState?.gold[myPlayerId()] ?? 0) < cost) {
-            showToast(`金幣不足!加第二屬性需要 ${cost} 金幣`);
-            return;
-          }
-          submitAction({ kind: 'add_second_element', params: { towerId, secondElement: e2 } });
-        },
-      };
-    }),
-  );
-});
+const STRATEGY_LABELS: Record<TargetStrategy, string> = {
+  first: '打最前面',
+  lowest_hp: '打血最少',
+  highest_hp: '打血最多',
+};
+const NEXT_STRATEGY: Record<TargetStrategy, TargetStrategy> = {
+  first: 'lowest_hp',
+  lowest_hp: 'highest_hp',
+  highest_hp: 'first',
+};
 
-towerSellBtn.addEventListener('click', () => {
-  if (selectedTowerId === null) return;
-  submitAction({ kind: 'sell_tower', params: { towerId: selectedTowerId } });
-  gameRenderer.setSelectedTower(null);
-  everSoldTowerThisMatch = true;
-});
+/**
+ * WC3 式塔操作,2026-07-23 從固定的 #towerPanel 面板改成浮動選單:點塔後選項直接浮現在
+ * 塔旁邊(跟點空地的建造選單同一套機制、同一個 DOM 元素),不用再把視線移到畫面下緣。
+ * 每 tick 由 onStateUpdated 呼叫,簽章沒變就什麼都不做;升級/加屬性後簽章變了會在原地
+ * 重建(選單跟著塔,不跟著滑鼠)。設計原則不變:升級不分誰的塔、賣塔限本人(非本人
+ * 直接不列賣出選項,比灰掉明確);加第二屬性等級不到就不列(不是 disabled)。
+ */
+function renderTowerMenu(): void {
+  const tower = selectedTowerId !== null ? latestState?.towers.find((t) => t.id === selectedTowerId) : undefined;
+  if (!tower || !latestState) {
+    if (towerMenuSignature) {
+      towerMenuSignature = '';
+      hideFloatingBuildMenu();
+    }
+    return;
+  }
+  // 分岐路線/第二屬性的全螢幕彈窗開著時不要把選單疊回來,等彈窗收掉再說。
+  if (choiceModalOverlayEl.classList.contains('show')) return;
 
-towerDeselectBtn.addEventListener('click', () => {
-  gameRenderer.setSelectedTower(null);
-});
+  const state = latestState;
+  const stats = describeTower(tower, state.towers, state.runeTotems);
+  const myGold = state.gold[myPlayerId()] ?? 0;
+  const isOwner = tower.ownerId === myPlayerId();
+  const allowedElements = buildableTowerElements();
+  const canAddSecond =
+    !tower.secondElement && tower.level >= DUAL_ELEMENT_MIN_LEVEL && allowedElements.filter((e) => e !== tower.element).length > 0;
+  // 費用依「選哪個第二屬性」而定,但目前所有屬性造價相同,取最便宜的當顯示值即可;
+  // 真正的扣款在 sim 端依實際選到的屬性算(見 secondElementCost)。
+  const cheapestSecond = canAddSecond
+    ? Math.min(...allowedElements.filter((e) => e !== tower.element).map((e) => secondElementCost(tower.element, e)))
+    : 0;
+  const upgradePoor = stats.upgradeCost !== null && myGold < stats.upgradeCost;
+  const secondPoor = canAddSecond && myGold < cheapestSecond;
 
-// 集火策略不分誰的塔,任何隊友都能改(跟升級一樣的共享邏輯),純戰術選擇不花錢。
-towerPanelStrategySelect.addEventListener('change', () => {
-  if (selectedTowerId === null) return;
-  submitAction({
-    kind: 'set_target_strategy',
-    params: { towerId: selectedTowerId, strategy: towerPanelStrategySelect.value },
+  const sig = [
+    tower.id,
+    tower.level,
+    tower.secondElement ?? '',
+    tower.upgradePath,
+    tower.targetStrategy,
+    stats.upgradeCost ?? 'max',
+    upgradePoor,
+    canAddSecond,
+    secondPoor,
+    isOwner,
+    stats.damage, // 相生/圖騰/戰吼會改實際攻擊力,標頭數值要跟上
+    stats.cooldownTicks,
+  ].join('|');
+  const shown = floatingBuildMenuEl.classList.contains('show');
+  if (sig === towerMenuSignature && shown) return;
+  towerMenuSignature = sig;
+
+  const towerId = tower.id;
+  const options: ChoiceOption[] = [];
+
+  // 升級不分誰的塔,誰都能幫忙出錢升級;升到分岐級一定要先選路線(全螢幕彈窗強調不可反悔)。
+  if (stats.upgradeCost === null) {
+    options.push({ label: '已滿級', disabled: true, onChoose: () => {} });
+  } else {
+    const nextIsBranch = tower.level + 1 === UPGRADE_PATH_LEVEL;
+    options.push({
+      label: `升級(Lv.${tower.level} → ${tower.level + 1})`,
+      sublabel: `${stats.upgradeCost} 金幣${upgradePoor ? '(金幣不足)' : nextIsBranch ? ' · 要選分岐路線' : ''}`,
+      disabled: upgradePoor,
+      unaffordable: upgradePoor,
+      // 一般升級選單留著讓玩家連點;分岐級要開彈窗,選單先收掉
+      keepOpen: !nextIsBranch,
+      onChoose: () => {
+        const t = latestState?.towers.find((x) => x.id === towerId);
+        if (!t) return;
+        const cost = upgradeCost(t);
+        if (cost === null) return;
+        if ((latestState?.gold[myPlayerId()] ?? 0) < cost) {
+          showToast(`金幣不足!升級需要 ${cost} 金幣`);
+          return;
+        }
+        if (t.level + 1 === UPGRADE_PATH_LEVEL) {
+          const paths: UpgradePath[] = ['burst', 'splash'];
+          showChoiceModal(
+            '選擇升級路線(選定後無法更改)',
+            paths.map((path) => ({
+              label: UPGRADE_PATH_NAMES[path],
+              sublabel:
+                path === 'burst' ? '傷害比一般線性升級更高,沒有範圍效果' : '攻擊會波及主目標周圍的怪物,單體傷害不額外加成',
+              onChoose: () => submitAction({ kind: 'upgrade_tower', params: { towerId, path } }),
+            })),
+          );
+          return;
+        }
+        submitAction({ kind: 'upgrade_tower', params: { towerId } });
+      },
+    });
+  }
+
+  // 加第二屬性(升級解鎖,見 towers.ts 的 DUAL_ELEMENT_MIN_LEVEL):等級不到/已有第二屬性/
+  // 沒有組合可選就整個不列——擺一個永遠按不下去的選項只會讓玩家困惑。
+  if (canAddSecond) {
+    options.push({
+      label: '加第二屬性',
+      sublabel: `${cheapestSecond} 金幣${secondPoor ? '(金幣不足)' : ''}`,
+      disabled: secondPoor,
+      unaffordable: secondPoor,
+      onChoose: () => {
+        const t = latestState?.towers.find((x) => x.id === towerId);
+        if (!t || t.secondElement) return;
+        const candidates = buildableTowerElements().filter((e) => e !== t.element);
+        showChoiceModal(
+          '選擇第二屬性(選定後無法更改)',
+          candidates.map((e2) => {
+            const cost = secondElementCost(t.element, e2);
+            const poor = (latestState?.gold[myPlayerId()] ?? 0) < cost;
+            return {
+              label: `${ELEMENT_NAMES[t.element]}×${ELEMENT_NAMES[e2]}`,
+              sublabel: `${TOWER_CHARACTER_NAMES[e2]} · ${cost} 金幣${poor ? '(金幣不足)' : ''}`,
+              disabled: poor,
+              unaffordable: poor,
+              onChoose: () => {
+                if ((latestState?.gold[myPlayerId()] ?? 0) < cost) {
+                  showToast(`金幣不足!加第二屬性需要 ${cost} 金幣`);
+                  return;
+                }
+                submitAction({ kind: 'add_second_element', params: { towerId, secondElement: e2 } });
+              },
+            };
+          }),
+        );
+      },
+    });
+  }
+
+  // 集火策略不分誰的塔,任何隊友都能改,純戰術選擇不花錢——點一下循環切換,選單不關。
+  options.push({
+    label: `集火:${STRATEGY_LABELS[tower.targetStrategy]}`,
+    sublabel: '點擊切換目標策略',
+    keepOpen: true,
+    onChoose: () => {
+      const t = latestState?.towers.find((x) => x.id === towerId);
+      if (!t) return;
+      submitAction({ kind: 'set_target_strategy', params: { towerId, strategy: NEXT_STRATEGY[t.targetStrategy] } });
+    },
   });
-});
+
+  // 賣塔限本人,避免動到別人的投資——非本人直接不列這個選項。
+  if (isOwner) {
+    options.push({
+      label: `賣出(+${stats.sellValue} 金幣)`,
+      onChoose: () => {
+        submitAction({ kind: 'sell_tower', params: { towerId } });
+        gameRenderer.setSelectedTower(null);
+        everSoldTowerThisMatch = true;
+      },
+    });
+  }
+
+  // 標頭:塔名/屬性/等級/擁有者 + 核心即時數值(相生/圖騰/戰吼加成都反映在 describeTower)。
+  const elementLabel = tower.secondElement
+    ? `${ELEMENT_NAMES[tower.element]}×${ELEMENT_NAMES[tower.secondElement]}`
+    : `${ELEMENT_NAMES[tower.element]}塔`;
+  const pathLabel = tower.upgradePath !== 'none' ? ` · ${escapeHtml(UPGRADE_PATH_NAMES[tower.upgradePath])}` : '';
+  const headerHtml =
+    `<b class="element-${tower.element}">${escapeHtml(towerDisplayName(tower))}</b>(${elementLabel})Lv.${tower.level}` +
+    `<small>攻擊 ${stats.damage} · 範圍 ${(stats.rangeFp / FP_SCALE).toFixed(1)} 格 · 攻速 ${((stats.cooldownTicks * currentTickRateMs) / 1000).toFixed(2)}s` +
+    `${pathLabel} · ${escapeHtml(displayNameFor(tower.ownerId))}</small>`;
+
+  // 錨定在塔的右緣,選單不壓住塔本體;縮放/平移都反映在 tileToCanvas 的換算裡。
+  const pos = gameRenderer.tileToCanvas(tower.x + 1, tower.y);
+  showFloatingBuildMenu(pos.x, pos.y, options, headerHtml);
+}
 
 // 快捷鍵:數字鍵選浮動選單(建造選單或升級路線選單,哪個開著就選哪個)的第 N 個選項、
 // Delete/Backspace 賣掉選中的塔、Esc 關掉開著的選單或取消選取。只在對局畫面生效,
@@ -948,6 +1107,8 @@ window.addEventListener('keydown', (ev) => {
     }
     if (floatingBuildMenuEl.classList.contains('show')) {
       hideFloatingBuildMenu();
+      // 開著的是塔選單的話要一併取消選取(理由同 backdrop 的點擊處理)。
+      if (selectedTowerId !== null) gameRenderer.setSelectedTower(null);
       return;
     }
     if (choiceModalOverlayEl.classList.contains('show')) {
@@ -957,10 +1118,14 @@ window.addEventListener('keydown', (ev) => {
     gameRenderer.setSelectedTower(null);
     return;
   }
-  if ((ev.key === 'Delete' || ev.key === 'Backspace') && selectedTowerId !== null && !towerSellBtn.disabled) {
-    submitAction({ kind: 'sell_tower', params: { towerId: selectedTowerId } });
-    gameRenderer.setSelectedTower(null);
-    everSoldTowerThisMatch = true;
+  if (ev.key === 'Delete' || ev.key === 'Backspace') {
+    // 賣塔限本人(跟選單裡的賣出選項同一條規則)。
+    const tower = selectedTowerId !== null ? latestState?.towers.find((t) => t.id === selectedTowerId) : undefined;
+    if (tower && tower.ownerId === myPlayerId()) {
+      submitAction({ kind: 'sell_tower', params: { towerId: tower.id } });
+      gameRenderer.setSelectedTower(null);
+      everSoldTowerThisMatch = true;
+    }
     return;
   }
   const slot = Number(ev.key);
@@ -1007,9 +1172,10 @@ function showGameScreen(show: boolean): void {
   if (show) {
     backToMenuBtn.style.display = 'none';
     // #gameCanvas 從 display:none 切換成可見時不會觸發瀏覽器的 resize 事件,Phaser 的
-    // Scale.RESIZE 模式量不到新的容器尺寸——等這一輪 layout 真的套用後手動叫它重新量測,
-    // 不然畫布會卡在建立當下(容器還是 0x0)量到的舊尺寸,看起來完全沒有變滿版。
-    requestAnimationFrame(() => gameRenderer.refreshSize());
+    // Scale.RESIZE 模式量不到新的容器尺寸——等這一輪 layout 真的套用後手動重排一次
+    // (layoutGameCanvas 內含 refreshSize),不然畫布會卡在建立當下(容器還是 0x0)量到的
+    // 舊尺寸。ResizeObserver 通常也會接住這次變化,這裡是保險。
+    requestAnimationFrame(() => layoutGameCanvas());
   }
 }
 
@@ -1313,8 +1479,62 @@ function renderLivesBar(lives: number): void {
 }
 
 /**
+ * 個人生命模式的每條路徑生命列,持久 DOM 節點(索引對應 pathId)。
+ *
+ * **不能整段 innerHTML 重畫**(2026-07-23 修的 bug,跟記分板同一個死法):這一塊每個
+ * tick(50ms)都會重畫,整段換掉的話補命按鈕每 50ms 就被銷毀重建,玩家 mousedown 按到的
+ * 按鈕在 mouseup 之前就被殺掉,瀏覽器不派發 click——「花金幣買生命」點了幾乎永遠沒反應。
+ * 改成結構只建一次,每 tick 只更新數字/顏色/按鈕的 hidden 屬性(比照 renderSkillBar)。
+ */
+interface PathLivesRowEls {
+  root: HTMLDivElement;
+  barOuter: HTMLDivElement;
+  barInner: HTMLDivElement;
+  livesText: Text;
+  healBtn: HTMLButtonElement;
+}
+
+let pathLivesRowEls: PathLivesRowEls[] = [];
+/** 路徑數或負責人組合變了(換地圖/開新局)就整個重建,平常沿用既有節點。 */
+let pathLivesRowsKey = '';
+
+function buildPathLivesRows(state: SimulationState): void {
+  pathLivesRowEls = state.pathLives.map((_, pathId) => {
+    const owners = state.pathOwners[pathId] ?? [];
+    const ownerLabel = owners.length > 0 ? owners.map((id) => displayNameFor(id)).join('、') : '無人負責';
+
+    const root = document.createElement('div');
+    root.className = 'hud-stat';
+    // 圖示與路徑標籤是寫死的常數 + 已知的玩家名字;名字用 createTextNode 塞,不用跳脫。
+    root.innerHTML = '<svg class="icon" style="color: var(--fire)"><use href="#icon-heart" /></svg>';
+    root.appendChild(document.createTextNode(`路徑${pathId + 1}(${ownerLabel})`));
+
+    const barOuter = document.createElement('div');
+    barOuter.className = 'lives-bar-outer';
+    const barInner = document.createElement('div');
+    barOuter.appendChild(barInner);
+    root.appendChild(barOuter);
+
+    const livesText = document.createTextNode('');
+    root.appendChild(livesText);
+
+    const healBtn = document.createElement('button');
+    healBtn.type = 'button';
+    healBtn.className = 'hud-action-btn';
+    healBtn.dataset.healPath = String(pathId);
+    healBtn.title = `花 ${EMERGENCY_HEAL_COST} 金幣補這條路徑幾條命`;
+    healBtn.innerHTML = '<svg class="icon"><use href="#icon-heart" /></svg> 補命';
+    healBtn.hidden = true;
+    root.appendChild(healBtn);
+
+    return { root, barOuter, barInner, livesText, healBtn };
+  });
+  pathLivesStatsEl.replaceChildren(...pathLivesRowEls.map((r) => r.root));
+}
+
+/**
  * 生命 HUD:預設模式顯示團隊共用一條命條(`#teamLivesStat`);個人生命模式改顯示每條路徑
- * 各自一條命條(`#pathLivesStats`,動態產生,標出負責的玩家名字),兩者互斥顯示。
+ * 各自一條命條(`#pathLivesStats`,標出負責的玩家名字),兩者互斥顯示。
  */
 function renderLivesHud(state: SimulationState): void {
   if (!state.individualLivesMode) {
@@ -1328,29 +1548,26 @@ function renderLivesHud(state: SimulationState): void {
   }
   teamLivesStatEl.hidden = true;
   pathLivesStatsEl.hidden = false;
+
+  const key = `${state.pathLives.length}|${state.pathOwners.map((o) => o.join(',')).join(';')}`;
+  if (key !== pathLivesRowsKey) {
+    pathLivesRowsKey = key;
+    buildPathLivesRows(state);
+  }
+
   const startingPerPath = Math.max(1, Math.floor(STARTING_LIVES / state.pathLives.length));
-  pathLivesStatsEl.innerHTML = state.pathLives
-    .map((lives, pathId) => {
-      const owners = state.pathOwners[pathId] ?? [];
-      const ownerLabel = owners.length > 0 ? owners.map((id) => displayNameFor(id)).join('、') : '無人負責';
-      const ratio = Math.max(0, Math.min(1, lives / startingPerPath));
-      const barColor = ratio > 0.5 ? '#3a9d3a' : ratio > 0.25 ? '#d4af37' : '#e05a2b';
-      // 個人生命模式下每條路徑各自的補命按鈕(data-heal-path 事件代理,見下面的監聽器),
-      // 同樣只有那條路徑快歸零時才顯示。
-      const healBtn =
-        lives <= EMERGENCY_HEAL_THRESHOLD
-          ? `<button class="hud-action-btn" type="button" data-heal-path="${pathId}" title="花 ${EMERGENCY_HEAL_COST} 金幣補這條路徑幾條命"><svg class="icon"><use href="#icon-heart" /></svg> 補命</button>`
-          : '';
-      return `
-        <div class="hud-stat">
-          <svg class="icon" style="color: var(--fire)"><use href="#icon-heart" /></svg>
-          路徑${pathId + 1}(${escapeHtml(ownerLabel)})
-          <div class="lives-bar-outer ${ratio <= 0.25 ? 'lives-critical' : ''}"><div style="width:${ratio * 100}%; background:${barColor}"></div></div>
-          ${lives}${healBtn}
-        </div>
-      `;
-    })
-    .join('');
+  state.pathLives.forEach((lives, pathId) => {
+    const els = pathLivesRowEls[pathId];
+    if (!els) return;
+    const ratio = Math.max(0, Math.min(1, lives / startingPerPath));
+    const barColor = ratio > 0.5 ? '#3a9d3a' : ratio > 0.25 ? '#d4af37' : '#e05a2b';
+    els.barOuter.classList.toggle('lives-critical', ratio <= 0.25);
+    els.barInner.style.width = `${ratio * 100}%`;
+    els.barInner.style.background = barColor;
+    els.livesText.data = String(lives);
+    // 同樣只有那條路徑快歸零時才顯示補命按鈕(切 hidden,不是整段 HTML 有無)。
+    els.healBtn.hidden = lives > EMERGENCY_HEAL_THRESHOLD;
+  });
 }
 
 /** 對局開始/回選單時清掉上一場的勝敗橫幅跟樣式,不然舊的發光顏色會殘留。 */
@@ -1377,10 +1594,15 @@ function renderWaveHud(state: SimulationState): void {
   const tick = effectiveWaveTick(state);
   waveNumberEl.textContent = String(currentWaveNumberFor(state));
 
+  // 目前這波還在出怪時不能提早叫下一波(跟 simulation.ts 的 applySkipToNextWave 同一個判定)
+  // ——跳波只壓縮「出完怪之後的空檔」,不會把還沒生出來的怪跳掉。
+  const spawning = !waveFullySpawned(tick, state.endlessMode);
+  const spawningTitle = '這一波還在出怪,出完才能提早呼叫下一波';
+
   if (state.endlessMode) {
     // 無限模式永遠有下一波、永遠有預覽,不會是 null;沒有加碼波這個機制。
-    skipWaveBtn.disabled = false;
-    skipWaveBtn.title = '提早呼叫下一波(場上怪物不會被清掉,兩波會疊在一起)';
+    skipWaveBtn.disabled = spawning;
+    skipWaveBtn.title = spawning ? spawningTitle : '提早呼叫下一波(場上怪物不會被清掉,兩波會疊在一起)';
     const ticksLeft = ticksUntilNextWaveEndless(tick);
     nextWaveEl.textContent = `${Math.ceil((ticksLeft * currentTickRateMs) / 1000)}s`;
     const upcoming = upcomingWaveDefEndless(tick);
@@ -1399,8 +1621,13 @@ function renderWaveHud(state: SimulationState): void {
   // 已經是最後一波就沒有下一波可以跳,把按鈕停用+換提示文字,不會讓玩家點了沒反應搞不清楚
   // 是不是壞了(submitAction 那邊送出去本來就會被 simulation.ts 安全忽略,但完全沒有 UI
   // 回饋對玩家不友善)。
-  skipWaveBtn.disabled = ticksLeft === null;
-  skipWaveBtn.title = ticksLeft === null ? '已經是最後一波了' : '提早呼叫下一波(場上怪物不會被清掉,兩波會疊在一起)';
+  skipWaveBtn.disabled = ticksLeft === null || spawning;
+  skipWaveBtn.title =
+    ticksLeft === null
+      ? '已經是最後一波了'
+      : spawning
+        ? spawningTitle
+        : '提早呼叫下一波(場上怪物不會被清掉,兩波會疊在一起)';
   nextWaveEl.textContent =
     ticksLeft === null ? '最後一波' : `${Math.ceil((ticksLeft * currentTickRateMs) / 1000)}s`;
   const upcoming = upcomingWaveDef(tick);
@@ -1557,13 +1784,13 @@ const lockstepHandlers: LockstepHandlers = {
     // 頁面上不放 tick/checksum 這種除錯資訊,但多人連線真的跑飛時還是需要比對兩邊的值——
     // 改成掛在 window 上,要查的時候自己在瀏覽器主控台打 window.__wuxingDebug 看,不會
     // 平常就佔一塊畫面。
-    window.__wuxingDebug = { tick: state.tick, checksum: state.checksum };
+    window.__wuxingDebug = { tick: state.tick, checksum: state.checksum, towers: state.towers.length };
     goldEl.textContent = String(state.gold[myPlayerId()] ?? 0);
     renderLivesHud(state);
     renderWaveHud(state);
     renderSkillBar(state);
     gameRenderer.renderState(state);
-    renderTowerPanel();
+    renderTowerMenu();
     if (scoreboardOverlayEl.classList.contains('show')) renderScoreboard();
     if (state.gameOver) {
       // 無限模式沒有「破完」這回事,唯一的結局就是撐不住——顯示撐到第幾波當作這局的成績,
@@ -1590,7 +1817,21 @@ const lockstepHandlers: LockstepHandlers = {
   onWaitingForTick: () => {
     // MVP 測試頁先不特別顯示等待狀態,tick 數字停住不動就代表在等
   },
+  // 房主端:某個客戶端的 checksum 對不上(lockstep 跑飛)。跑飛救不回來(RESYNC 是設計給
+  // 換房主的,拿來救 desync 只會把「兩邊規則不同」的根本問題藏起來),廣播讓所有人一起中止。
+  onDesyncDetected: (playerId, tick) => {
+    log(`偵測到跑飛:${playerId} 在 tick ${tick} 的 checksum 跟房主不一致`);
+    room?.broadcastDesync(tick, playerId);
+    endMatchAfterDesync(playerId);
+  },
 };
+
+/** 多人同步跑飛(通常是玩家間版本不同):中止對局並明確告知,不讓兩邊各玩各的以為自己正常。 */
+function endMatchAfterDesync(playerId: string): void {
+  showResult('多人同步失效,對局中止', 'defeat');
+  showToast(`偵測到 ${displayNameFor(playerId)} 的遊戲狀態跟房主不一致——請所有人重新整理頁面(Ctrl+F5)後再開新房`);
+  endMatchAfterUnrecoverableDisconnect();
+}
 
 const roomHandlers: RoomHandlers = {
   onRosterChanged: (roster) => {
@@ -1639,7 +1880,19 @@ const roomHandlers: RoomHandlers = {
       );
     }
   },
-  onRejected: (reason) => log(`加入被拒絕:${reason}`),
+  onRejected: (reason) => {
+    log(`加入被拒絕:${reason}`);
+    // 原本只寫進 console,玩家看到的是「按了加入沒反應」——特別是版本不符(GitHub Pages
+    // 快取讓兩人拿到不同版本很常見),一定要給看得懂的指引。
+    const REJECT_MESSAGES: Record<RejectReason, string> = {
+      room_full: '房間已滿(最多 8 人)',
+      match_in_progress: '這個房間的對局已經開始,無法中途加入',
+      version_mismatch: '你的遊戲版本跟房主不同——請按 Ctrl+F5 重新整理頁面後再試一次',
+      unknown_player: '房主不認得這個玩家(可能重連逾時),請重新加入房間',
+    };
+    showToast(REJECT_MESSAGES[reason] ?? `加入被拒絕:${reason}`);
+    resetToMultiSetup();
+  },
   onRoomEnded: (reasonText) => {
     log(`房間結束:${reasonText}`);
     if (matchActive) {
@@ -1694,6 +1947,9 @@ const roomHandlers: RoomHandlers = {
   },
   onCommand: (cmd) => hostEngine?.enqueueRemoteCommand(cmd),
   onTick: (tick) => clientEngine?.receiveTick(tick),
+  onChecksum: (msg) => hostEngine?.receiveChecksum(msg),
+  // 客戶端:收到房主廣播的 DESYNC,跟著中止(房主端在 onDesyncDetected 已經處理過自己)。
+  onDesync: (playerId) => endMatchAfterDesync(playerId),
 };
 
 /** 對局進行中真的沒辦法繼續(換房主失敗、或整個房間結束):停掉引擎,畫面留著讓玩家自己按「回到選單」。 */

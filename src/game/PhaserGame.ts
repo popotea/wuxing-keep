@@ -11,6 +11,8 @@ export type { HoverInfo };
 export interface GameRenderer {
   renderState(state: SimulationState): void;
   setSelectedTower(towerId: number | null): void;
+  /** 格子座標 → 畫布像素座標(鏡頭縮放/平移都算進去),塔的浮動操作選單定位用。 */
+  tileToCanvas(tileX: number, tileY: number): { x: number; y: number };
   /** 新對局開始時呼叫:Phaser.Game 整個網頁只建立一次、跨對局重複使用,鏡頭捲動位置不會自己歸零。 */
   resetCamera(): void;
   /**
@@ -51,6 +53,7 @@ export function createGameRenderer(
   return {
     renderState: (state) => scene.renderState(state),
     setSelectedTower: (towerId) => scene.setSelectedTower(towerId),
+    tileToCanvas: (tileX, tileY) => scene.tileToCanvas(tileX, tileY),
     resetCamera: () => scene.resetCamera(),
     refreshSize: () => game.scale.refresh(),
     destroy: () => game.destroy(true),
