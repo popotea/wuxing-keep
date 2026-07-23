@@ -9,7 +9,15 @@ import { createGameRenderer, type HoverInfo } from './game/PhaserGame';
 import { isMultiplayer, ownerColorCss } from './game/playerColors';
 import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
 import { LOCAL_PLAYER_ID, LocalEngine } from './sim/localEngine';
-import { FP_SCALE, isOnPath } from './sim/map';
+import { DEFAULT_MAP_ID, FP_SCALE, isOnPath, MAP_DEFS, setActiveMap } from './sim/map';
+import {
+  SKILL_DEFS,
+  SKILL_IDS,
+  skillCooldownRemaining,
+  type SkillId,
+} from './sim/skills';
+import { STATUS_DESCRIPTIONS, STATUS_NAMES } from './sim/statuses';
+import { ABILITY_DESCRIPTIONS, ABILITY_NAMES } from './sim/monsters';
 import {
   activeBonusWaveInfo,
   currentWaveNumber,
@@ -92,6 +100,11 @@ const hostDifficultySelect = $<HTMLSelectElement>('hostDifficulty');
 const hostEndlessModeCheckbox = $<HTMLInputElement>('hostEndlessMode');
 const hostIndividualLivesModeCheckbox = $<HTMLInputElement>('hostIndividualLivesMode');
 const soloEndlessModeCheckbox = $<HTMLInputElement>('soloEndlessMode');
+const soloMapSelect = $<HTMLSelectElement>('soloMap');
+const soloMapHintEl = $<HTMLParagraphElement>('soloMapHint');
+const hostMapSelect = $<HTMLSelectElement>('hostMap');
+const hostMapHintEl = $<HTMLParagraphElement>('hostMapHint');
+const skillBarEl = $<HTMLDivElement>('skillBar');
 const hostBtn = $<HTMLButtonElement>('hostBtn');
 const roomCodeEl = $<HTMLSpanElement>('roomCode');
 const joinNameInput = $<HTMLInputElement>('joinName');
@@ -166,6 +179,34 @@ let selectedTowerId: number | null = null;
 let lastMatchConfig: MatchConfig | null = null;
 /** 避免同時收到好幾次「跟房主的連線斷了」事件(理論上只會有一條 hostConn,但保守起見防重入)。 */
 let rehostInProgress = false;
+
+/**
+ * 玩家點了技能按鈕、正在等他點地圖決定施放位置的狀態(null = 沒有在施放模式)。
+ * 施放模式下點地圖不會開建造選單,而是直接送出 cast_skill 指令,見 onTilePlaced。
+ */
+let armedSkill: SkillId | null = null;
+
+// ---- 地圖選擇 ----
+// 兩個下拉選單(單人/建房)共用同一份 MAP_DEFS,選項是程式產生的,不是寫死在 HTML 裡——
+// 之後新增地圖只要往 MAP_DEFS 加一筆,兩邊的選單跟說明文字都會自動跟上。
+function populateMapSelect(select: HTMLSelectElement, hint: HTMLElement): void {
+  select.innerHTML = '';
+  for (const def of MAP_DEFS) {
+    const option = document.createElement('option');
+    option.value = def.id;
+    option.textContent = `${def.name}(${def.paths.length} 條路徑)`;
+    select.appendChild(option);
+  }
+  select.value = DEFAULT_MAP_ID;
+  const syncHint = () => {
+    hint.textContent = MAP_DEFS.find((m) => m.id === select.value)?.description ?? '';
+  };
+  select.addEventListener('change', syncHint);
+  syncHint();
+}
+
+populateMapSelect(soloMapSelect, soloMapHintEl);
+populateMapSelect(hostMapSelect, hostMapHintEl);
 
 function submitAction(action: Action): void {
   if (localEngine) localEngine.submitCommand(action);
@@ -421,6 +462,13 @@ function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: n
     if (stats.totemHastePercent > 0) {
       rows.push(`<div class="tooltip-row" style="color: var(--accent)">圖騰加速中(+${stats.totemHastePercent}% 攻速)</div>`);
     }
+    if (stats.warcryActive) {
+      rows.push(`<div class="tooltip-row" style="color: var(--accent)">戰吼生效中(大幅提升攻速)</div>`);
+    }
+    // 元素異常狀態:玩家看不到這個機制存在的話,選屬性又退回只看傷害倍率了(見 statuses.ts)。
+    rows.push(
+      `<div class="tooltip-row">${STATUS_NAMES[stats.statusKind]}(${stats.statusChancePercent}% 機率):${STATUS_DESCRIPTIONS[stats.statusKind]}</div>`,
+    );
     rows.push(`<div class="tooltip-row">建造者:${escapeHtml(displayNameFor(tower.ownerId))}</div>`);
     const elementLabel = tower.secondElement
       ? `${ELEMENT_NAMES[tower.element]}×${ELEMENT_NAMES[tower.secondElement]}`
@@ -433,7 +481,28 @@ function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: n
       return;
     }
     const moveTypeLabel = m.moveType === 'air' ? '空中' : m.moveType === 'water' ? '水路' : '地面';
-    html = `<div class="tooltip-title">${ELEMENT_NAMES[m.element]}${m.isBoss ? ' · 首領' : ''}</div><div class="tooltip-row">血量 <b>${m.hp}</b> / ${m.maxHp}</div><div class="tooltip-row">移動:${moveTypeLabel}</div>`;
+    const monsterRows = [
+      `<div class="tooltip-row">血量 <b>${m.hp}</b> / ${m.maxHp}</div>`,
+      `<div class="tooltip-row">移動:${moveTypeLabel}</div>`,
+    ];
+    if (m.shieldHp > 0) {
+      monsterRows.push(`<div class="tooltip-row" style="color: var(--water)">護盾 <b>${m.shieldHp}</b> / ${m.maxShieldHp}</div>`);
+    }
+    if (m.ability !== 'none') {
+      monsterRows.push(
+        `<div class="tooltip-row" style="color: var(--accent)">${ABILITY_NAMES[m.ability]}:${ABILITY_DESCRIPTIONS[m.ability]}</div>`,
+      );
+    }
+    // 身上正在生效的異常狀態,讓玩家知道自己的塔真的有觸發效果(不然這個機制等於隱形的)。
+    const activeStatuses: string[] = [];
+    if (m.statusBurnTicks > 0) activeStatuses.push(STATUS_NAMES.burn);
+    if (m.statusChillTicks > 0) activeStatuses.push(STATUS_NAMES.chill);
+    if (m.statusEntangleTicks > 0) activeStatuses.push(STATUS_NAMES.entangle);
+    if (m.statusSunderTicks > 0) activeStatuses.push(STATUS_NAMES.sunder);
+    if (activeStatuses.length > 0) {
+      monsterRows.push(`<div class="tooltip-row" style="color: var(--fire)">狀態:${activeStatuses.join('、')}</div>`);
+    }
+    html = `<div class="tooltip-title">${ELEMENT_NAMES[m.element]}${m.isBoss ? ' · 首領' : ''}</div>${monsterRows.join('')}`;
   } else if (info.kind === 'trap') {
     const trap = state.traps.find((t) => t.id === info.id);
     if (!trap) {
@@ -486,6 +555,15 @@ const gameRenderer = createGameRenderer(
     // 跳建造選單,不然玩家搞不清楚「這格不能蓋」到底是裝飾物(純視覺不影響蓋塔)擋住了,
     // 還是這格真的已經有陷阱/資源建築。
     if (!matchActive || (!room && !localEngine)) return;
+    // 施放模式:這一下點擊是在選技能的施放位置,不是要蓋東西——直接送指令然後結束施放模式。
+    // 放在最前面攔截,免得又跳出建造選單讓玩家困惑。
+    if (armedSkill) {
+      const skillId = armedSkill;
+      setArmedSkill(null);
+      submitAction({ kind: 'cast_skill', params: { skill: skillId, x, y } });
+      showToast(`施放${SKILL_DEFS[skillId].name}`);
+      return;
+    }
     const myGold = latestState?.gold[myPlayerId()] ?? 0;
     const existingTrap = latestState?.traps.find((t) => t.x === x && t.y === y);
     const occupiedByResource = latestState?.resourceBuildings.some((r) => r.x === x && r.y === y);
@@ -764,6 +842,11 @@ window.addEventListener('keydown', (ev) => {
   if (activeTag === 'INPUT' || activeTag === 'SELECT' || activeTag === 'TEXTAREA') return;
 
   if (ev.key === 'Escape') {
+    // 施放模式優先取消——玩家按 Esc 時最想放棄的通常是「剛點下去還沒選位置的技能」。
+    if (armedSkill) {
+      setArmedSkill(null);
+      return;
+    }
     if (floatingBuildMenuEl.classList.contains('show')) {
       hideFloatingBuildMenu();
       return;
@@ -1244,6 +1327,79 @@ function renderWaveHud(state: SimulationState): void {
     : '';
 }
 
+/**
+ * 進入/離開「等玩家點地圖選施放位置」的模式。除了記住是哪個技能,還要同步兩件視覺回饋:
+ * 畫布游標變十字(body.skill-arming),以及該技能按鈕的高亮外框(.skill-arming)。
+ * 傳 null 就是取消(再點一次同一顆、按 Esc、或真的放出去之後都會走到這裡)。
+ */
+function setArmedSkill(skillId: SkillId | null): void {
+  armedSkill = skillId;
+  document.body.classList.toggle('skill-arming', skillId !== null);
+  renderSkillBar(latestState);
+}
+
+/**
+ * 技能列:依 skills.ts 的 SKILL_IDS 順序產生按鈕,冷卻中就 disabled 並顯示剩餘秒數。
+ *
+ * **刻意不用 innerHTML 整塊重畫**(記分板那種做法在這裡會出事):這個函式每個 tick(50ms)
+ * 都會被呼叫一次來更新冷卻秒數,整塊換掉的話按鈕 DOM 每 50ms 就被銷毀重建一次——玩家按下去
+ * 的瞬間如果剛好卡在重建的空檔,mousedown 跟 mouseup 會落在不同的元素上,瀏覽器就不會產生
+ * click 事件,點了沒反應。記分板可以那樣寫是因為它不是每 tick 重畫。
+ * 所以這裡改成:按鈕只建立一次(結構固定,SKILL_IDS 不會變),之後每 tick 只更新
+ * 文字/disabled/class 這些屬性。
+ */
+function renderSkillBar(state: SimulationState | null): void {
+  if (!state || !matchActive) {
+    skillBarEl.replaceChildren();
+    return;
+  }
+
+  // 首次(或上一場對局結束時被清空過)才建立按鈕結構。
+  if (skillBarEl.childElementCount !== SKILL_IDS.length) {
+    skillBarEl.replaceChildren(
+      ...SKILL_IDS.map((skillId) => {
+        const def = SKILL_DEFS[skillId];
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'skill-btn';
+        btn.dataset.skill = skillId;
+        btn.title = `${def.description}(冷卻 ${Math.round((def.cooldownTicks * currentTickRateMs) / 1000)} 秒)`;
+        const name = document.createElement('span');
+        name.className = 'skill-btn-name';
+        name.textContent = def.name;
+        const cd = document.createElement('span');
+        cd.className = 'skill-btn-cd';
+        btn.append(name, cd);
+        return btn;
+      }),
+    );
+  }
+
+  const myId = myPlayerId();
+  for (const btn of Array.from(skillBarEl.children) as HTMLButtonElement[]) {
+    const skillId = btn.dataset.skill as SkillId;
+    const remaining = skillCooldownRemaining(state.skillCooldowns, myId, skillId);
+    const armed = armedSkill === skillId;
+    btn.disabled = remaining > 0;
+    btn.classList.toggle('skill-arming', armed);
+    const cdEl = btn.querySelector('.skill-btn-cd');
+    if (cdEl) {
+      const seconds = Math.ceil((remaining * currentTickRateMs) / 1000);
+      cdEl.textContent = remaining > 0 ? `${seconds}s` : armed ? '點地圖' : '就緒';
+    }
+  }
+}
+
+skillBarEl.addEventListener('click', (ev) => {
+  const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>('.skill-btn');
+  if (!btn || btn.disabled) return;
+  const skillId = btn.dataset.skill as SkillId | undefined;
+  if (!skillId) return;
+  // 再點一次同一顆等於取消,不用特地去按 Esc。
+  setArmedSkill(armedSkill === skillId ? null : skillId);
+  if (armedSkill) showToast(`選擇${SKILL_DEFS[skillId].name}的施放位置(點地圖)`);
+});
+
 function endLocalMatch(): void {
   if (!localEngine) return;
   localEngine.stop();
@@ -1263,6 +1419,7 @@ const lockstepHandlers: LockstepHandlers = {
     goldEl.textContent = String(state.gold[myPlayerId()] ?? 0);
     renderLivesHud(state);
     renderWaveHud(state);
+    renderSkillBar(state);
     gameRenderer.renderState(state);
     renderTowerPanel();
     if (scoreboardOverlayEl.classList.contains('show')) renderScoreboard();
@@ -1309,6 +1466,8 @@ const roomHandlers: RoomHandlers = {
     resetResultBanner();
     showGameScreen(true);
     gameRenderer.setSelectedTower(null);
+    // 同單人模式:resetCamera() 依活躍地圖重畫靜態層,所以要先切好地圖再呼叫。
+    setActiveMap(payload.mapId);
     gameRenderer.resetCamera();
     everSoldTowerThisMatch = false;
     if (!room) return;
@@ -1321,6 +1480,7 @@ const roomHandlers: RoomHandlers = {
       difficultyPercent: payload.difficultyPercent,
       endlessMode: payload.endlessMode,
       individualLivesMode: payload.individualLivesMode,
+      mapId: payload.mapId,
     };
     if (room.getRole() === 'host') {
       hostEngine = new HostLockstepEngine(room, lastMatchConfig, payload.seed, lockstepHandlers);
@@ -1332,6 +1492,7 @@ const roomHandlers: RoomHandlers = {
         payload.difficultyPercent,
         payload.endlessMode,
         payload.individualLivesMode,
+        payload.mapId,
         lockstepHandlers,
       );
     }
@@ -1418,6 +1579,10 @@ soloBtn.addEventListener('click', () => {
   resetResultBanner();
   showGameScreen(true);
   gameRenderer.setSelectedTower(null);
+  // 一定要在 resetCamera() 之前切好地圖——resetCamera() 會依「目前的活躍地圖」重畫靜態層
+  // (地板/路徑/裝飾物),這行漏掉的話畫面上會是上一張地圖的路徑,但實際模擬走的是新地圖。
+  // (LocalEngine 建構子裡的 createInitialState() 也會呼叫一次,重複呼叫是安全的。)
+  setActiveMap(soloMapSelect.value);
   gameRenderer.resetCamera();
   everSoldTowerThisMatch = false;
   myElementCountThisMatch = elements.length;
@@ -1429,6 +1594,7 @@ soloBtn.addEventListener('click', () => {
     selectedDifficulty(soloPanelEl),
     elements,
     soloEndlessModeCheckbox.checked,
+    soloMapSelect.value,
   );
   localEngine.start();
   log(`單人模式開始,seed=${seed}`);
@@ -1438,6 +1604,13 @@ backToMenuBtn.addEventListener('click', () => {
   showGameScreen(false);
   resetResultBanner();
   gameRenderer.setSelectedTower(null);
+  // 離開對局就該把本地模擬停掉。實務上這顆按鈕只有在對局結束後才顯示(那時
+  // onStateUpdated 已經呼叫過 endLocalMatch()),所以這行平常是 no-op——但「按鈕看不到」
+  // 是很間接的保證,漏掉的話引擎會在回到選單後繼續在背景空轉,而且 soloBtn 會一直卡在
+  // disabled 開不了下一局。明確停一次比依賴 UI 可見性可靠。
+  endLocalMatch();
+  matchActive = false;
+  setArmedSkill(null); // 技能施放模式不該跨局殘留
   if (room) {
     room.destroy();
     resetToMultiSetup();
@@ -1523,6 +1696,7 @@ startBtn.addEventListener('click', () => {
     difficultyPercent: Number(hostDifficultySelect.value) || 100,
     endlessMode: hostEndlessModeCheckbox.checked,
     individualLivesMode: hostIndividualLivesModeCheckbox.checked,
+    mapId: hostMapSelect.value,
   });
 });
 

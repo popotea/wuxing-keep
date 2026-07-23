@@ -6,18 +6,47 @@
 
 import type { Action, PlayerId, TimedCommand } from '../net/protocol';
 import { isElement, type Element } from './elements';
-import { advanceAlongPath, FP_SCALE, inBounds, isOnPath, PATH_COUNT, worldPositionFp } from './map';
 import {
+  advanceAlongPath,
+  DEFAULT_MAP_ID,
+  FP_SCALE,
+  inBounds,
+  isMapId,
+  isOnPath,
+  pathCount,
+  setActiveMap,
+  worldPositionFp,
+} from './map';
+import {
+  AURA_RANGE_FP,
+  AURA_SPEED_BONUS_PERCENT,
+  BOMBER_LIVES_COST,
   createMonster,
+  createSplitChild,
   getEndlessSpawnEventsForTick,
   getSpawnEventsForTick,
+  HEALER_HEAL_PERCENT,
+  HEALER_INTERVAL_TICKS,
+  HEALER_RANGE_FP,
   SPAWN_INTERVAL_TICKS,
+  SPLITTER_CHILD_COUNT,
   totalWaveTicks,
   WAVE_INTERVAL_TICKS,
   WAVES,
   type Monster,
   type SpawnEvent,
 } from './monsters';
+import {
+  createSkillCooldowns,
+  isSkillId,
+  METEOR_DAMAGE,
+  FROST_CHILL_TICKS,
+  FROST_ENTANGLE_TICKS,
+  SKILL_DEFS,
+  SKILL_IDS,
+  WARCRY_DURATION_TICKS,
+} from './skills';
+import { applyBossResist, BURN_INTERVAL_TICKS, CHILL_SLOW_PERCENT } from './statuses';
 import {
   MAX_RUNE_TOTEM_LEVEL,
   RESOURCE_BUILDING_COST,
@@ -33,6 +62,7 @@ import {
   type Trap,
 } from './placements';
 import {
+  dealDamage,
   dualTowerStats,
   sellValue,
   TARGET_STRATEGIES,
@@ -128,8 +158,34 @@ export interface SimulationState {
    * 算誰的」)。開局後固定不變,不用算進 checksum。
    */
   pathOwners: PlayerId[][];
+  /**
+   * 這場對局用哪張地圖(見 map.ts 的 MAP_DEFS)。開局後固定不變,不用算進 checksum。
+   * ⚠️ 地圖資料本身是 map.ts 的模組層級快取(setActiveMap),不是每次呼叫都帶參數——
+   * 所以任何「不是走 createInitialState() 建立 state」的路徑(換房主的 RESYNC)都要記得
+   * 依這個欄位補呼叫一次 setActiveMap(),否則新接手的機器會拿舊地圖的路徑算,直接跑飛。
+   */
+  mapId: string;
+  /**
+   * 玩家主動技能的冷卻表:每個玩家一份、依 skills.ts 的 SKILL_IDS 順序存的剩餘冷卻 tick 數。
+   * 是會被 step() 每個 tick 遞減的動態狀態,**要算進 computeChecksum**。
+   */
+  skillCooldowns: Record<PlayerId, number[]>;
+  /**
+   * 這個 tick 施放成功的技能,只給 UI 畫特效用(跟 combatEvents 同一個定位),
+   * 每個 tick 開始都會清空重算,不是累積狀態,不用算進 checksum。
+   */
+  skillCasts: SkillCastEvent[];
   /** 除錯用:多台機器互相比對,一旦不一致就代表跑飛了 */
   checksum: string;
+}
+
+/** 這個 tick 有人施放了技能——純 UI 事件(畫特效),不影響任何判定。 */
+export interface SkillCastEvent {
+  skillId: string;
+  playerId: PlayerId;
+  x: number;
+  y: number;
+  rangeFp: number;
 }
 
 /** 判斷「現在算到第幾波」用的有效 tick——真正的 tick 加上「呼叫下一波」按鈕累計的快轉量。 */
@@ -156,12 +212,20 @@ export function createInitialState(
   playerElements: Record<PlayerId, Element[]> = {},
   endlessMode = false,
   individualLivesMode = false,
+  mapId: string = DEFAULT_MAP_ID,
 ): SimulationState {
+  // 先切好地圖再算任何跟路徑有關的東西(pathCount() 之後才是對的)。所有機器都用同一個
+  // mapId 走這條路徑,所以模組層級的地圖快取在每台機器上都一致,決定性不受影響。
+  const resolvedMapId = isMapId(mapId) ? mapId : DEFAULT_MAP_ID;
+  setActiveMap(resolvedMapId);
+
   const gold: Record<PlayerId, number> = {};
   const playerStats: Record<PlayerId, PlayerStats> = {};
+  const skillCooldowns: Record<PlayerId, number[]> = {};
   for (const playerId of Object.keys(playerElements)) {
     gold[playerId] = STARTING_GOLD;
     playerStats[playerId] = { damageDealt: 0, kills: 0 };
+    skillCooldowns[playerId] = createSkillCooldowns();
   }
 
   const playerCount = Math.max(1, Object.keys(playerElements).length);
@@ -171,11 +235,12 @@ export function createInitialState(
   // 個人生命模式:把玩家排序後依 index % PATH_COUNT 分組,每條路徑的生命池子是團隊生命
   // 平均分下去(而不是每條路徑各自滿額),維持整體難度跟預設模式差不多,不會憑空變兩倍簡單。
   const sortedPlayerIds = Object.keys(playerElements).sort();
-  const pathOwners: PlayerId[][] = Array.from({ length: PATH_COUNT }, () => []);
+  const pathTotal = pathCount();
+  const pathOwners: PlayerId[][] = Array.from({ length: pathTotal }, () => []);
   for (let i = 0; i < sortedPlayerIds.length; i++) {
-    pathOwners[i % PATH_COUNT].push(sortedPlayerIds[i]);
+    pathOwners[i % pathTotal].push(sortedPlayerIds[i]);
   }
-  const livesPerPath = Math.max(1, Math.floor(STARTING_LIVES / PATH_COUNT));
+  const livesPerPath = Math.max(1, Math.floor(STARTING_LIVES / pathTotal));
 
   return {
     tick: 0,
@@ -195,8 +260,11 @@ export function createInitialState(
     victory: false,
     waveTickOffset: 0,
     individualLivesMode,
-    pathLives: Array.from({ length: PATH_COUNT }, () => livesPerPath),
+    pathLives: Array.from({ length: pathTotal }, () => livesPerPath),
     pathOwners,
+    mapId: resolvedMapId,
+    skillCooldowns,
+    skillCasts: [],
     bonusAwarded: WAVES.map(() => false),
     difficultyPercent,
     playerCountScalePercent,
@@ -234,9 +302,12 @@ function grantGoldToAllPlayers(state: SimulationState, amount: number): void {
 function cloneState(state: SimulationState): SimulationState {
   const playerStats: Record<PlayerId, PlayerStats> = {};
   for (const playerId of Object.keys(state.playerStats)) playerStats[playerId] = { ...state.playerStats[playerId] };
+  const skillCooldowns: Record<PlayerId, number[]> = {};
+  for (const playerId of Object.keys(state.skillCooldowns)) skillCooldowns[playerId] = [...state.skillCooldowns[playerId]];
   return {
     ...state,
     gold: { ...state.gold },
+    skillCooldowns,
     towers: state.towers.map((t) => ({ ...t })),
     monsters: state.monsters.map((m) => ({ ...m, pos: { ...m.pos } })),
     traps: state.traps.map((t) => ({ ...t })),
@@ -282,6 +353,7 @@ function applyBuildTower(state: SimulationState, playerId: PlayerId, action: Act
     ownerId: playerId,
     targetStrategy: 'first',
     upgradePath: 'none',
+    hasteTicks: 0,
   });
 }
 
@@ -317,6 +389,7 @@ function applyBuildDualTower(state: SimulationState, playerId: PlayerId, action:
     ownerId: playerId,
     targetStrategy: 'first',
     upgradePath: 'none',
+    hasteTicks: 0,
   });
 }
 
@@ -510,6 +583,63 @@ function applyEmergencyHeal(state: SimulationState, playerId: PlayerId, action: 
   }
 }
 
+/**
+ * 玩家主動技能(見 skills.ts):不花金幣,只受各自獨立的冷卻限制,任何人都能對地圖上任何
+ * 位置施放(跟升級/集火策略/呼叫下一波同一套「不分陣營」的慣例)。冷卻還沒好、技能 id 不合法、
+ * 座標超出地圖一律安全忽略——跟其他指令一樣是所有機器上相同的 no-op。
+ *
+ * 三個技能的效果都直接寫在這裡(而不是拆成各自的函式):它們共用「找出範圍內的目標」這段
+ * 距離平方比較的邏輯,拆開反而要把同一段程式碼複製三次。
+ */
+function applyCastSkill(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const skillId = action.params.skill;
+  const x = asFiniteInt(action.params.x);
+  const y = asFiniteInt(action.params.y);
+  if (!isSkillId(skillId) || x === null || y === null) return;
+  if (!inBounds(x, y)) return;
+
+  const cooldowns = state.skillCooldowns[playerId];
+  if (!cooldowns) return; // 不在這場對局裡的玩家(理論上不會發生),安全忽略
+  const skillIndex = SKILL_IDS.indexOf(skillId);
+  if (skillIndex === -1 || cooldowns[skillIndex] > 0) return;
+
+  const def = SKILL_DEFS[skillId];
+  const centerXFp = x * FP_SCALE;
+  const centerYFp = y * FP_SCALE;
+  const rangeSq = def.rangeFp * def.rangeFp;
+
+  if (skillId === 'warcry') {
+    // 戰吼作用在「塔」身上,不分誰蓋的——跟相生鄰接/圖騰加成不分陣營的既有設計一致。
+    for (const tower of state.towers) {
+      const dx = centerXFp - tower.x * FP_SCALE;
+      const dy = centerYFp - tower.y * FP_SCALE;
+      if (dx * dx + dy * dy > rangeSq) continue;
+      tower.hasteTicks = Math.max(tower.hasteTicks, WARCRY_DURATION_TICKS);
+    }
+  } else {
+    // 隕石/寒冰作用在「怪物」身上。刻意不檢查 moveType——技能是玩家的救命手段,
+    // 不該因為這波剛好是空中怪就完全失效(塔已經有移動類型限制了,技能不再疊一層)。
+    for (const m of state.monsters) {
+      const { xFp, yFp } = worldPositionFp(m.pos);
+      const dx = centerXFp - xFp;
+      const dy = centerYFp - yFp;
+      if (dx * dx + dy * dy > rangeSq) continue;
+      if (skillId === 'meteor') {
+        // 走跟塔攻擊同一個扣血入口,所以一樣吃破甲增傷、一樣會被護盾吸收。
+        const { dealt } = dealDamage(m, METEOR_DAMAGE);
+        state.combatEvents.push({ monsterId: m.id, xFp, yFp, damage: dealt });
+      } else {
+        // 寒冰:先完全定身,結束後殘留冰緩。首領一樣有控制抗性(applyBossResist)。
+        m.statusEntangleTicks = Math.max(m.statusEntangleTicks, applyBossResist(FROST_ENTANGLE_TICKS, m.isBoss));
+        m.statusChillTicks = Math.max(m.statusChillTicks, applyBossResist(FROST_CHILL_TICKS, m.isBoss));
+      }
+    }
+  }
+
+  cooldowns[skillIndex] = def.cooldownTicks;
+  state.skillCasts.push({ skillId, playerId, x, y, rangeFp: def.rangeFp });
+}
+
 function applyCommand(state: SimulationState, playerId: PlayerId, action: Action): void {
   if (action.kind === 'build_tower') applyBuildTower(state, playerId, action);
   else if (action.kind === 'build_dual_tower') applyBuildDualTower(state, playerId, action);
@@ -524,6 +654,7 @@ function applyCommand(state: SimulationState, playerId: PlayerId, action: Action
   else if (action.kind === 'skip_to_next_wave') applySkipToNextWave(state);
   else if (action.kind === 'gift_gold') applyGiftGold(state, playerId, action);
   else if (action.kind === 'emergency_heal') applyEmergencyHeal(state, playerId, action);
+  else if (action.kind === 'cast_skill') applyCastSkill(state, playerId, action);
   // 其他/未知 kind 一律安全忽略
 }
 
@@ -542,11 +673,26 @@ function computeChecksum(state: SimulationState): string {
     .map((id) => `${id}:${state.gold[id]}`)
     .join(',');
   const towerPart = state.towers
-    .map((t) => `${t.id}:${t.x}:${t.y}:${t.element}:${t.secondElement ?? ''}:${t.level}:${t.targetStrategy}:${t.upgradePath}`)
+    .map(
+      (t) =>
+        `${t.id}:${t.x}:${t.y}:${t.element}:${t.secondElement ?? ''}:${t.level}:${t.targetStrategy}:${t.upgradePath}:${t.hasteTicks}`,
+    )
     .join(';');
+  // 怪物的異常狀態/護盾/治療計時都是會被 step() 修改的動態狀態,全部要算入——漏掉任何一個
+  // 都會變成「畫面看起來一樣但兩台機器算的其實不同」,而且要等狀態真的造成血量差異才會爆出來。
   const monsterPart = state.monsters
-    .map((m) => `${m.id}:${m.hp}:${m.pos.pathId}:${m.pos.segmentIndex}:${m.pos.distanceIntoSegmentFp}`)
+    .map(
+      (m) =>
+        `${m.id}:${m.hp}:${m.pos.pathId}:${m.pos.segmentIndex}:${m.pos.distanceIntoSegmentFp}` +
+        `:${m.shieldHp}:${m.ticksSinceHeal}` +
+        `:${m.statusBurnTicks}:${m.statusBurnDamage}:${m.statusBurnElapsed}` +
+        `:${m.statusChillTicks}:${m.statusEntangleTicks}:${m.statusSunderTicks}`,
+    )
     .join(';');
+  const skillCooldownPart = Object.keys(state.skillCooldowns)
+    .sort()
+    .map((id) => `${id}:${state.skillCooldowns[id].join('/')}`)
+    .join(',');
   const trapPart = state.traps.map((t) => `${t.id}:${t.x}:${t.y}:${t.level}`).join(';');
   const resourceBuildingPart = state.resourceBuildings
     .map((r) => `${r.id}:${r.x}:${r.y}:${r.ticksSinceLastIncome}`)
@@ -559,7 +705,7 @@ function computeChecksum(state: SimulationState): string {
     .map((id) => `${id}:${state.playerStats[id].damageDealt}:${state.playerStats[id].kills}`)
     .join(',');
   return simpleHash(
-    `${state.tick}|${state.waveTickOffset}|${goldPart}|${state.lives}|${pathLivesPart}|${towerPart}|${monsterPart}|${trapPart}|${resourceBuildingPart}|${runeTotemPart}|${bonusPart}|${statsPart}`,
+    `${state.tick}|${state.waveTickOffset}|${goldPart}|${state.lives}|${pathLivesPart}|${towerPart}|${monsterPart}|${trapPart}|${resourceBuildingPart}|${runeTotemPart}|${bonusPart}|${statsPart}|${skillCooldownPart}`,
   );
 }
 
@@ -595,12 +741,25 @@ function applyBonusWaveRewards(state: SimulationState, tick: number): void {
 
 export function step(state: SimulationState, tick: number, commands: TimedCommand[]): SimulationState {
   if (state.gameOver || state.victory) {
-    return { ...state, tick, combatEvents: [] };
+    return { ...state, tick, combatEvents: [], skillCasts: [] };
   }
 
   const next = cloneState(state);
   next.tick = tick;
   next.combatEvents = [];
+  next.skillCasts = [];
+
+  // 技能冷卻/塔的戰吼 buff 都在套用指令「之前」先遞減——這一 tick 剛好冷卻歸零的技能,
+  // 同一 tick 就可以再放,不用多等一個 tick(玩家感受上比較直覺)。
+  for (const playerId of Object.keys(next.skillCooldowns)) {
+    const cds = next.skillCooldowns[playerId];
+    for (let i = 0; i < cds.length; i++) {
+      if (cds[i] > 0) cds[i] -= 1;
+    }
+  }
+  for (const tower of next.towers) {
+    if (tower.hasteTicks > 0) tower.hasteTicks -= 1;
+  }
 
   // 依 playerId 排序,確保指令套用順序在所有機器上完全一致
   const sorted = [...commands].sort((a, b) => a.playerId.localeCompare(b.playerId));
@@ -620,21 +779,100 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
     next.monsters.push(createMonster(next.nextMonsterId++, scaled));
   }
 
+  // ---- 元素異常狀態(見 statuses.ts):先跳灼燒傷害,再把所有狀態的剩餘時間減一。
+  // 放在移動之前:這個 tick 被灼燒燒死的怪不該還走完這一步,不然玩家會看到「血條空了還在跑」。
+  for (const m of next.monsters) {
+    if (m.statusBurnTicks > 0) {
+      m.statusBurnElapsed += 1;
+      if (m.statusBurnElapsed >= BURN_INTERVAL_TICKS) {
+        m.statusBurnElapsed = 0;
+        // 灼燒走跟塔攻擊同一個扣血入口,所以一樣吃破甲增傷、一樣會被護盾吸收。
+        const { dealt } = dealDamage(m, m.statusBurnDamage);
+        const { xFp, yFp } = worldPositionFp(m.pos);
+        next.combatEvents.push({ monsterId: m.id, xFp, yFp, damage: dealt, status: 'burn' });
+      }
+      m.statusBurnTicks -= 1;
+      if (m.statusBurnTicks === 0) m.statusBurnDamage = 0;
+    }
+    if (m.statusChillTicks > 0) m.statusChillTicks -= 1;
+    if (m.statusEntangleTicks > 0) m.statusEntangleTicks -= 1;
+    if (m.statusSunderTicks > 0) m.statusSunderTicks -= 1;
+  }
+
+  // ---- 怪物特殊能力:治療兵定期回復周圍同伴的血。
+  // 用「先算出這一 tick 要補多少、再一起套用」的兩段式,避免「A 補完 B、B 拿補過的血再去補 C」
+  // 這種依迭代順序而變的連鎖效果——那樣雖然仍是決定性的,但補血量會被陣列順序影響,難以推理。
+  const healAmounts = new Map<number, number>();
+  for (const healer of next.monsters) {
+    if (healer.ability !== 'healer') continue;
+    healer.ticksSinceHeal += 1;
+    if (healer.ticksSinceHeal < HEALER_INTERVAL_TICKS) continue;
+    healer.ticksSinceHeal = 0;
+    const healerPos = worldPositionFp(healer.pos);
+    const healRangeSq = HEALER_RANGE_FP * HEALER_RANGE_FP;
+    for (const m of next.monsters) {
+      const { xFp, yFp } = worldPositionFp(m.pos);
+      const dx = healerPos.xFp - xFp;
+      const dy = healerPos.yFp - yFp;
+      if (dx * dx + dy * dy > healRangeSq) continue;
+      const amount = Math.max(1, Math.floor((m.maxHp * HEALER_HEAL_PERCENT) / 100));
+      healAmounts.set(m.id, (healAmounts.get(m.id) ?? 0) + amount);
+    }
+  }
+  for (const m of next.monsters) {
+    const amount = healAmounts.get(m.id);
+    if (amount === undefined || m.hp <= 0) continue;
+    m.hp = Math.min(m.maxHp, m.hp + amount); // 補血不會超過最大血量
+  }
+
+  // ---- 急行光環:先算出「哪些怪這個 tick 有被光環加速」,同樣是兩段式(光環不會加速自己,
+  // 也不會因為兩隻光環怪互相靠近就疊成兩倍——有就是有,不累加)。
+  const auraBoosted = new Set<number>();
+  for (const aura of next.monsters) {
+    if (aura.ability !== 'aura') continue;
+    const auraPos = worldPositionFp(aura.pos);
+    const auraRangeSq = AURA_RANGE_FP * AURA_RANGE_FP;
+    for (const m of next.monsters) {
+      if (m.id === aura.id) continue;
+      const { xFp, yFp } = worldPositionFp(m.pos);
+      const dx = auraPos.xFp - xFp;
+      const dy = auraPos.yFp - yFp;
+      if (dx * dx + dy * dy > auraRangeSq) continue;
+      auraBoosted.add(m.id);
+    }
+  }
+
   // 怪物移動,漏怪扣生命——站在陷阱格上的怪物這個 tick 的移動速度打折扣(飛行怪飛在空中,陷阱打不到),
   // 折扣幅度依陷阱等級查表(TRAP_SLOW_PERCENT_BY_LEVEL),陷阱格用 Map 存等級,不是只存在不在。
+  // 速度的計算順序:基礎速度 → 光環加成 → 冰緩/陷阱減速(取比較強的那個,不疊乘)→ 纏繞直接歸零。
   const trapLevelByTile = new Map(next.traps.map((t) => [`${t.x},${t.y}`, t.level]));
   const survivors: Monster[] = [];
   for (const m of next.monsters) {
     const { xFp, yFp } = worldPositionFp(m.pos);
     const trapLevel = m.moveType === 'air' ? undefined : trapLevelByTile.get(`${Math.floor(xFp / FP_SCALE)},${Math.floor(yFp / FP_SCALE)}`);
-    const slowPercent = trapLevel !== undefined ? (TRAP_SLOW_PERCENT_BY_LEVEL[trapLevel] ?? 0) : 0;
-    const speedFp = slowPercent > 0 ? Math.floor((m.speedFp * (100 - slowPercent)) / 100) : m.speedFp;
+    const trapSlowPercent = trapLevel !== undefined ? (TRAP_SLOW_PERCENT_BY_LEVEL[trapLevel] ?? 0) : 0;
+    const chillSlowPercent = m.statusChillTicks > 0 ? CHILL_SLOW_PERCENT : 0;
+    // 陷阱跟冰緩都是減速,取比較強的那個而不是相乘——兩個都疊上去很容易直接把怪物鎖成龜速,
+    // 而且「減速 80% 之後再減速 40%」對玩家來說完全不直覺。
+    const slowPercent = Math.max(trapSlowPercent, chillSlowPercent);
+
+    let speedFp = m.speedFp;
+    if (auraBoosted.has(m.id)) {
+      speedFp = Math.floor((speedFp * (100 + AURA_SPEED_BONUS_PERCENT)) / 100);
+    }
+    if (slowPercent > 0) {
+      speedFp = Math.floor((speedFp * (100 - slowPercent)) / 100);
+    }
+    if (m.statusEntangleTicks > 0) speedFp = 0; // 纏繞:完全定身,壓過所有其他速度計算
+
     const { pos, leaked } = advanceAlongPath(m.pos, speedFp);
     if (leaked) {
+      // 爆破兵漏掉時扣的生命比一般怪多——牠是「一定要優先解決」的那種威脅。
+      const livesCost = m.ability === 'bomber' ? BOMBER_LIVES_COST : 1;
       if (next.individualLivesMode) {
-        next.pathLives[m.pos.pathId] = Math.max(0, next.pathLives[m.pos.pathId] - 1);
+        next.pathLives[m.pos.pathId] = Math.max(0, next.pathLives[m.pos.pathId] - livesCost);
       } else {
-        next.lives -= 1;
+        next.lives -= livesCost;
       }
       continue;
     }
@@ -647,7 +885,7 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   // 一起打死(常見於 splash 路線)只算給第一個把牠打進 0 血以下的塔主人,不會重複計算。
   const killedMonsterIdsThisTick = new Set<number>();
   for (const tower of next.towers) {
-    const events = tryAttack(tower, next.monsters, next.towers, next.runeTotems);
+    const events = tryAttack(tower, next.monsters, next.towers, next.runeTotems, tick);
     const stats = next.playerStats[tower.ownerId];
     for (const event of events) {
       next.combatEvents.push(event);
@@ -666,6 +904,16 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
   // 擊殺賞金:不追蹤是誰的塔打死的(多座塔常常一起打中同一隻),每個現存玩家都各自拿全額。
   for (const m of dead) grantGoldToAllPlayers(next, m.bounty);
   next.monsters = next.monsters.filter((m) => m.hp > 0);
+
+  // 分裂怪:死亡時原地生出小怪(小怪的 isSplitChild 是 true,自己不會再分裂,所以不會無限增生)。
+  // 放在「移除死亡怪物之後」才做,新生的小怪這個 tick 不會被上面的攻擊迴圈打到,下一個 tick 才進戰場——
+  // 不然會變成「同一 tick 內母體死掉、小怪立刻又被同一輪 splash 掃到」這種很難推理的連鎖。
+  for (const m of dead) {
+    if (m.ability !== 'splitter' || m.isSplitChild) continue;
+    for (let i = 0; i < SPLITTER_CHILD_COUNT; i++) {
+      next.monsters.push(createSplitChild(next.nextMonsterId++, m, i));
+    }
+  }
 
   // 資源建築定期產生被動金幣,只給建造者自己(不是全員均分,這是個人投資報酬)。
   for (const building of next.resourceBuildings) {

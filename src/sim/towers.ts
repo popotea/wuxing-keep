@@ -1,8 +1,22 @@
 // 塔:五行各一種基礎塔,攻擊判定全部用整數距離平方比較,不用 sqrt/float。
 
 import { applyDualElementalDamage, applyElementalDamage, GENERATED_BY, type Element } from './elements';
-import { FP_SCALE, remainingDistanceFp, worldPositionFp } from './map';
+import { FP_SCALE, remainingDistanceFp, retreatAlongPath, worldPositionFp } from './map';
 import type { Monster, MoveType } from './monsters';
+import {
+  applyBossResist,
+  BURN_DAMAGE_PERCENT,
+  BURN_DURATION_TICKS,
+  CHILL_DURATION_TICKS,
+  ENTANGLE_DURATION_TICKS,
+  KNOCKBACK_DISTANCE_FP,
+  statusChancePercent,
+  statusRoll,
+  STATUS_BY_ELEMENT,
+  SUNDER_DAMAGE_BONUS_PERCENT,
+  SUNDER_DURATION_TICKS,
+  type StatusKind,
+} from './statuses';
 import {
   MAX_RUNE_TOTEM_LEVEL,
   RUNE_TOTEM_DAMAGE_BONUS_PERCENT,
@@ -150,6 +164,11 @@ export interface Tower {
    * (見 dualTowerStats)。
    */
   secondElement?: Element;
+  /**
+   * 玩家主動技能「戰吼」(skills.ts 的 'warcry')給的攻速 buff 剩餘 tick 數,0 = 沒有。
+   * 是會被 step() 每個 tick 遞減的動態狀態,**要算進 computeChecksum**。
+   */
+  hasteTicks: number;
 }
 
 /** 升級花費:每一級都用原始建造價當漲幅單位,越高級越貴。已滿級回傳 null。 */
@@ -235,10 +254,13 @@ export function hasGeneratingNeighbor(tower: Tower, allTowers: readonly Tower[])
 
 /** 鄰接加成生效時,冷卻時間打這個百分比折扣(85 = 快 15%)。 */
 const ADJACENCY_COOLDOWN_PERCENT = 85;
+/** 主動技能「戰吼」生效期間,冷卻時間額外打這個百分比折扣(60 = 快 40%)。 */
+export const WARCRY_COOLDOWN_PERCENT = 60;
 
 /**
- * 冷卻時間依序打兩層折扣(相生鄰接 + 疾風圖騰,兩個來源各自獨立,都生效時會複合疊加,
- * 不是只算比較大的那個):相生鄰接固定折扣、圖騰疾風折扣依 `nearbyTotemEffect()` 算。
+ * 冷卻時間依序打三層折扣(相生鄰接 + 疾風圖騰 + 戰吼 buff,三個來源各自獨立,都生效時會
+ * 複合疊加,不是只算最大的那個):相生鄰接/戰吼是固定折扣、圖騰疾風折扣依
+ * `nearbyTotemEffect()` 算。
  */
 function effectiveCooldownTicks(tower: Tower, allTowers: readonly Tower[], runeTotems: readonly RuneTotem[]): number {
   let base = baseTowerDef(tower).cooldownTicks;
@@ -248,6 +270,9 @@ function effectiveCooldownTicks(tower: Tower, allTowers: readonly Tower[], runeT
   const { hastePercent } = nearbyTotemEffect(tower, runeTotems);
   if (hastePercent > 0) {
     base = Math.floor((base * (100 - hastePercent)) / 100);
+  }
+  if (tower.hasteTicks > 0) {
+    base = Math.floor((base * WARCRY_COOLDOWN_PERCENT) / 100);
   }
   return Math.max(1, base);
 }
@@ -265,6 +290,12 @@ export interface TowerStats {
   totemDamageBonusPercent: number;
   /** 目前範圍內圖騰給的攻速加成百分比(0 = 沒有),純顯示用。 */
   totemHastePercent: number;
+  /** 這座塔的攻擊會附加哪種元素異常狀態(見 statuses.ts),雙屬性塔看主屬性。 */
+  statusKind: StatusKind;
+  /** 附加狀態的觸發機率(百分比,隨等級成長)。 */
+  statusChancePercent: number;
+  /** 主動技能「戰吼」的攻速 buff 是否生效中,純顯示用。 */
+  warcryActive: boolean;
 }
 
 /** 給 UI 顯示用(WC3 式選取面板):這座塔目前的實際數值(已套用等級加成+鄰接加成+圖騰加成)+ 升級/賣出的花費。 */
@@ -281,6 +312,9 @@ export function describeTower(tower: Tower, allTowers: readonly Tower[], runeTot
     adjacencyBonusActive: hasGeneratingNeighbor(tower, allTowers),
     totemDamageBonusPercent: totemEffect.damageBonusPercent,
     totemHastePercent: totemEffect.hastePercent,
+    statusKind: STATUS_BY_ELEMENT[tower.element],
+    statusChancePercent: statusChancePercent(tower.level),
+    warcryActive: tower.hasteTicks > 0,
   };
 }
 
@@ -343,6 +377,62 @@ export interface CombatEvent {
   xFp: number;
   yFp: number;
   damage: number;
+  /** 這一擊有沒有順便附加元素異常狀態(有的話 UI 會多飄一個狀態名稱),沒有就是 undefined。 */
+  status?: StatusKind;
+  /** 這一擊有多少傷害是被護盾吸收掉的(護盾兵專用),UI 用不同顏色顯示。 */
+  absorbedByShield?: number;
+}
+
+/**
+ * 統一的扣血入口——所有傷害來源(塔的直擊/splash、灼燒跳傷、主動技能)都要走這裡,
+ * 才不會有的地方算了破甲有的地方沒算、有的地方吃護盾有的地方直接扣血。
+ *
+ * 順序是「先加破甲增傷,再讓護盾吸收,最後扣本體血量」:
+ * - 破甲(sunder)是「受到的所有傷害增加」,所以在最前面放大
+ * - 護盾(shield 能力)是獨立的一層,扣完才輪到本體血量,同一擊可以同時打穿護盾又傷到本體
+ */
+export function dealDamage(monster: Monster, rawDamage: number): { dealt: number; absorbed: number } {
+  let damage = rawDamage;
+  if (monster.statusSunderTicks > 0) {
+    damage = Math.floor((damage * (100 + SUNDER_DAMAGE_BONUS_PERCENT)) / 100);
+  }
+  let absorbed = 0;
+  if (monster.shieldHp > 0) {
+    absorbed = Math.min(monster.shieldHp, damage);
+    monster.shieldHp -= absorbed;
+    damage -= absorbed;
+  }
+  monster.hp -= damage;
+  return { dealt: damage, absorbed };
+}
+
+/**
+ * 依「塔的屬性」對目標附加元素異常狀態。觸發與否用決定性雜湊(statusRoll),不是 Math.random()。
+ * 雙屬性塔看主屬性(`tower.element`)——兩種狀態都能觸發的話等於雙屬性塔在戰術效果上也全拿,
+ * 跟「雙屬性塔用基礎數值折扣換取沒有致命對位」的既有平衡精神不一致,先只給主屬性的效果。
+ *
+ * 首領怪對控制類狀態(纏繞/冰緩/擊退)有抗性(applyBossResist),避免被一排木塔永久定住。
+ * 回傳實際附加到的狀態,沒觸發回傳 undefined(呼叫端拿去塞進 CombatEvent 給 UI 顯示)。
+ */
+function applyStatusOnHit(tower: Tower, monster: Monster, tick: number, hitDamage: number): StatusKind | undefined {
+  if (statusRoll(tick, tower.id, monster.id) >= statusChancePercent(tower.level)) return undefined;
+  const kind = STATUS_BY_ELEMENT[tower.element];
+  if (kind === 'burn') {
+    monster.statusBurnTicks = BURN_DURATION_TICKS;
+    monster.statusBurnElapsed = 0;
+    // 重複觸發時取比較高的那個跳傷,不是覆蓋成最新一擊的(高級塔補上的灼燒不該被低級塔洗掉)。
+    monster.statusBurnDamage = Math.max(monster.statusBurnDamage, Math.max(1, Math.floor((hitDamage * BURN_DAMAGE_PERCENT) / 100)));
+  } else if (kind === 'chill') {
+    monster.statusChillTicks = Math.max(monster.statusChillTicks, applyBossResist(CHILL_DURATION_TICKS, monster.isBoss));
+  } else if (kind === 'entangle') {
+    monster.statusEntangleTicks = Math.max(monster.statusEntangleTicks, applyBossResist(ENTANGLE_DURATION_TICKS, monster.isBoss));
+  } else if (kind === 'sunder') {
+    monster.statusSunderTicks = Math.max(monster.statusSunderTicks, SUNDER_DURATION_TICKS);
+  } else {
+    // knockback 是瞬間效果,沒有持續時間——直接把怪物沿路徑往回推。
+    monster.pos = retreatAlongPath(monster.pos, applyBossResist(KNOCKBACK_DISTANCE_FP, monster.isBoss));
+  }
+  return kind;
 }
 
 /**
@@ -356,6 +446,7 @@ export function tryAttack(
   monsters: readonly Monster[],
   allTowers: readonly Tower[],
   runeTotems: readonly RuneTotem[],
+  tick: number,
 ): CombatEvent[] {
   const def = baseTowerDef(tower);
   tower.ticksSinceLastAttack += 1;
@@ -363,13 +454,25 @@ export function tryAttack(
   const target = findTarget(monsters, tower, def);
   if (!target) return [];
   tower.ticksSinceLastAttack = 0;
-  const damage = towerElementalDamage(tower, effectiveDamage(tower, runeTotems), target.element);
-  target.hp -= damage;
+  const rawDamage = towerElementalDamage(tower, effectiveDamage(tower, runeTotems), target.element);
+  const { dealt, absorbed } = dealDamage(target, rawDamage);
+  const status = applyStatusOnHit(tower, target, tick, dealt + absorbed);
+  // 位置要在擊退套用之後才算,不然飄動傷害數字會顯示在怪物被推走「之前」的舊位置。
   const targetPosFp = worldPositionFp(target.pos);
-  const events: CombatEvent[] = [{ monsterId: target.id, xFp: targetPosFp.xFp, yFp: targetPosFp.yFp, damage }];
+  const events: CombatEvent[] = [
+    {
+      monsterId: target.id,
+      xFp: targetPosFp.xFp,
+      yFp: targetPosFp.yFp,
+      damage: dealt,
+      status,
+      absorbedByShield: absorbed > 0 ? absorbed : undefined,
+    },
+  ];
 
   // splash 路線:主目標旁邊 SPLASH_RANGE_FP 定點數距離內的其他怪物也各自挨一下折扣傷害
-  // (一樣用距離平方比較,不用 sqrt,決定性不受影響)。
+  // (一樣用距離平方比較,不用 sqrt,決定性不受影響)。次要目標同樣有機會被附加狀態——
+  // statusRoll 吃 (tick, towerId, monsterId),每隻怪的判定各自獨立,不會全部一起中或一起不中。
   if (tower.level >= UPGRADE_PATH_LEVEL && tower.upgradePath === 'splash') {
     const splashRangeSq = SPLASH_RANGE_FP * SPLASH_RANGE_FP;
     for (const m of monsters) {
@@ -379,13 +482,22 @@ export function tryAttack(
       const dx = targetPosFp.xFp - xFp;
       const dy = targetPosFp.yFp - yFp;
       if (dx * dx + dy * dy > splashRangeSq) continue;
-      const splashDamage = towerElementalDamage(
+      const splashRaw = towerElementalDamage(
         tower,
         Math.floor((effectiveDamage(tower, runeTotems) * SPLASH_DAMAGE_PERCENT) / 100),
         m.element,
       );
-      m.hp -= splashDamage;
-      events.push({ monsterId: m.id, xFp, yFp, damage: splashDamage });
+      const splashResult = dealDamage(m, splashRaw);
+      const splashStatus = applyStatusOnHit(tower, m, tick, splashResult.dealt + splashResult.absorbed);
+      const posAfter = worldPositionFp(m.pos);
+      events.push({
+        monsterId: m.id,
+        xFp: posAfter.xFp,
+        yFp: posAfter.yFp,
+        damage: splashResult.dealt,
+        status: splashStatus,
+        absorbedByShield: splashResult.absorbed > 0 ? splashResult.absorbed : undefined,
+      });
     }
   }
 

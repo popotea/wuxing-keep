@@ -1,8 +1,9 @@
-// 怪物與波次。波次全部是寫死的腳本(數量/血量/速度/賞金都是常數),
+// 怪物與波次。固定模式的波次全部是寫死的腳本(數量/血量/速度/賞金都是常數),
 // 完全不需要亂數——省掉「RNG 演算法在不同瀏覽器要跑出一樣結果」這個額外風險。
+// 無限模式的「隨機」內容一律走 waveHash() 這個純雜湊,同樣不用 Math.random()。
 
 import { ALL_ELEMENTS, type Element } from './elements';
-import { createStartPos, PATH_COUNT, type PathPos } from './map';
+import { createStartPos, pathCount, type PathPos } from './map';
 
 /**
  * 移動類型(參考 Bloons TD 的 flying/camo 分類概念,簡化成互斥的三選一,不是獨立疊加的標記):
@@ -11,6 +12,56 @@ import { createStartPos, PATH_COUNT, type PathPos } from './map';
  * 這個分類獨立於 Element(五行傷害倍率用),兩者互不影響。
  */
 export type MoveType = 'ground' | 'air' | 'water';
+
+/**
+ * 怪物特殊能力(2026-07-23 加的):讓「這波該怎麼打」不只看屬性跟移動類型,還要看牠帶什麼能力。
+ * 互斥的六選一(含 'none'),不做可疊加的標記組合——組合爆炸對平衡跟 UI 都不划算。
+ * - healer  治療兵:定期回復周圍同伴的血,不先解決牠的話周圍怪物打不死
+ * - shield  護盾兵:身上有一層獨立的護盾值,要先打穿護盾才會扣本體血量
+ * - splitter 分裂怪:死亡時分裂成兩隻小怪(小怪不會再分裂),清場數量會暴增
+ * - aura    急行光環:提升周圍同伴的移動速度,自己不快
+ * - bomber  爆破兵:漏怪時扣的生命比一般怪多,優先度最高
+ */
+export type MonsterAbility = 'none' | 'healer' | 'shield' | 'splitter' | 'aura' | 'bomber';
+
+export const ABILITY_NAMES: Record<MonsterAbility, string> = {
+  none: '無',
+  healer: '治療兵',
+  shield: '護盾兵',
+  splitter: '分裂怪',
+  aura: '急行光環',
+  bomber: '爆破兵',
+};
+
+export const ABILITY_DESCRIPTIONS: Record<MonsterAbility, string> = {
+  none: '',
+  healer: '定期回復周圍同伴血量',
+  shield: '有一層護盾,要先打穿才會扣血',
+  splitter: '死亡時分裂成兩隻小怪',
+  aura: '提升周圍同伴的移動速度',
+  bomber: '漏掉的話會扣比較多生命',
+};
+
+/** 治療兵:每隔這麼多 tick 回復一次,範圍內每隻同伴回復自己最大血量的這個百分比。 */
+export const HEALER_INTERVAL_TICKS = 30;
+export const HEALER_RANGE_FP = 2600;
+export const HEALER_HEAL_PERCENT = 6;
+
+/** 護盾兵:護盾值是自己最大血量的這個百分比。護盾扣完不會再生。 */
+export const SHIELD_HP_PERCENT = 60;
+
+/** 分裂怪:死亡時分裂出這麼多隻,每隻繼承最大血量的這個百分比;分裂出來的小怪不會再分裂。 */
+export const SPLITTER_CHILD_COUNT = 2;
+export const SPLITTER_CHILD_HP_PERCENT = 35;
+/** 小怪的賞金是母體的這個百分比,避免分裂怪變成賞金印鈔機。 */
+export const SPLITTER_CHILD_BOUNTY_PERCENT = 25;
+
+/** 急行光環:範圍內同伴(不含自己)的移動速度提升這個百分比。 */
+export const AURA_RANGE_FP = 2800;
+export const AURA_SPEED_BONUS_PERCENT = 30;
+
+/** 爆破兵:漏掉時扣這麼多生命(一般怪是 1)。 */
+export const BOMBER_LIVES_COST = 3;
 
 export interface Monster {
   id: number;
@@ -22,10 +73,30 @@ export interface Monster {
   pos: PathPos;
   /** 這隻怪屬於第幾波(0-based),加碼波判定「整波清光了沒」要用 */
   waveIndex: number;
-  /** 首領波的怪(目前只有最後一波),UI 用來畫得比較大隻/加標示,純視覺,不影響戰鬥數值判定。 */
+  /** 首領波的怪(目前只有最後一波),UI 用來畫得比較大隻/加標示,也影響控制類狀態的抗性。 */
   isBoss: boolean;
   /** 移動類型,影響哪些塔打得到、陷阱有沒有效(見 src/sim/towers.ts 的 canTargetMoveType())。 */
   moveType: MoveType;
+  /** 特殊能力(見 MonsterAbility)。'none' 代表一般怪。 */
+  ability: MonsterAbility;
+  /** 護盾兵專用:目前剩餘護盾值,扣完歸零不再生;非護盾兵一律是 0。 */
+  shieldHp: number;
+  /** 護盾兵專用:護盾上限,純顯示用(畫護盾條要知道比例)。 */
+  maxShieldHp: number;
+  /** 治療兵專用:距離上次治療過了幾 tick。 */
+  ticksSinceHeal: number;
+  /** 分裂怪分裂出來的小怪標記為 true,不會再分裂(避免無限分裂)。 */
+  isSplitChild: boolean;
+  // ---- 元素異常狀態(見 statuses.ts)。用扁平欄位而不是陣列/Map,
+  // clone 跟 computeChecksum 的序列化都比較單純,也不會有鍵序問題。
+  statusBurnTicks: number;
+  /** 灼燒每次跳的傷害(觸發當下那一擊傷害的百分比,見 statuses.ts 的 BURN_DAMAGE_PERCENT)。 */
+  statusBurnDamage: number;
+  /** 距離上次灼燒跳傷害過了幾 tick。 */
+  statusBurnElapsed: number;
+  statusChillTicks: number;
+  statusEntangleTicks: number;
+  statusSunderTicks: number;
 }
 
 export interface WaveDef {
@@ -41,6 +112,8 @@ export interface WaveDef {
   isBoss?: boolean;
   /** 移動類型(可選,不填就是 'ground')。 */
   moveType?: MoveType;
+  /** 特殊能力(可選,不填就是 'none')。 */
+  ability?: MonsterAbility;
 }
 
 export const WAVE_INTERVAL_TICKS = 400; // 20 tick/秒 * 20 秒
@@ -49,11 +122,15 @@ export const SPAWN_INTERVAL_TICKS = 20; // 同波怪物間隔 1 秒
 // 數值都是先求「能玩」的佔位平衡,真正平衡是 Phase 5 的事。2026-07-16 玩家實測反應金幣
 // 累積太快、根本花不完,把賞金整批調降約 30%(呼應同一次調整裡塔/陷阱/圖騰的漲價跟資源建築
 // 收入調降,三個方向一起下手,不是單靠其中一個)。
+//
+// 2026-07-23 加了怪物特殊能力(ability):固定 8 波刻意「由淺入深」逐波引入一種新能力,
+// 讓玩家一次只要應付一個新機制,不是一開始就全部混在一起。
 export const WAVES: readonly WaveDef[] = [
   // 水路怪:出場時路徑會浮現流水視覺效果(GameScene.ts),只有非火屬性的塔打得到(水克火)。
   { element: 'water', count: 6, hp: 40, speedFp: 60, bounty: 7, moveType: 'water' },
   { element: 'fire', count: 6, hp: 55, speedFp: 65, bounty: 8 },
-  { element: 'wood', count: 8, hp: 70, speedFp: 60, bounty: 10 },
+  // 第 3 波引入護盾兵:數量不多,讓玩家第一次體會「打不動」是因為有護盾,不是塔太弱。
+  { element: 'wood', count: 8, hp: 70, speedFp: 60, bounty: 10, ability: 'shield' },
   // 加碼波:血少速度快,限時內清光才拿得到額外金幣,清不完也不會有懲罰。
   {
     element: 'earth',
@@ -64,10 +141,12 @@ export const WAVES: readonly WaveDef[] = [
     bonusClearWithinTicks: 200,
     bonusGold: 70,
   },
-  { element: 'earth', count: 8, hp: 90, speedFp: 55, bounty: 11 },
+  // 第 5 波引入分裂怪:血量調低一點,因為實際要打的總量是分裂後的兩倍多。
+  { element: 'earth', count: 8, hp: 70, speedFp: 55, bounty: 11, ability: 'splitter' },
   // 飛行怪:陷阱打不到,只有土屬性以外的塔打得到(土是純地面系,搆不到天上)。
   { element: 'metal', count: 10, hp: 110, speedFp: 60, bounty: 13, moveType: 'air' },
-  { element: 'fire', count: 12, hp: 130, speedFp: 70, bounty: 15 },
+  // 第 7 波引入治療兵:整波都會互相治療,逼玩家把火力集中而不是平均分散。
+  { element: 'fire', count: 12, hp: 130, speedFp: 70, bounty: 15, ability: 'healer' },
   // 最終首領波:單隻厚血慢速的收尾挑戰,賞金給得比較多當作全破獎勵的一部分。
   { element: 'earth', count: 1, hp: 1200, speedFp: 35, bounty: 105, isBoss: true },
 ];
@@ -114,11 +193,13 @@ export interface SpawnEvent {
   waveIndex: number;
   isBoss: boolean;
   moveType: MoveType;
+  ability: MonsterAbility;
 }
 
 /** 純函式:給定 tick,回傳這一 tick 該生出的怪物。同一個 tick 在哪台機器算都是同一個答案。 */
 export function getSpawnEventsForTick(tick: number): SpawnEvent[] {
   const events: SpawnEvent[] = [];
+  const pathTotal = pathCount();
   for (let i = 0; i < WAVES.length; i++) {
     const wave = WAVES[i];
     const waveStartTick = i * WAVE_INTERVAL_TICKS;
@@ -130,11 +211,12 @@ export function getSpawnEventsForTick(tick: number): SpawnEvent[] {
           hp: wave.hp,
           speedFp: wave.speedFp,
           bounty: wave.bounty,
-          // 同一波怪物輪流分配路徑,逼玩家同時顧好兩條路,而不是把火力全堆在一條線上。
-          pathId: j % PATH_COUNT,
+          // 同一波怪物輪流分配路徑,逼玩家同時顧好每條路,而不是把火力全堆在一條線上。
+          pathId: j % pathTotal,
           waveIndex: i,
           isBoss: wave.isBoss ?? false,
           moveType: wave.moveType ?? 'ground',
+          ability: wave.ability ?? 'none',
         });
       }
     }
@@ -143,6 +225,7 @@ export function getSpawnEventsForTick(tick: number): SpawnEvent[] {
 }
 
 export function createMonster(id: number, spawn: SpawnEvent): Monster {
+  const shieldHp = spawn.ability === 'shield' ? Math.floor((spawn.hp * SHIELD_HP_PERCENT) / 100) : 0;
   return {
     id,
     element: spawn.element,
@@ -154,6 +237,54 @@ export function createMonster(id: number, spawn: SpawnEvent): Monster {
     waveIndex: spawn.waveIndex,
     isBoss: spawn.isBoss,
     moveType: spawn.moveType,
+    ability: spawn.ability,
+    shieldHp,
+    maxShieldHp: shieldHp,
+    ticksSinceHeal: 0,
+    isSplitChild: false,
+    statusBurnTicks: 0,
+    statusBurnDamage: 0,
+    statusBurnElapsed: 0,
+    statusChillTicks: 0,
+    statusEntangleTicks: 0,
+    statusSunderTicks: 0,
+  };
+}
+
+/**
+ * 分裂怪死亡時生出來的小怪:繼承母體的位置/屬性/移動類型,血量/賞金打折,而且
+ * `isSplitChild` 標記成 true——小怪自己不會再分裂,避免一隻怪把場面炸成無限指數成長。
+ * `childIndex` 只用來讓兩隻小怪的出生位置錯開一點點,不然牠們會完全重疊看起來只有一隻。
+ */
+export function createSplitChild(id: number, parent: Monster, childIndex: number): Monster {
+  const hp = Math.max(1, Math.floor((parent.maxHp * SPLITTER_CHILD_HP_PERCENT) / 100));
+  return {
+    id,
+    element: parent.element,
+    hp,
+    maxHp: hp,
+    speedFp: parent.speedFp,
+    bounty: Math.max(1, Math.floor((parent.bounty * SPLITTER_CHILD_BOUNTY_PERCENT) / 100)),
+    pos: {
+      pathId: parent.pos.pathId,
+      segmentIndex: parent.pos.segmentIndex,
+      // 往回錯開,不會往前跳(往前等於免費前進,對玩家不公平)。夾在 0 以上避免變成負的。
+      distanceIntoSegmentFp: Math.max(0, parent.pos.distanceIntoSegmentFp - childIndex * 250),
+    },
+    waveIndex: parent.waveIndex,
+    isBoss: false,
+    moveType: parent.moveType,
+    ability: 'none',
+    shieldHp: 0,
+    maxShieldHp: 0,
+    ticksSinceHeal: 0,
+    isSplitChild: true,
+    statusBurnTicks: 0,
+    statusBurnDamage: 0,
+    statusBurnElapsed: 0,
+    statusChillTicks: 0,
+    statusEntangleTicks: 0,
+    statusSunderTicks: 0,
   };
 }
 
@@ -180,6 +311,15 @@ const ENDLESS_HP_GROWTH_PERCENT = 12;
 /** 速度每波 +3%,但封頂在基準值的 160%,避免無限模式後期怪物快到玩家反應不過來/定點數運算異常。 */
 const ENDLESS_SPEED_GROWTH_PERCENT = 3;
 const ENDLESS_SPEED_GROWTH_CAP_PERCENT = 60;
+/**
+ * 特殊能力從第幾波開始出現(0-based)。前幾波刻意保持乾淨,讓玩家先熟悉基本節奏,
+ * 跟固定模式「由淺入深逐波引入」的設計方向一致。
+ */
+const ENDLESS_ABILITY_START_WAVE = 3;
+/** 非首領波出現特殊能力的機率(百分比,靠 waveHash 決定,不是 Math.random)。 */
+const ENDLESS_ABILITY_CHANCE_PERCENT = 45;
+/** 無限模式會抽到的能力池(不含 'none','none' 由上面的機率決定)。 */
+const ENDLESS_ABILITY_POOL: readonly MonsterAbility[] = ['shield', 'splitter', 'healer', 'aura', 'bomber'];
 
 /**
  * 首領波造型三選一,靠 waveHash 決定(見下面 generateEndlessWave):
@@ -203,6 +343,7 @@ function waveHash(waveIndex: number, salt: number): number {
 interface EndlessArchetype {
   element: Element;
   moveType: MoveType;
+  ability: MonsterAbility;
 }
 
 interface EndlessWave {
@@ -227,7 +368,8 @@ function generateEndlessWave(waveIndex: number): EndlessWave {
   const isBoss = waveIndex > 0 && (waveIndex + 1) % ENDLESS_BOSS_INTERVAL === 0;
   if (isBoss) {
     const element = ALL_ELEMENTS[waveHash(waveIndex, 1) % ALL_ELEMENTS.length];
-    const archetypes: readonly EndlessArchetype[] = [{ element, moveType: 'ground' }];
+    // 首領本身不帶特殊能力——牠已經有血量/體型上的壓迫感,再疊能力會變成單點無解。
+    const archetypes: readonly EndlessArchetype[] = [{ element, moveType: 'ground', ability: 'none' }];
     const bossTypeRoll = waveHash(waveIndex, 3) % 3;
     if (bossTypeRoll === 1) {
       // group:三隻一組的首領小隊,單隻血量沒有 single 型誇張,但同時要分散顧三個目標,
@@ -273,7 +415,12 @@ function generateEndlessWave(waveIndex: number): EndlessWave {
     // 各約 10% 機率出現空/水路怪,製造變化,其餘都是一般地面怪。
     const moveRoll = waveHash(waveIndex, 20 + i) % 10;
     const moveType: MoveType = moveRoll === 0 ? 'air' : moveRoll === 1 ? 'water' : 'ground';
-    archetypes.push({ element, moveType });
+    // 特殊能力:前幾波不出現,之後依機率抽一種。同一波混兩種元素時兩邊各自抽,可能不一樣。
+    let ability: MonsterAbility = 'none';
+    if (waveIndex >= ENDLESS_ABILITY_START_WAVE && waveHash(waveIndex, 30 + i) % 100 < ENDLESS_ABILITY_CHANCE_PERCENT) {
+      ability = ENDLESS_ABILITY_POOL[waveHash(waveIndex, 40 + i) % ENDLESS_ABILITY_POOL.length];
+    }
+    archetypes.push({ element, moveType, ability });
   }
 
   const count = Math.min(
@@ -289,6 +436,7 @@ export function getEndlessSpawnEventsForTick(tick: number): SpawnEvent[] {
   const waveIndex = Math.floor(tick / WAVE_INTERVAL_TICKS);
   const waveStartTick = waveIndex * WAVE_INTERVAL_TICKS;
   const wave = generateEndlessWave(waveIndex);
+  const pathTotal = pathCount();
   const events: SpawnEvent[] = [];
   for (let j = 0; j < wave.count; j++) {
     const spawnTick = waveStartTick + j * SPAWN_INTERVAL_TICKS;
@@ -299,10 +447,11 @@ export function getEndlessSpawnEventsForTick(tick: number): SpawnEvent[] {
       hp: wave.hp,
       speedFp: wave.speedFp,
       bounty: wave.bounty,
-      pathId: j % PATH_COUNT,
+      pathId: j % pathTotal,
       waveIndex,
       isBoss: wave.isBoss,
       moveType: archetype.moveType,
+      ability: archetype.ability,
     });
   }
   return events;
@@ -319,11 +468,16 @@ export function ticksUntilNextWaveEndless(tick: number): number {
   return nextWaveIndex * WAVE_INTERVAL_TICKS - tick;
 }
 
-/** 無限模式版的下一波預覽(給 HUD 顯示用):只給主要元素跟是否首領波,不細列混波的第二種元素。 */
+/** 無限模式版的下一波預覽(給 HUD 顯示用):只給主要元素/是否首領波/主要能力,不細列混波的第二種元素。 */
 export function upcomingWaveDefEndless(
   tick: number,
-): { element: Element; isBoss: boolean; bossType?: EndlessBossType } {
+): { element: Element; isBoss: boolean; bossType?: EndlessBossType; ability: MonsterAbility } {
   const nextWaveIndex = Math.floor(tick / WAVE_INTERVAL_TICKS) + 1;
   const wave = generateEndlessWave(nextWaveIndex);
-  return { element: wave.archetypes[0].element, isBoss: wave.isBoss, bossType: wave.bossType };
+  return {
+    element: wave.archetypes[0].element,
+    isBoss: wave.isBoss,
+    bossType: wave.bossType,
+    ability: wave.archetypes[0].ability,
+  };
 }

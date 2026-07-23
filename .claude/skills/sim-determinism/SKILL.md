@@ -36,15 +36,21 @@ description: 修改 src/sim/ 底下任何模擬邏輯(simulation.ts / towers.ts 
 | `gold`(每人金幣) | ✅ | ✅ **必須排序 key 再序列化** |
 | `waveTickOffset`(呼叫下一波) | ✅ | ✅ 容易漏掉——表面上像旗標,但它會變 |
 | `pathLives`(個人生命模式) | ✅ | ✅ |
+| `skillCooldowns`(主動技能冷卻) | ✅ | ✅ **key 一樣要排序** |
 | 陷阱的 `level` | ✅ | ✅ |
 | 資源建築的 `ticksSinceLastIncome` | ✅ | ✅ |
 | 塔的 `upgradePath` | ✅ | ✅ |
+| 塔的 `hasteTicks`(戰吼 buff) | ✅ | ✅ |
 | 塔的 `secondElement` | ❌(蓋塔定案) | ✅ 仍要算入(不存在時用空字串佔位) |
+| 怪物的 `shieldHp` / `ticksSinceHeal` | ✅ | ✅ |
+| 怪物的六個 `status*` 欄位 | ✅ | ✅ **全部都要**,漏一個要等狀態造成血量差異才會爆 |
 | `endlessMode` | ❌ | ❌ |
 | `difficultyPercent` | ❌ | ❌ |
 | `playerElements` | ❌ | ❌ |
 | `playerCountScalePercent` | ❌ | ❌ |
 | `pathOwners` / `individualLivesMode` | ❌ | ❌ |
+| `mapId` | ❌ | ❌(但見下面「多地圖」的陷阱) |
+| `combatEvents` / `skillCasts` | 每 tick 清空 | ❌ 純 UI 事件 |
 
 > 最常見的踩雷:新欄位「感覺像設定」就沒算入,但實際上某個指令會改它。先確認有沒有任何 `apply*()` 函式會寫它。
 
@@ -62,6 +68,22 @@ description: 修改 src/sim/ 底下任何模擬邏輯(simulation.ts / towers.ts 
 - 路徑格 vs 非路徑格的規則要明確(陷阱只能路徑格,其餘只能非路徑格)
 - 動態欄位記得加進 `computeChecksum`
 - `GameScene.ts` 那邊如果新增 id-keyed 的 `Text`/`Image`,要一併加進 `resetCamera()` 的清理清單
+
+## 多地圖:模組層級快取的陷阱
+
+`map.ts` 的地圖資料是模組層級的快取(`setActiveMap(mapId)`),不是每次呼叫都帶參數。決定性靠「所有機器都在 `createInitialState()` 用同一個 mapId 設定一次」成立。
+
+⚠️ **任何不走 `createInitialState()` 建立 state 的路徑都要自己補呼叫 `setActiveMap(state.mapId)`**,否則那台機器會拿舊地圖的路徑算,下一步移動就跑飛:
+
+- `lockstep.ts` 的 `HostLockstepEngine` 建構子 `resume` 分支(換房主接手)
+- `lockstep.ts` 的 `ClientLockstepEngine.applyResync()`(重連客戶端整份換 state)
+- `main.ts` 開局時要在 `gameRenderer.resetCamera()` **之前**呼叫(`resetCamera()` 依活躍地圖重畫靜態層)
+
+另外 `PATH_COUNT` 已經不是常數了(每張地圖路徑數可能不同),要用 `pathCount()`。
+
+## 統一的扣血入口
+
+**所有傷害來源都要走 `towers.ts` 的 `dealDamage()`**(塔直擊/splash、灼燒跳傷、隕石技能),它負責破甲增傷 + 護盾吸收。自己寫 `monster.hp -= x` 會漏掉這兩層,造成「有的傷害吃破甲有的不吃」這種很難查的不一致。
 
 ## 「現在算第幾波」一律用 `effectiveWaveTick()`
 

@@ -3,9 +3,10 @@
 
 import Phaser from 'phaser';
 import { ELEMENT_NAMES, GENERATED_BY, type Element } from '../sim/elements';
-import { FP_SCALE, GRID_HEIGHT, GRID_WIDTH, inBounds, isOnPath, PATHS, worldPositionFp } from '../sim/map';
+import { FP_SCALE, GRID_HEIGHT, GRID_WIDTH, inBounds, isOnPath, paths, worldPositionFp } from '../sim/map';
 import type { Monster } from '../sim/monsters';
 import { RUNE_TOTEM_RANGE_FP } from '../sim/placements';
+import { STATUS_NAMES, type StatusKind } from '../sim/statuses';
 import type { SimulationState } from '../sim/simulation';
 import { TOWER_DEFS, UPGRADE_PATH_LEVEL, type CombatEvent, type Tower, type UpgradePath } from '../sim/towers';
 import { isMultiplayer, ownerColorHex } from './playerColors';
@@ -35,6 +36,44 @@ const ELEMENT_COLORS: Record<Element, number> = {
   water: 0x3a7bd5,
   fire: 0xe05a2b,
   earth: 0xa67c3d,
+};
+
+/**
+ * 怪物中了異常狀態時整隻染上的顏色(見 sim/statuses.ts)。同時中多個狀態時只顯示一種——
+ * 依「玩家最需要一眼看到的」排序:纏繞(完全停住)> 冰緩(明顯變慢)> 破甲(輸出翻倍的機會)
+ * > 灼燒(持續掉血,血條本來就看得到)。沒有狀態回傳 null,呼叫端要記得把 tint 清回白色。
+ */
+function statusTintColor(m: Monster): number | null {
+  if (m.statusEntangleTicks > 0) return 0x7ee08a; // 纏繞:藤蔓綠
+  if (m.statusChillTicks > 0) return 0x8ecdff; // 冰緩:冰藍
+  if (m.statusSunderTicks > 0) return 0xffd27e; // 破甲:護甲碎裂的暖黃
+  if (m.statusBurnTicks > 0) return 0xff9b6b; // 灼燒:火橘
+  return null;
+}
+
+/** 飄動狀態名稱的文字顏色,跟 statusTintColor 的染色是同一套配色,兩邊看到的顏色一致。 */
+const STATUS_TEXT_COLORS: Record<StatusKind, string> = {
+  burn: '#ff9b6b',
+  chill: '#8ecdff',
+  entangle: '#7ee08a',
+  sunder: '#ffd27e',
+  knockback: '#ffffff',
+};
+
+/** 主動技能施放特效的顏色(見 sim/skills.ts)。 */
+const SKILL_EFFECT_COLORS: Record<string, number> = {
+  meteor: 0xff7a3c, // 隕石:火橘
+  frost: 0x8ecdff, // 寒冰:冰藍
+  warcry: 0xffe98a, // 戰吼:增益金
+};
+
+/** 有特殊能力的怪身上多畫一圈環的顏色(見 sim/monsters.ts 的 MonsterAbility);一般怪不畫。 */
+const ABILITY_RING_COLORS: Partial<Record<Monster['ability'], number>> = {
+  healer: 0x7ee08a, // 治療兵:回復綠
+  shield: 0x6ec6ff, // 護盾兵:護盾藍
+  splitter: 0xc98aff, // 分裂怪:分裂紫
+  aura: 0xffe98a, // 急行光環:加速黃
+  bomber: 0xff6b6b, // 爆破兵:警告紅
 };
 
 // 地圖放大後空地變多,灑一點裝飾物(樹/草叢/石頭/花/小動物)打破大片同色草地的單調感——
@@ -151,6 +190,13 @@ export class GameScene extends Phaser.Scene {
   private pointerInsideCanvas = false;
   /** 小地圖實際使用的縮小倍率,每次 applyViewportZoom() 依畫布尺寸重算,見 MINIMAP_MAX_CANVAS_RATIO。 */
   private minimapScale = MINIMAP_SCALE_MAX;
+  /**
+   * 靜態層(地板/路徑/描邊/格線/裝飾物)建立出來的所有 GameObject。
+   * 這些東西原本只在 create() 畫一次就不管了,但**多地圖之後每場對局的路徑形狀可能不一樣**,
+   * 換地圖就得整個重畫——追蹤起來才有辦法在重畫前把上一張地圖的殘留物件清乾淨
+   * (不清的話新舊路徑會疊在一起,畫面上看得到兩張地圖的路徑)。
+   */
+  private staticObjects: Phaser.GameObjects.GameObject[] = [];
 
   constructor() {
     super('game');
@@ -297,7 +343,7 @@ export class GameScene extends Phaser.Scene {
     g.fillRect(ox, oy, w, h);
 
     g.fillStyle(0x6b5541, 0.9);
-    for (const waypoints of PATHS) {
+    for (const waypoints of paths()) {
       for (let i = 0; i < waypoints.length - 1; i++) {
         const [ax, ay] = waypoints[i];
         const [bx, by] = waypoints[i + 1];
@@ -440,6 +486,7 @@ export class GameScene extends Phaser.Scene {
     if (this.dynamicLayer) {
       this.drawDynamicLayer(state);
       for (const event of state.combatEvents) this.spawnDamageNumber(event);
+      for (const cast of state.skillCasts) this.spawnSkillEffect(cast);
     }
     if (this.previewLayer) this.drawPreview();
   }
@@ -448,15 +495,20 @@ export class GameScene extends Phaser.Scene {
   private spawnDamageNumber(event: CombatEvent): void {
     const px = (event.xFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
     const py = (event.yFp / FP_SCALE) * TILE_PX + TILE_PX / 2;
+    // 被護盾吸收掉的那部分用藍色另外標出來,玩家才知道「傷害有進去,只是被護盾擋了」,
+    // 不會誤以為自己的塔打不動這隻怪(見 sim/monsters.ts 的 shield 能力)。
+    const label = event.absorbedByShield ? `-${event.damage} (盾${event.absorbedByShield})` : `-${event.damage}`;
+    const color = event.absorbedByShield ? '#8ecdff' : event.status === 'burn' ? '#ff9b6b' : '#ffe98a';
     const text = this.add
-      .text(px, py, `-${event.damage}`, {
+      .text(px, py, label, {
         fontSize: `${14 * SCALE}px`,
         fontStyle: 'bold',
-        color: '#ffe98a',
+        color,
         stroke: '#000000',
         strokeThickness: 3,
       })
-      .setOrigin(0.5);
+      .setOrigin(0.5)
+      .setDepth(3);
     this.tweens.add({
       targets: text,
       y: py - 24 * SCALE,
@@ -464,6 +516,61 @@ export class GameScene extends Phaser.Scene {
       duration: 650,
       ease: 'Cubic.Out',
       onComplete: () => text.destroy(),
+    });
+
+    // 這一擊順便附加了異常狀態的話,另外飄一個狀態名稱——不然玩家完全感受不到這個機制存在
+    // (灼燒不另外飄,它每次跳傷都已經是橘色數字了,再飄一次會洗版)。
+    if (event.status && event.status !== 'burn') {
+      const statusText = this.add
+        .text(px, py - 10 * SCALE, STATUS_NAMES[event.status], {
+          fontSize: `${11 * SCALE}px`,
+          fontStyle: 'bold',
+          color: STATUS_TEXT_COLORS[event.status],
+          stroke: '#000000',
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5)
+        .setDepth(3);
+      this.tweens.add({
+        targets: statusText,
+        y: py - 32 * SCALE,
+        alpha: 0,
+        duration: 800,
+        ease: 'Cubic.Out',
+        onComplete: () => statusText.destroy(),
+      });
+    }
+  }
+
+  /**
+   * 主動技能施放特效(見 sim/skills.ts):在施放中心畫一個擴張淡出的圓,顏色依技能區分。
+   * 刻意不做成長駐圖層——技能是瞬間事件,特效放完就該消失,用 tween 自己銷毀最單純,
+   * 跟飄動傷害數字走同一套模式(不需要 id-keyed 追蹤,也就不用管 resetCamera 的清理)。
+   */
+  private spawnSkillEffect(cast: SimulationState['skillCasts'][number]): void {
+    const cx = cast.x * TILE_PX + TILE_PX / 2;
+    const cy = cast.y * TILE_PX + TILE_PX / 2;
+    const radius = (cast.rangeFp / FP_SCALE) * TILE_PX;
+    const color = SKILL_EFFECT_COLORS[cast.skillId] ?? 0xffe98a;
+
+    const ring = this.add.graphics().setDepth(2.5);
+    ring.lineStyle(3 * SCALE, color, 0.9);
+    ring.strokeCircle(cx, cy, radius);
+    ring.fillStyle(color, 0.18);
+    ring.fillCircle(cx, cy, radius);
+    // 從施放中心「炸開」的感覺:從小圓放大到實際範圍再淡出。
+    ring.setScale(0.35);
+    // Graphics 的縮放是以 (0,0) 為原點,要先把原點移到圓心才不會一邊放大一邊往右下飄。
+    ring.setPosition(cx - cx * 0.35, cy - cy * 0.35);
+    this.tweens.add({
+      targets: ring,
+      scale: 1,
+      x: 0,
+      y: 0,
+      alpha: 0,
+      duration: 520,
+      ease: 'Cubic.Out',
+      onComplete: () => ring.destroy(),
     });
   }
 
@@ -481,6 +588,10 @@ export class GameScene extends Phaser.Scene {
    */
   resetCamera(): void {
     this.cameras.main.setScroll(0, 0);
+    // 多地圖:每場新對局的地圖可能不一樣,靜態層(地板/路徑/裝飾物)要照新地圖整個重畫。
+    // main.ts 一定是在引擎建立完(createInitialState 已經呼叫過 setActiveMap)之後才呼叫
+    // resetCamera(),所以這裡讀到的 isOnPath()/paths() 已經是新地圖的資料。
+    this.rebuildStaticLayer();
     for (const sprite of this.towerSprites.values()) sprite.destroy();
     this.towerSprites.clear();
     for (const sprite of this.monsterSprites.values()) sprite.destroy();
@@ -497,15 +608,33 @@ export class GameScene extends Phaser.Scene {
     this.totemLevelTexts.clear();
   }
 
+  /** 把靜態層建立的物件記下來,重畫地圖時才清得掉(見 staticObjects / rebuildStaticLayer)。 */
+  private trackStatic<T extends Phaser.GameObjects.GameObject>(obj: T): T {
+    this.staticObjects.push(obj);
+    return obj;
+  }
+
+  /**
+   * 換地圖後重畫整個靜態層。**必須在 map.ts 的 setActiveMap() 已經切好之後才呼叫**,
+   * 否則畫出來的還是上一張地圖的路徑(isOnPath()/paths() 都是讀模組層級的活躍地圖)。
+   * 由 resetCamera() 在每場新對局開始時呼叫。
+   */
+  private rebuildStaticLayer(): void {
+    for (const obj of this.staticObjects) obj.destroy();
+    this.staticObjects = [];
+    this.drawStaticLayer();
+    this.drawDecorations();
+  }
+
   private drawStaticLayer(): void {
-    const g = this.add.graphics();
+    const g = this.trackStatic(this.add.graphics());
     const mapWidthPx = GRID_WIDTH * TILE_PX;
     const mapHeightPx = GRID_HEIGHT * TILE_PX;
 
     // 有正式地板材質就整片鋪滿(材質已經做過 seamless tiling,TileSprite 重複貼不會有接縫);
     // 沒有就退回棋盤式雙色交錯畫法。地板先整片蓋住全部格子(含路徑格),路徑材質等等疊上去蓋掉。
     if (this.textures.exists(TILE_FLOOR_KEY)) {
-      this.add.tileSprite(0, 0, mapWidthPx, mapHeightPx, TILE_FLOOR_KEY).setOrigin(0, 0);
+      this.trackStatic(this.add.tileSprite(0, 0, mapWidthPx, mapHeightPx, TILE_FLOOR_KEY).setOrigin(0, 0));
     } else {
       for (let x = 0; x < GRID_WIDTH; x++) {
         for (let y = 0; y < GRID_HEIGHT; y++) {
@@ -523,9 +652,11 @@ export class GameScene extends Phaser.Scene {
       for (let x = 0; x < GRID_WIDTH; x++) {
         for (let y = 0; y < GRID_HEIGHT; y++) {
           if (!isOnPath(x, y)) continue;
-          this.add
-            .image(x * TILE_PX + TILE_PX / 2, y * TILE_PX + TILE_PX / 2, TILE_PATH_KEY)
-            .setDisplaySize(TILE_PX, TILE_PX);
+          this.trackStatic(
+            this.add
+              .image(x * TILE_PX + TILE_PX / 2, y * TILE_PX + TILE_PX / 2, TILE_PATH_KEY)
+              .setDisplaySize(TILE_PX, TILE_PX),
+          );
         }
       }
     } else {
@@ -545,7 +676,7 @@ export class GameScene extends Phaser.Scene {
     // 上面,才不會反而被蓋在圖片底下變成完全看不到。只有真的載入了材質圖才需要壓,棋盤格/純色
     // 填滿的備援畫法本來配色就偏暗,不用再疊一次。
     if (this.textures.exists(TILE_FLOOR_KEY) || this.textures.exists(TILE_PATH_KEY)) {
-      const terrainTint = this.add.graphics();
+      const terrainTint = this.trackStatic(this.add.graphics());
       terrainTint.fillStyle(0x4a4f3a, 0.3);
       terrainTint.fillRect(0, 0, mapWidthPx, mapHeightPx);
     }
@@ -578,7 +709,7 @@ export class GameScene extends Phaser.Scene {
 
   /** 路徑上畫箭頭標出怪物前進方向,起點畫綠色圈(出生處)、終點畫紅色叉(漏怪扣血處)。 */
   private drawPathDirection(g: Phaser.GameObjects.Graphics): void {
-    for (const waypoints of PATHS) {
+    for (const waypoints of paths()) {
       for (let i = 0; i < waypoints.length - 1; i++) {
         const [ax, ay] = waypoints[i];
         const [bx, by] = waypoints[i + 1];
@@ -626,7 +757,7 @@ export class GameScene extends Phaser.Scene {
 
   /** 非路徑格灑一點樹/草叢/石頭/花/小動物,地圖比較大之後大片空草地才不會太單調。畫一次不用每 tick 重畫。 */
   private drawDecorations(): void {
-    const g = this.add.graphics();
+    const g = this.trackStatic(this.add.graphics());
     const proceduralDrawers: Array<(cx: number, cy: number, seed: number) => void> = [
       (cx, cy) => this.drawDecorTree(g, cx, cy),
       (cx, cy) => this.drawDecorBush(g, cx, cy),
@@ -655,8 +786,10 @@ export class GameScene extends Phaser.Scene {
   /** AI 生圖沒有去背(方形草地背景),用圓形遮罩裁掉方角,看起來比較像貼在地上的裝飾物而不是一張照片。 */
   private placeDecorImage(key: string, cx: number, cy: number): void {
     const size = TILE_PX * 0.95; // 加大到接近整格,原本 0.72 太小不容易看清楚
-    const image = this.add.image(cx, cy, key).setDisplaySize(size, size);
-    const maskShape = this.make.graphics({}).fillStyle(0xffffff, 1).fillCircle(cx, cy, size / 2);
+    const image = this.trackStatic(this.add.image(cx, cy, key).setDisplaySize(size, size));
+    // 遮罩用的 Graphics 沒有加進 display list(this.make 不是 this.add),但換地圖重畫時
+    // 一樣要跟著銷毀,不然會累積成看不見的記憶體洩漏——所以也一併追蹤。
+    const maskShape = this.trackStatic(this.make.graphics({}).fillStyle(0xffffff, 1).fillCircle(cx, cy, size / 2));
     image.setMask(maskShape.createGeometryMask());
   }
 
@@ -826,7 +959,8 @@ export class GameScene extends Phaser.Scene {
   /** 列出某條路徑經過的所有格子座標,跟 map.ts 的 computePathTiles() 是同一套走法,只是這裡要分開算單一路徑。 */
   private tilesForPath(pathId: number): Array<[number, number]> {
     const tiles: Array<[number, number]> = [];
-    const waypoints = PATHS[pathId];
+    const waypoints = paths()[pathId];
+    if (!waypoints) return tiles; // 換地圖後路徑數可能變少,防禦性處理
     for (let i = 0; i < waypoints.length - 1; i++) {
       const [ax, ay] = waypoints[i];
       const [bx, by] = waypoints[i + 1];
@@ -1025,6 +1159,7 @@ export class GameScene extends Phaser.Scene {
       this.monsterSprites.get(m.id)?.destroy();
       this.monsterSprites.delete(m.id);
       this.drawMonster(g, px, py, m.element, hpRatio, m.isBoss);
+      this.drawMonsterStatusOverlay(g, m, px, py, bossMul);
       this.drawMonsterNameLabel(m.id, px, py, m.element, bossMul);
       return;
     }
@@ -1036,9 +1171,49 @@ export class GameScene extends Phaser.Scene {
     sprite
       .setTexture(key)
       .setPosition(px, py)
-      .setDisplaySize(TILE_PX * MONSTER_IMAGE_DISPLAY_RATIO * bossMul, TILE_PX * MONSTER_IMAGE_DISPLAY_RATIO * bossMul);
+      .setDisplaySize(TILE_PX * MONSTER_IMAGE_DISPLAY_RATIO * bossMul, TILE_PX * MONSTER_IMAGE_DISPLAY_RATIO * bossMul)
+      // 異常狀態直接把整隻怪染色,一眼就看得出「這隻中了什麼」——比在旁邊擺小圖示更好認,
+      // 而且不用多產一批狀態圖示美術。沒有狀態時要記得清回白色(不然會一直留著上一次的顏色)。
+      .setTint(statusTintColor(m) ?? 0xffffff);
     this.drawMonsterOverlay(g, px, py, hpRatio, m.isBoss, bossMul);
+    this.drawMonsterStatusOverlay(g, m, px, py, bossMul);
     this.drawMonsterNameLabel(m.id, px, py, m.element, bossMul);
+  }
+
+  /**
+   * 怪物身上的「狀態/能力」疊加資訊,圖片版跟幾何圖形備援版共用:
+   * - 護盾兵:血條上方再加一條藍色護盾條(獨立於血條,護盾扣完才輪到血量)
+   * - 有特殊能力的怪:身體外圍一圈能力代表色的環,不用點進 tooltip 也分得出哪隻要優先處理
+   * - 纏繞中:腳下畫一圈綠色藤蔓感的圓,強調牠「被定住不動」而不是走得慢
+   */
+  private drawMonsterStatusOverlay(
+    g: Phaser.GameObjects.Graphics,
+    m: Monster,
+    px: number,
+    py: number,
+    bossMul: number,
+  ): void {
+    if (m.maxShieldHp > 0 && m.shieldHp > 0) {
+      const ratio = Math.max(0, Math.min(1, m.shieldHp / m.maxShieldHp));
+      const barW = 16 * SCALE * bossMul;
+      const barH = 2 * SCALE;
+      const barY = py - 15.5 * SCALE * bossMul; // 疊在血條正上方
+      g.fillStyle(0x000000, 0.6);
+      g.fillRect(px - barW / 2, barY, barW, barH);
+      g.fillStyle(0x6ec6ff, 1);
+      g.fillRect(px - barW / 2, barY, barW * ratio, barH);
+    }
+
+    const abilityColor = ABILITY_RING_COLORS[m.ability];
+    if (abilityColor !== undefined) {
+      g.lineStyle(1.5 * SCALE, abilityColor, 0.85);
+      g.strokeCircle(px, py, 10 * SCALE * bossMul);
+    }
+
+    if (m.statusEntangleTicks > 0) {
+      g.lineStyle(2 * SCALE, 0x3a9d3a, 0.9);
+      g.strokeCircle(px, py + 6 * SCALE * bossMul, 7 * SCALE * bossMul);
+    }
   }
 
   /** 怪物頭上顯示元素名稱(金/木/水/火/土),圖片版跟幾何圖形版共用同一個畫法。 */

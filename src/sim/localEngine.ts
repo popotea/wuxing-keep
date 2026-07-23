@@ -4,6 +4,7 @@
 // 純粹是少了廣播/收指令的網路往返。
 
 import type { Element } from './elements';
+import { DEFAULT_MAP_ID } from './map';
 import { createInitialState, step, type SimulationState } from './simulation';
 import type { Action, PlayerId, TimedCommand } from '../net/protocol';
 
@@ -26,8 +27,16 @@ export class LocalEngine {
     difficultyPercent = 100,
     allowedElements: Element[] = ['metal', 'wood', 'water', 'fire', 'earth'],
     endlessMode = false,
+    mapId: string = DEFAULT_MAP_ID,
   ) {
-    this.state = createInitialState(seed, difficultyPercent, { [LOCAL_PLAYER_ID]: allowedElements }, endlessMode);
+    this.state = createInitialState(
+      seed,
+      difficultyPercent,
+      { [LOCAL_PLAYER_ID]: allowedElements },
+      endlessMode,
+      false, // 個人生命模式是多人連線限定,單人一律關閉
+      mapId,
+    );
   }
 
   start(): void {

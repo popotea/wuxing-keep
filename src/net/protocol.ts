@@ -2,6 +2,7 @@
 // 只負責「線路上會出現哪些訊息長什麼樣子」以及「怎麼安全地解析外來資料」。
 
 import { isElement, type Element } from '../sim/elements';
+import { isMapId } from '../sim/map';
 import type { SimulationState } from '../sim/simulation';
 
 export const PROTOCOL_VERSION = 1;
@@ -82,6 +83,8 @@ export interface StartMatchMsg {
   endlessMode: boolean;
   /** 個人生命模式:每條路徑各自的生命池子,漏怪只扣該路徑的血,不影響其他路徑。 */
   individualLivesMode: boolean;
+  /** 這場對局用哪張地圖(見 sim/map.ts 的 MAP_DEFS)。 */
+  mapId: string;
 }
 
 export interface SetReadyMsg {
@@ -262,7 +265,8 @@ export function parse(raw: unknown): NetMessage | null {
         typeof o.countdownMs === 'number' &&
         typeof o.difficultyPercent === 'number' &&
         typeof o.endlessMode === 'boolean' &&
-        typeof o.individualLivesMode === 'boolean'
+        typeof o.individualLivesMode === 'boolean' &&
+        isMapId(o.mapId)
       ) {
         return {
           type: 'START_MATCH',
@@ -274,6 +278,7 @@ export function parse(raw: unknown): NetMessage | null {
           difficultyPercent: o.difficultyPercent,
           endlessMode: o.endlessMode,
           individualLivesMode: o.individualLivesMode,
+          mapId: o.mapId,
         };
       }
       return null;

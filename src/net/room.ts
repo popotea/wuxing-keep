@@ -91,6 +91,8 @@ export interface MatchConfig {
   difficultyPercent: number;
   endlessMode: boolean;
   individualLivesMode: boolean;
+  /** 這場對局用哪張地圖(見 sim/map.ts 的 MAP_DEFS),房主在建房時選,整場固定不變。 */
+  mapId: string;
 }
 
 export interface RoomHandlers {
@@ -247,6 +249,7 @@ export class Room {
       difficultyPercent: config.difficultyPercent,
       endlessMode: config.endlessMode,
       individualLivesMode: config.individualLivesMode,
+      mapId: config.mapId,
     };
     this.net.broadcast(payload);
     this.handlers.onMatchStarted?.(payload);

@@ -2,6 +2,7 @@
 // 客戶端依 tick 編號緩衝,嚴格依序把 TICK 餵給本地模擬,漏收就暫停等待,不跳號。
 
 import type { Element } from '../sim/elements';
+import { setActiveMap } from '../sim/map';
 import { createInitialState, step, type SimulationState } from '../sim/simulation';
 import type { MatchConfig, Room } from './room';
 import type { Action, CmdMsg, PlayerId, PlayerInfo, TickMsg, TimedCommand } from './protocol';
@@ -51,6 +52,9 @@ export class HostLockstepEngine {
     if (resume) {
       this.state = resume.state;
       this.currentTick = resume.tick;
+      // 接手既有進度時沒有走 createInitialState(),map.ts 的模組層級地圖快取不會被設定——
+      // 這台機器如果是重整過/剛升格,活躍地圖可能還停在預設值,路徑資料一錯就直接跑飛。
+      setActiveMap(resume.state.mapId);
     } else {
       this.state = createInitialState(
         seed,
@@ -58,6 +62,7 @@ export class HostLockstepEngine {
         playerElementsFromRoster(room.getRoster()),
         config.endlessMode,
         config.individualLivesMode,
+        config.mapId,
       );
       this.currentTick = 0;
     }
@@ -122,6 +127,7 @@ export class ClientLockstepEngine {
     difficultyPercent: number,
     endlessMode: boolean,
     individualLivesMode: boolean,
+    mapId: string,
     private handlers: LockstepHandlers,
   ) {
     this.state = createInitialState(
@@ -130,6 +136,7 @@ export class ClientLockstepEngine {
       playerElementsFromRoster(room.getRoster()),
       endlessMode,
       individualLivesMode,
+      mapId,
     );
   }
 
@@ -156,6 +163,9 @@ export class ClientLockstepEngine {
     this.buffer.clear();
     this.state = state;
     this.nextTickToApply = tick;
+    // 跟 HostLockstepEngine 的 resume 分支同樣的理由:整份換掉 state 沒有經過
+    // createInitialState(),要自己補設定 map.ts 的活躍地圖,不然接下來每一步移動都會算錯。
+    setActiveMap(state.mapId);
   }
 
   /**

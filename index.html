@@ -433,6 +433,59 @@
       }
       #bonusWave:empty { display: none; }
 
+      /* 地圖選擇(選單):下拉選單 + 一行說明,說明文字由 main.ts 依選到的地圖即時換掉。 */
+      .map-select {
+        width: 100%;
+        max-width: 320px;
+        padding: 6px 8px;
+      }
+      .map-hint {
+        margin: 6px 0 0;
+        font-size: 13px;
+        opacity: 0.75;
+        min-height: 1.2em;
+      }
+
+      /* 主動技能列(sim/skills.ts):貼畫面下緣置中,跟上緣的 HUD 數值分兩邊,
+         不會擠在一起。容器本身 pointer-events:none,只有按鈕接得到點擊,不擋地圖操作。 */
+      #skillBar {
+        position: fixed;
+        left: 50%;
+        bottom: 14px;
+        transform: translateX(-50%);
+        z-index: 10;
+        display: flex;
+        gap: 8px;
+        pointer-events: none;
+      }
+      #skillBar:empty { display: none; }
+      .skill-btn {
+        pointer-events: auto;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        min-width: 76px;
+        padding: 6px 10px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 10px;
+        background: rgba(18, 20, 28, 0.82);
+        color: #e8e8ea;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .skill-btn:hover:not(:disabled) { border-color: var(--accent); }
+      .skill-btn:disabled { opacity: 0.45; cursor: default; }
+      /* 已經點了技能、正在等玩家點地圖選施放位置的狀態 */
+      .skill-btn.skill-arming {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(230, 184, 92, 0.35);
+      }
+      .skill-btn-name { font-weight: 600; }
+      .skill-btn-cd { font-variant-numeric: tabular-nums; opacity: 0.8; }
+      /* 施放模式下讓整個畫布的游標變十字,提示「現在是在選位置不是在蓋塔」 */
+      body.skill-arming #gameCanvasWrap { cursor: crosshair; }
+
       /* 記分板/精簡檢視切換鈕獨立收在右上角一小塊,跟主狀態列(置中)分開,
          這兩顆本來就是操作用的按鈕,理當跟純顯示的數值分開放。 */
       #hudToggles {
@@ -512,6 +565,8 @@
         #towerDeselectBtn { padding: 12px 16px; }
         .scoreboard-gift-btn { padding: 6px 10px; }
         .tower-panel-strategy select { padding: 8px 10px; }
+        /* 技能按鈕在手機上是最需要點得準的東西之一(施放時機常常很緊急),熱區給大一點 */
+        .skill-btn { min-width: 88px; padding: 10px 14px; font-size: 13px; }
       }
 
       /* 寬高比固定跟地圖一樣(src/sim/map.ts 的 GRID_WIDTH:GRID_HEIGHT = 40:24 = 5:3)——
@@ -820,6 +875,9 @@
           <input type="checkbox" id="soloEndlessMode" />
           無限模式(沒有終點,怪物隨波次持續變強,看你能撐到第幾波)
         </label>
+        <h3>地圖</h3>
+        <select id="soloMap" class="map-select"></select>
+        <p id="soloMapHint" class="map-hint"></p>
         <h3>選擇你的屬性(至少 1 種,可複選)</h3>
         <div class="choice-row solo-elements">
           <input type="checkbox" id="solo-el-metal" value="metal" checked />
@@ -880,6 +938,10 @@
               <input type="checkbox" id="hostIndividualLivesMode" />
               個人生命模式(每條路徑各自計算生命,某條路徑守不住只有那條停止生怪,不會拖累其他人)
             </label>
+            <label>地圖:
+              <select id="hostMap" class="map-select"></select>
+            </label>
+            <p id="hostMapHint" class="map-hint"></p>
             <button id="hostBtn" class="btn"><svg class="icon"><use href="#icon-plus" /></svg> 建立房間</button>
           </div>
 
@@ -953,6 +1015,10 @@
         </div>
       </div>
       <div id="bonusWave"></div>
+      <!-- 主動技能列(sim/skills.ts):固定貼在畫面下緣置中。點一下進入「選施放位置」模式,
+           再點地圖決定圓心;冷卻中的按鈕會 disabled 並顯示剩餘秒數。內容由 main.ts 的
+           renderSkillBar() 動態產生,不是寫死的三顆按鈕。 -->
+      <div id="skillBar"></div>
       <div id="hudToggles">
         <button id="scoreboardBtn" class="hud-compact-toggle" type="button">記分板</button>
         <button id="hudCompactBtn" class="hud-compact-toggle" type="button">精簡檢視</button>
