@@ -63,7 +63,8 @@ import {
 } from './placements';
 import {
   dealDamage,
-  dualTowerStats,
+  DUAL_ELEMENT_MIN_LEVEL,
+  secondElementCost,
   sellValue,
   TARGET_STRATEGIES,
   TOWER_DEFS,
@@ -357,42 +358,6 @@ function applyBuildTower(state: SimulationState, playerId: PlayerId, action: Act
   });
 }
 
-/**
- * 雙屬性塔(元素組合玩法):蓋塔當下就要指定兩個不同的屬性,兩個都要在這個玩家自己允許蓋的
- * 屬性清單內(跟一般建塔同一條規則,不能繞過分工限制),而且兩個屬性不能相同(不然就只是
- * 包裝過的單屬性塔,浪費雙屬性溢價的造價)。造價/基礎數值用 dualTowerStats() 算,跟
- * describeTower()/tryAttack() 內部用的 baseTowerDef() 是同一套公式,避免兩邊算法各改各的漂掉。
- */
-function applyBuildDualTower(state: SimulationState, playerId: PlayerId, action: Action): void {
-  const x = asFiniteInt(action.params.x);
-  const y = asFiniteInt(action.params.y);
-  const element = action.params.element;
-  const secondElement = action.params.secondElement;
-  if (x === null || y === null || !isElement(element) || !isElement(secondElement)) return;
-  if (element === secondElement) return;
-  if (!inBounds(x, y) || isOnPath(x, y)) return;
-  if (!isBuildableTileFree(state, x, y)) return;
-  const allowed = state.playerElements[playerId];
-  if (allowed && (!allowed.includes(element) || !allowed.includes(secondElement))) return;
-  const def = dualTowerStats(element as Element, secondElement as Element);
-  const gold = state.gold[playerId] ?? 0;
-  if (gold < def.cost) return;
-  state.gold[playerId] = gold - def.cost;
-  state.towers.push({
-    id: state.nextTowerId++,
-    element: element as Element,
-    secondElement: secondElement as Element,
-    x,
-    y,
-    level: 1,
-    ticksSinceLastAttack: 0,
-    ownerId: playerId,
-    targetStrategy: 'first',
-    upgradePath: 'none',
-    hasteTicks: 0,
-  });
-}
-
 /** 賣塔只有蓋的本人能賣(避免動到別人的投資),退回的錢算他自己的。 */
 function applySellTower(state: SimulationState, playerId: PlayerId, action: Action): void {
   const towerId = asFiniteInt(action.params.towerId);
@@ -430,6 +395,33 @@ function applyUpgradeTower(state: SimulationState, playerId: PlayerId, action: A
   state.gold[playerId] = gold - cost;
   tower.level = nextLevel;
   if (path) tower.upgradePath = path;
+}
+
+/**
+ * 加第二屬性(元素組合玩法,2026-07-23 從「建造時的選項」改成「升級解鎖的選項」)。
+ *
+ * 條件都不成立就安全忽略(跟其他指令同一套慣例):
+ * - 塔要存在,而且**還沒有**第二屬性(定案後不能改,跟分岐路線同一套慣例)
+ * - 等級要 >= DUAL_ELEMENT_MIN_LEVEL
+ * - 第二屬性要合法、不能跟主屬性相同(不然只是包裝過的單屬性塔,白花錢)
+ * - 第二屬性要在**出手這個玩家**自己允許的屬性清單內(跟建塔同一條規則,不能繞過分工限制)
+ * - 錢要夠(花的是出手這個人自己的錢,跟一般升級同一套慣例:不分誰的塔,誰都能幫忙出錢)
+ */
+function applyAddSecondElement(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const towerId = asFiniteInt(action.params.towerId);
+  const secondElement = action.params.secondElement;
+  if (towerId === null || !isElement(secondElement)) return;
+  const tower = state.towers.find((t) => t.id === towerId);
+  if (!tower || tower.secondElement) return;
+  if (tower.level < DUAL_ELEMENT_MIN_LEVEL) return;
+  if (tower.element === secondElement) return;
+  const allowed = state.playerElements[playerId];
+  if (allowed && !allowed.includes(secondElement)) return;
+  const cost = secondElementCost(tower.element, secondElement as Element);
+  const gold = state.gold[playerId] ?? 0;
+  if (gold < cost) return;
+  state.gold[playerId] = gold - cost;
+  tower.secondElement = secondElement as Element;
 }
 
 /** 集火策略不分誰的塔,任何隊友都能改(跟升級一樣),不花錢、純戰術選擇。 */
@@ -642,7 +634,7 @@ function applyCastSkill(state: SimulationState, playerId: PlayerId, action: Acti
 
 function applyCommand(state: SimulationState, playerId: PlayerId, action: Action): void {
   if (action.kind === 'build_tower') applyBuildTower(state, playerId, action);
-  else if (action.kind === 'build_dual_tower') applyBuildDualTower(state, playerId, action);
+  else if (action.kind === 'add_second_element') applyAddSecondElement(state, playerId, action);
   else if (action.kind === 'sell_tower') applySellTower(state, playerId, action);
   else if (action.kind === 'upgrade_tower') applyUpgradeTower(state, playerId, action);
   else if (action.kind === 'set_target_strategy') applySetTargetStrategy(state, action);

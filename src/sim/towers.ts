@@ -90,6 +90,27 @@ export const DUAL_TOWER_DAMAGE_PERCENT = 80;
 export const DUAL_TOWER_COST_MULTIPLIER_PERCENT = 180;
 
 /**
+ * 第二屬性最低要塔到這一級才能加(2026-07-23 改的)。
+ *
+ * **原本雙屬性塔是「建造當下的另一種選項」**(建造選單直接有一項「雙屬性塔」),玩家一開局
+ * 就能蓋。改成升級解鎖是因為那樣少了成長感——雙屬性是這套元素系統裡最強的組合(對任何目標
+ * 最差就是 neutral,不會吃到弱勢倍率),當成開局就有的選項等於把終局手段前置了。現在的節奏是:
+ *   1 級蓋一般單屬性塔 → 升到 2 級 → 可以選擇加第二屬性(可選,不強制)→ 3 級選分岐路線(必選)
+ * 「可以加」而不是「必須加」:留著單屬性繼續升級也是合理選擇(省錢、專精單一屬性)。
+ */
+export const DUAL_ELEMENT_MIN_LEVEL = 2;
+
+/**
+ * 加第二屬性要花多少錢:雙屬性塔的造價減掉原本單屬性的造價(也就是「差額」)。
+ * 玩家蓋這座塔時已經付過單屬性的錢了,只補差額才不會變成重複收費。
+ * 至少收 1 塊,避免出現免費升級的極端數值組合。
+ */
+export function secondElementCost(element: Element, secondElement: Element): number {
+  const dual = dualTowerStats(element, secondElement);
+  return Math.max(1, dual.cost - TOWER_DEFS[element].cost);
+}
+
+/**
  * 雙屬性塔的基礎數值:cost/damage 是兩屬性平均後再套用上面兩個百分比,rangeFp/cooldownTicks
  * 單純取平均、不額外調整(射程/攻速的取捨已經留給玩家選的兩個屬性本身去體現,不用再疊一層折扣)。
  * `element` 欄位純粹沿用 e1 給型別相容,不代表這個 def 只吃 e1 的傷害判定

@@ -229,7 +229,77 @@ for (const def of mapMod.MAP_DEFS) {
 }
 
 // ---------------------------------------------------------------------------
-console.log('\n[6] 技能冷卻');
+console.log('\n[6] 第二屬性(升級解鎖)');
+{
+  const towersMod = await loadModule('src/sim/towers.ts', 'towers.mjs');
+  const minLevel = towersMod.DUAL_ELEMENT_MIN_LEVEL;
+  mapMod.setActiveMap(mapMod.DEFAULT_MAP_ID);
+
+  // 找一個可以蓋塔的非路徑格
+  let spot = null;
+  for (let x = 0; x < mapMod.GRID_WIDTH && !spot; x++) {
+    for (let y = 0; y < mapMod.GRID_HEIGHT && !spot; y++) {
+      if (!mapMod.isOnPath(x, y)) spot = [x, y];
+    }
+  }
+  const [tx, ty] = spot;
+
+  const fresh = () => {
+    let s = sim.createInitialState(7, 100, { p1: ['fire', 'water', 'metal'] }, false, false, mapMod.DEFAULT_MAP_ID);
+    s.gold.p1 = 999999;
+    s = sim.step(s, 0, [{ playerId: 'p1', action: { kind: 'build_tower', params: { x: tx, y: ty, element: 'fire' } } }]);
+    return s;
+  };
+
+  // 1 級就想加第二屬性 → 應該被安全忽略
+  let s = fresh();
+  const towerId = s.towers[0].id;
+  const goldBefore = s.gold.p1;
+  s = sim.step(s, 1, [{ playerId: 'p1', action: { kind: 'add_second_element', params: { towerId, secondElement: 'water' } } }]);
+  check(`等級未達 ${minLevel} 時加第二屬性被忽略`, s.towers[0].secondElement === undefined);
+  check('被忽略時不會扣錢', s.gold.p1 === goldBefore);
+
+  // 升到 minLevel 之後就可以加
+  let t = 2;
+  while (s.towers[0].level < minLevel) {
+    s = sim.step(s, t++, [{ playerId: 'p1', action: { kind: 'upgrade_tower', params: { towerId } } }]);
+  }
+  check(`塔升到了 ${minLevel} 級`, s.towers[0].level === minLevel);
+  const goldBeforeAdd = s.gold.p1;
+  s = sim.step(s, t++, [{ playerId: 'p1', action: { kind: 'add_second_element', params: { towerId, secondElement: 'water' } } }]);
+  check('等級達標後可以加第二屬性', s.towers[0].secondElement === 'water');
+  const expectedCost = towersMod.secondElementCost('fire', 'water');
+  check('扣款金額等於 secondElementCost', goldBeforeAdd - s.gold.p1 === expectedCost, `實扣 ${goldBeforeAdd - s.gold.p1},預期 ${expectedCost}`);
+
+  // 已經有第二屬性就不能再改(跟分岐路線同一套慣例)
+  const goldBefore2 = s.gold.p1;
+  s = sim.step(s, t++, [{ playerId: 'p1', action: { kind: 'add_second_element', params: { towerId, secondElement: 'metal' } } }]);
+  check('已定案的第二屬性不能再改', s.towers[0].secondElement === 'water');
+  check('改不成時不會扣錢', s.gold.p1 === goldBefore2);
+
+  // 跟主屬性相同 / 不在允許清單內 都要被忽略
+  let s2 = fresh();
+  const id2 = s2.towers[0].id;
+  let t2 = 1;
+  while (s2.towers[0].level < minLevel) {
+    s2 = sim.step(s2, t2++, [{ playerId: 'p1', action: { kind: 'upgrade_tower', params: { towerId: id2 } } }]);
+  }
+  s2 = sim.step(s2, t2++, [{ playerId: 'p1', action: { kind: 'add_second_element', params: { towerId: id2, secondElement: 'fire' } } }]);
+  check('第二屬性跟主屬性相同 → 忽略', s2.towers[0].secondElement === undefined);
+  s2 = sim.step(s2, t2++, [{ playerId: 'p1', action: { kind: 'add_second_element', params: { towerId: id2, secondElement: 'wood' } } }]);
+  check('第二屬性不在允許清單內 → 忽略', s2.towers[0].secondElement === undefined);
+
+  // 舊的 build_dual_tower 指令已經移除,送出去應該完全沒作用(不是蓋出塔也不是扣錢)
+  let s3 = sim.createInitialState(9, 100, { p1: ['fire', 'water'] }, false, false, mapMod.DEFAULT_MAP_ID);
+  const goldBefore3 = s3.gold.p1;
+  s3 = sim.step(s3, 0, [
+    { playerId: 'p1', action: { kind: 'build_dual_tower', params: { x: tx, y: ty, element: 'fire', secondElement: 'water' } } },
+  ]);
+  check('舊的 build_dual_tower 指令已失效', s3.towers.length === 0 && s3.gold.p1 === goldBefore3);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[7] 技能冷卻');
 {
   const mapId = mapMod.DEFAULT_MAP_ID;
   let s = sim.createInitialState(1, 100, { p1: ['fire'] }, false, false, mapId);

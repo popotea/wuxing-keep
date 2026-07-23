@@ -32,13 +32,10 @@ const DECOR_SCALE = SCALE * 1.6;
 const EDGE_PAN_MARGIN_PX = 32;
 const EDGE_PAN_SPEED_PX_PER_SEC = 480;
 
-// 小地圖:固定貼在畫面右下角、跟鏡頭捲動無關(scrollFactor=0),縮小倍率讓整張地圖一次看完。
-// 這是桌面版的縮小倍率上限,手機直式螢幕畫布很小時會再往下縮(見 GameScene.minimapScale),
-// 不然固定 0.1 倍算出來的小地圖在小畫布上會佔掉快一半畫面,喧賓奪主。
-const MINIMAP_SCALE_MAX = 0.1;
-/** 小地圖大小最多佔畫布這個比例(寬高分別算,取比較保守的一邊),避免小畫布上小地圖過大。 */
-const MINIMAP_MAX_CANVAS_RATIO = 0.2;
-const MINIMAP_MARGIN_PX = 8;
+// 小地圖(2026-07-23 移除):2026-07-16 把畫面改成「一次顯示整張地圖」之後,小地圖就變成
+// 純粹的重複資訊——它畫的縮小版全圖跟主畫面看到的是同一塊區域,標示鏡頭範圍的白框也幾乎
+// 跟小地圖外框完全重疊。留著只是佔掉右下角一塊、讓實際可看的遊戲畫面顯得更小,已整個拿掉
+// (連帶移除點小地圖跳鏡頭的功能——鏡頭本來就不會捲動,那個功能早就沒有作用了)。
 
 const ELEMENT_COLORS: Record<Element, number> = {
   metal: 0xd4af37,
@@ -261,7 +258,6 @@ export class GameScene extends Phaser.Scene {
   private groundEffectsLayer!: Phaser.GameObjects.Graphics;
   private dynamicLayer!: Phaser.GameObjects.Graphics;
   private previewLayer!: Phaser.GameObjects.Graphics;
-  private minimapLayer!: Phaser.GameObjects.Graphics;
   /** 有正式美術圖時才會用到:塔/怪物各自的 Image,依 id 持久保留(不像 Graphics 每 tick 清掉重畫)。 */
   private towerSprites = new Map<number, Phaser.GameObjects.Image>();
   private monsterSprites = new Map<number, Phaser.GameObjects.Image>();
@@ -280,8 +276,6 @@ export class GameScene extends Phaser.Scene {
   private selectedTowerId: number | null = null;
   /** 滑鼠是否在遊戲畫布範圍內——游標跑到畫布外的 HTML UI(HUD/塔面板)時要停止邊緣平移跟預覽。 */
   private pointerInsideCanvas = false;
-  /** 小地圖實際使用的縮小倍率,每次 applyViewportZoom() 依畫布尺寸重算,見 MINIMAP_MAX_CANVAS_RATIO。 */
-  private minimapScale = MINIMAP_SCALE_MAX;
   /**
    * 靜態層(地板/路徑/描邊/格線/裝飾物)建立出來的所有 GameObject。
    * 這些東西原本只在 create() 畫一次就不管了,但**多地圖之後每場對局的路徑形狀可能不一樣**,
@@ -330,11 +324,10 @@ export class GameScene extends Phaser.Scene {
     // 明確指定 depth,不依賴建立順序:groundEffectsLayer(depth 0.5,水路怪的流水視覺/飛行怪
     // 的地面影子)蓋在地板/路徑材質(depth 0)上面、但在塔/怪物 Image(depth 1)下面,
     // dynamicLayer 的疊加圖層(血條/選取框/射程圈/等級光點,depth 2)再蓋在圖片上面,
-    // 再上面依序是預覽格跟固定貼齊螢幕的小地圖。
+    // 最上面是預覽格(depth 3)。
     this.groundEffectsLayer = this.add.graphics().setDepth(0.5);
     this.dynamicLayer = this.add.graphics().setDepth(2);
     this.previewLayer = this.add.graphics().setDepth(3);
-    this.minimapLayer = this.add.graphics().setScrollFactor(0).setDepth(4); // 固定貼在螢幕上,不隨鏡頭捲動
     // 世界(地圖)比畫布視窗大很多,鏡頭預設從左上角開始,靠邊緣平移才看得到其他區域。
     this.cameras.main.setBounds(0, 0, GRID_WIDTH * TILE_PX, GRID_HEIGHT * TILE_PX);
     this.applyViewportZoom();
@@ -358,8 +351,6 @@ export class GameScene extends Phaser.Scene {
       this.onHoverInfoChanged?.(null, 0, 0);
     });
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (this.jumpCameraFromMinimapClick(pointer)) return;
-
       const { x, y } = this.tileUnderPointer(pointer);
       const tower = this.pendingState?.towers.find((t) => t.x === x && t.y === y);
       if (tower) {
@@ -400,107 +391,6 @@ export class GameScene extends Phaser.Scene {
     const zoomX = this.scale.width / (GRID_WIDTH * TILE_PX);
     const zoomY = this.scale.height / (GRID_HEIGHT * TILE_PX);
     this.cameras.main.setZoom(Math.min(zoomX, zoomY));
-    // 小地圖固定像素大小(MINIMAP_SCALE_MAX 倍率)在桌面版夠小夠不起眼,但手機直式畫布本身
-    // 就很小,固定倍率算出來的小地圖會佔掉快一半畫面——夾在「最多佔畫布 MINIMAP_MAX_CANVAS_RATIO
-    // 比例」跟桌面倍率之間取較小值,小畫布上自動縮得更小,大畫布上維持原本手感不變。
-    const maxByWidth = (this.scale.width * MINIMAP_MAX_CANVAS_RATIO) / (GRID_WIDTH * TILE_PX);
-    const maxByHeight = (this.scale.height * MINIMAP_MAX_CANVAS_RATIO) / (GRID_HEIGHT * TILE_PX);
-    this.minimapScale = Math.min(MINIMAP_SCALE_MAX, maxByWidth, maxByHeight);
-  }
-
-  /** 小地圖左上角在螢幕座標系(scrollFactor=0)裡的位置,固定貼在畫布右下角。 */
-  private minimapOrigin(): { x: number; y: number } {
-    const w = GRID_WIDTH * TILE_PX * this.minimapScale;
-    const h = GRID_HEIGHT * TILE_PX * this.minimapScale;
-    return { x: this.scale.width - w - MINIMAP_MARGIN_PX, y: this.scale.height - h - MINIMAP_MARGIN_PX };
-  }
-
-  /** 點在小地圖範圍內就把主鏡頭跳過去(以點擊處為中心),回傳 true 代表這次點擊已經處理掉、不用再當成蓋塔/選塔。 */
-  private jumpCameraFromMinimapClick(pointer: Phaser.Input.Pointer): boolean {
-    const { x: ox, y: oy } = this.minimapOrigin();
-    const w = GRID_WIDTH * TILE_PX * this.minimapScale;
-    const h = GRID_HEIGHT * TILE_PX * this.minimapScale;
-    if (pointer.x < ox || pointer.x > ox + w || pointer.y < oy || pointer.y > oy + h) return false;
-
-    const worldX = (pointer.x - ox) / this.minimapScale;
-    const worldY = (pointer.y - oy) / this.minimapScale;
-    const cam = this.cameras.main;
-    // 鏡頭有 zoom 時,螢幕實際看得到的世界範圍是 cam.worldView(已經把 zoom 算進去),
-    // 不能直接用 cam.width/height(那是螢幕像素,zoom!=1 時跟世界座標範圍不一樣)。
-    const viewW = cam.worldView.width;
-    const viewH = cam.worldView.height;
-    const maxScrollX = Math.max(0, GRID_WIDTH * TILE_PX - viewW);
-    const maxScrollY = Math.max(0, GRID_HEIGHT * TILE_PX - viewH);
-    cam.scrollX = Phaser.Math.Clamp(worldX - viewW / 2, 0, maxScrollX);
-    cam.scrollY = Phaser.Math.Clamp(worldY - viewH / 2, 0, maxScrollY);
-    return true;
-  }
-
-  /** 小地圖:縮小版全圖(路徑/塔/怪物小點)+ 一個白框標示目前鏡頭看到哪裡,點小地圖可以直接跳鏡頭過去。 */
-  private drawMinimap(): void {
-    const g = this.minimapLayer;
-    g.clear();
-    const { x: ox, y: oy } = this.minimapOrigin();
-    const w = GRID_WIDTH * TILE_PX * this.minimapScale;
-    const h = GRID_HEIGHT * TILE_PX * this.minimapScale;
-
-    g.fillStyle(0x0b0d10, 0.75);
-    g.fillRect(ox, oy, w, h);
-
-    g.fillStyle(0x6b5541, 0.9);
-    for (const waypoints of paths()) {
-      for (let i = 0; i < waypoints.length - 1; i++) {
-        const [ax, ay] = waypoints[i];
-        const [bx, by] = waypoints[i + 1];
-        g.fillRect(
-          ox + Math.min(ax, bx) * TILE_PX * this.minimapScale,
-          oy + Math.min(ay, by) * TILE_PX * this.minimapScale,
-          (Math.abs(bx - ax) + 1) * TILE_PX * this.minimapScale,
-          (Math.abs(by - ay) + 1) * TILE_PX * this.minimapScale,
-        );
-      }
-    }
-
-    if (this.pendingState) {
-      for (const t of this.pendingState.towers) {
-        g.fillStyle(ELEMENT_COLORS[t.element], 1);
-        g.fillCircle(ox + (t.x + 0.5) * TILE_PX * this.minimapScale, oy + (t.y + 0.5) * TILE_PX * this.minimapScale, 2);
-      }
-      g.fillStyle(0x8a8a8a, 1);
-      for (const trap of this.pendingState.traps) {
-        g.fillCircle(ox + (trap.x + 0.5) * TILE_PX * this.minimapScale, oy + (trap.y + 0.5) * TILE_PX * this.minimapScale, 1.5);
-      }
-      g.fillStyle(0xd4af37, 1);
-      for (const building of this.pendingState.resourceBuildings) {
-        g.fillCircle(
-          ox + (building.x + 0.5) * TILE_PX * this.minimapScale,
-          oy + (building.y + 0.5) * TILE_PX * this.minimapScale,
-          2,
-        );
-      }
-      for (const m of this.pendingState.monsters) {
-        const { xFp, yFp } = worldPositionFp(m.pos);
-        g.fillStyle(m.isBoss ? 0xffe98a : 0xe0433a, 1);
-        g.fillCircle(
-          ox + (xFp / FP_SCALE) * TILE_PX * this.minimapScale,
-          oy + (yFp / FP_SCALE) * TILE_PX * this.minimapScale,
-          m.isBoss ? 3 : 1.5,
-        );
-      }
-    }
-
-    g.lineStyle(1, 0xd4af37, 0.7);
-    g.strokeRect(ox, oy, w, h);
-
-    const cam = this.cameras.main;
-    g.lineStyle(1.5, 0xffffff, 0.9);
-    // 白框要標示「世界座標裡實際看得到的範圍」,zoom!=1 時得用 worldView,不能直接用 cam.width/height。
-    g.strokeRect(
-      ox + cam.scrollX * this.minimapScale,
-      oy + cam.scrollY * this.minimapScale,
-      cam.worldView.width * this.minimapScale,
-      cam.worldView.height * this.minimapScale,
-    );
   }
 
   /**
@@ -552,10 +442,8 @@ export class GameScene extends Phaser.Scene {
     return null;
   }
 
-  /** 每影格都跑:小地圖即時更新、滑鼠停在畫布邊緣時捲動鏡頭(世紀帝國式),建造預覽格跟著鏡頭移動同步更新。 */
+  /** 每影格都跑:滑鼠停在畫布邊緣時捲動鏡頭(世紀帝國式,現在已經是 no-op),建造預覽格跟著同步更新。 */
   update(_time: number, delta: number): void {
-    this.drawMinimap();
-
     if (!this.pointerInsideCanvas) return;
 
     const pointer = this.input.activePointer;

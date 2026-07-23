@@ -51,7 +51,8 @@ import {
 } from './sim/simulation';
 import {
   describeTower,
-  dualTowerStats,
+  DUAL_ELEMENT_MIN_LEVEL,
+  secondElementCost,
   TOWER_CHARACTER_NAMES,
   TOWER_DEFS,
   towerDisplayName,
@@ -105,6 +106,7 @@ const soloMapHintEl = $<HTMLParagraphElement>('soloMapHint');
 const hostMapSelect = $<HTMLSelectElement>('hostMap');
 const hostMapHintEl = $<HTMLParagraphElement>('hostMapHint');
 const skillBarEl = $<HTMLDivElement>('skillBar');
+const skillHintEl = $<HTMLDivElement>('skillHint');
 const hostBtn = $<HTMLButtonElement>('hostBtn');
 const roomCodeEl = $<HTMLSpanElement>('roomCode');
 const joinNameInput = $<HTMLInputElement>('joinName');
@@ -141,6 +143,8 @@ const towerPanelTotemTextEl = $<HTMLSpanElement>('towerPanelTotemText');
 const towerPanelStrategySelect = $<HTMLSelectElement>('towerPanelStrategy');
 const towerUpgradeBtn = $<HTMLButtonElement>('towerUpgradeBtn');
 const towerUpgradeCostEl = $<HTMLSpanElement>('towerUpgradeCost');
+const towerSecondElementBtn = $<HTMLButtonElement>('towerSecondElementBtn');
+const towerSecondElementCostEl = $<HTMLSpanElement>('towerSecondElementCost');
 const towerSellBtn = $<HTMLButtonElement>('towerSellBtn');
 const towerSellValueEl = $<HTMLSpanElement>('towerSellValue');
 const towerDeselectBtn = $<HTMLButtonElement>('towerDeselectBtn');
@@ -405,6 +409,12 @@ interface ChoiceOption {
   label: string;
   sublabel?: string;
   disabled?: boolean;
+  /**
+   * 這個選項是**因為金幣不足**才不能選(而不是其他條件不符)。單純的 disabled 只是變淡,
+   * 玩家看不出到底是「還缺什麼條件」還是「只差錢」——標成 true 會另外上紅色調,
+   * 讓「存夠錢就能選」這件事一眼看得出來。
+   */
+  unaffordable?: boolean;
   onChoose: () => void;
 }
 
@@ -417,6 +427,8 @@ function showChoiceModal(title: string, options: ChoiceOption[]): void {
     btn.type = 'button';
     btn.className = 'choice-option';
     btn.disabled = opt.disabled ?? false;
+    // 錢不夠跟其他不能選的原因要分得出來(見 ChoiceOption.unaffordable)
+    if (opt.unaffordable) btn.classList.add('cost-unaffordable');
     btn.innerHTML = opt.sublabel
       ? `${escapeHtml(opt.label)}<small>${escapeHtml(opt.sublabel)}</small>`
       : escapeHtml(opt.label);
@@ -448,6 +460,8 @@ function showFloatingBuildMenu(canvasX: number, canvasY: number, options: Choice
     btn.type = 'button';
     btn.className = 'choice-option';
     btn.disabled = opt.disabled ?? false;
+    // 錢不夠跟其他不能選的原因要分得出來(見 ChoiceOption.unaffordable)
+    if (opt.unaffordable) btn.classList.add('cost-unaffordable');
     btn.innerHTML = opt.sublabel
       ? `${escapeHtml(opt.label)}<small>${escapeHtml(opt.sublabel)}</small>`
       : escapeHtml(opt.label);
@@ -697,8 +711,9 @@ const gameRenderer = createGameRenderer(
       // 路徑格只能蓋陷阱(規則跟塔相反),不會有塔/資源建築可選。
       options.push({
         label: '陷阱',
-        sublabel: `${TRAP_COST} 金幣`,
+        sublabel: `${TRAP_COST} 金幣${myGold < TRAP_COST ? '(金幣不足)' : ''}`,
         disabled: myGold < TRAP_COST,
+        unaffordable: myGold < TRAP_COST,
         onChoose: () => {
           if ((latestState?.gold[myPlayerId()] ?? 0) < TRAP_COST) {
             showToast(`金幣不足!建造陷阱需要 ${TRAP_COST} 金幣`);
@@ -708,13 +723,16 @@ const gameRenderer = createGameRenderer(
         },
       });
     } else {
-      // 非路徑格:固定列出玩家允許的全部屬性(WC3 TD 手塔風味)+ 雙屬性塔 + 資源建築 + 符文圖騰。
+      // 非路徑格:固定列出玩家允許的全部屬性(WC3 TD 手塔風味)+ 資源建築 + 符文圖騰。
+      // **雙屬性不在這裡**——2026-07-23 改成升級解鎖的選項(塔升到 DUAL_ELEMENT_MIN_LEVEL
+      // 之後在塔面板加),不再是建造當下就能選的東西,見 towers.ts 的 DUAL_ELEMENT_MIN_LEVEL。
       for (const element of buildableTowerElements()) {
         const cost = TOWER_DEFS[element].cost;
         options.push({
           label: TOWER_CHARACTER_NAMES[element],
-          sublabel: `${ELEMENT_NAMES[element]}塔 · ${cost} 金幣`,
+          sublabel: `${ELEMENT_NAMES[element]}塔 · ${cost} 金幣${myGold < cost ? '(金幣不足)' : ''}`,
           disabled: myGold < cost,
+          unaffordable: myGold < cost,
           onChoose: () => {
             if ((latestState?.gold[myPlayerId()] ?? 0) < cost) {
               showToast(`金幣不足!建造${ELEMENT_NAMES[element]}塔需要 ${cost} 金幣`);
@@ -724,51 +742,11 @@ const gameRenderer = createGameRenderer(
           },
         });
       }
-      // 雙屬性塔:至少要選好 2 種允許屬性才有組合可選,單一屬性(單人模式常見)沒有意義就不顯示。
-      if (buildableTowerElements().length >= 2) {
-        options.push({
-          label: '雙屬性塔',
-          sublabel: '兩種屬性擇優判定,不會出現弱勢傷害',
-          onChoose: () => {
-            const allowed = buildableTowerElements();
-            showChoiceModal(
-              '雙屬性塔:選第一種屬性',
-              allowed.map((e1) => ({
-                label: TOWER_CHARACTER_NAMES[e1],
-                sublabel: ELEMENT_NAMES[e1],
-                onChoose: () => {
-                  const remaining = allowed.filter((e2) => e2 !== e1);
-                  showChoiceModal(
-                    '雙屬性塔:選第二種屬性',
-                    remaining.map((e2) => {
-                      const dualDef = dualTowerStats(e1, e2);
-                      return {
-                        label: TOWER_CHARACTER_NAMES[e2],
-                        sublabel: `${ELEMENT_NAMES[e1]}×${ELEMENT_NAMES[e2]} · ${dualDef.cost} 金幣`,
-                        disabled: (latestState?.gold[myPlayerId()] ?? 0) < dualDef.cost,
-                        onChoose: () => {
-                          if ((latestState?.gold[myPlayerId()] ?? 0) < dualDef.cost) {
-                            showToast(`金幣不足!建造雙屬性塔需要 ${dualDef.cost} 金幣`);
-                            return;
-                          }
-                          submitAction({
-                            kind: 'build_dual_tower',
-                            params: { x, y, element: e1, secondElement: e2 },
-                          });
-                        },
-                      };
-                    }),
-                  );
-                },
-              })),
-            );
-          },
-        });
-      }
       options.push({
         label: '資源建築',
-        sublabel: `${RESOURCE_BUILDING_COST} 金幣`,
+        sublabel: `${RESOURCE_BUILDING_COST} 金幣${myGold < RESOURCE_BUILDING_COST ? '(金幣不足)' : ''}`,
         disabled: myGold < RESOURCE_BUILDING_COST,
+        unaffordable: myGold < RESOURCE_BUILDING_COST,
         onChoose: () => {
           if ((latestState?.gold[myPlayerId()] ?? 0) < RESOURCE_BUILDING_COST) {
             showToast(`金幣不足!建造資源建築需要 ${RESOURCE_BUILDING_COST} 金幣`);
@@ -779,8 +757,9 @@ const gameRenderer = createGameRenderer(
       });
       options.push({
         label: '符文圖騰',
-        sublabel: `${RUNE_TOTEM_COST} 金幣 · 範圍內全隊塔 +${RUNE_TOTEM_DAMAGE_BONUS_PERCENT}% 攻擊力`,
+        sublabel: `${RUNE_TOTEM_COST} 金幣 · 範圍內全隊塔 +${RUNE_TOTEM_DAMAGE_BONUS_PERCENT}% 攻擊力${myGold < RUNE_TOTEM_COST ? '(金幣不足)' : ''}`,
         disabled: myGold < RUNE_TOTEM_COST,
+        unaffordable: myGold < RUNE_TOTEM_COST,
         onChoose: () => {
           if ((latestState?.gold[myPlayerId()] ?? 0) < RUNE_TOTEM_COST) {
             showToast(`金幣不足!建造符文圖騰需要 ${RUNE_TOTEM_COST} 金幣`);
@@ -808,6 +787,9 @@ skipWaveBtn.addEventListener('click', () => {
 function renderTowerPanel(): void {
   const tower = selectedTowerId !== null ? latestState?.towers.find((t) => t.id === selectedTowerId) : undefined;
   towerPanelEl.hidden = !tower;
+  // 塔面板會從畫面下緣升起來,蓋住固定在下緣的技能列——切一個 body class 讓 CSS 把
+  // 技能列往上推(見 index.html 的 body.tower-panel-open 規則)。
+  document.body.classList.toggle('tower-panel-open', !!tower);
   if (!tower) return;
 
   const stats = describeTower(tower, latestState?.towers ?? [], latestState?.runeTotems ?? []);
@@ -842,10 +824,36 @@ function renderTowerPanel(): void {
   if (stats.upgradeCost === null) {
     towerUpgradeCostEl.textContent = '已滿級';
     towerUpgradeBtn.disabled = true;
+    towerUpgradeBtn.classList.remove('cost-unaffordable');
   } else {
+    const poor = myGold < stats.upgradeCost;
     towerUpgradeCostEl.textContent = String(stats.upgradeCost);
-    towerUpgradeBtn.disabled = myGold < stats.upgradeCost;
+    towerUpgradeBtn.disabled = poor;
+    // 「錢不夠」跟「不能做」要分得出來:單純 disabled 變淡的話,玩家看不出到底是
+    // 條件不符還是只差錢。錢不夠就另外標紅(見 .cost-unaffordable)。
+    towerUpgradeBtn.classList.toggle('cost-unaffordable', poor);
   }
+
+  // 加第二屬性(2026-07-23 從建造選項改成升級解鎖,見 towers.ts 的 DUAL_ELEMENT_MIN_LEVEL):
+  // **等級還不到就整顆不顯示**(不是顯示成 disabled)——面板上擺一顆永遠按不下去的按鈕
+  // 只會讓玩家困惑「這什麼時候能按」,不如等真的能用了再出現。
+  // 已經有第二屬性(定案不能改)、或玩家可用屬性不足 2 種(沒有組合可選)也一樣不顯示。
+  const allowedElements = buildableTowerElements();
+  const canAddSecond =
+    !tower.secondElement && tower.level >= DUAL_ELEMENT_MIN_LEVEL && allowedElements.filter((e) => e !== tower.element).length > 0;
+  towerSecondElementBtn.hidden = !canAddSecond;
+  if (canAddSecond) {
+    // 費用依「選哪個第二屬性」而定,但目前所有屬性造價相同,取最便宜的當面板顯示值即可;
+    // 真正的扣款在 sim 端依實際選到的屬性算(見 secondElementCost)。
+    const cheapest = Math.min(
+      ...allowedElements.filter((e) => e !== tower.element).map((e) => secondElementCost(tower.element, e)),
+    );
+    const poor = myGold < cheapest;
+    towerSecondElementCostEl.textContent = String(cheapest);
+    towerSecondElementBtn.disabled = poor;
+    towerSecondElementBtn.classList.toggle('cost-unaffordable', poor);
+  }
+
   towerSellBtn.disabled = tower.ownerId !== myPlayerId();
 }
 
@@ -869,6 +877,39 @@ towerUpgradeBtn.addEventListener('click', () => {
     return;
   }
   submitAction({ kind: 'upgrade_tower', params: { towerId } });
+});
+
+/**
+ * 加第二屬性:跳選單讓玩家選要加哪一種(排除塔目前的主屬性,加同一種等於白花錢)。
+ * 只列出這個玩家自己允許蓋的屬性——跟建塔同一條分工規則,不能靠這個繞過限制。
+ */
+towerSecondElementBtn.addEventListener('click', () => {
+  if (selectedTowerId === null) return;
+  const towerId = selectedTowerId;
+  const tower = latestState?.towers.find((t) => t.id === towerId);
+  if (!tower || tower.secondElement) return;
+
+  const candidates = buildableTowerElements().filter((e) => e !== tower.element);
+  showChoiceModal(
+    '選擇第二屬性(選定後無法更改)',
+    candidates.map((e2) => {
+      const cost = secondElementCost(tower.element, e2);
+      const poor = (latestState?.gold[myPlayerId()] ?? 0) < cost;
+      return {
+        label: `${ELEMENT_NAMES[tower.element]}×${ELEMENT_NAMES[e2]}`,
+        sublabel: `${TOWER_CHARACTER_NAMES[e2]} · ${cost} 金幣${poor ? '(金幣不足)' : ''}`,
+        disabled: poor,
+        unaffordable: poor,
+        onChoose: () => {
+          if ((latestState?.gold[myPlayerId()] ?? 0) < cost) {
+            showToast(`金幣不足!加第二屬性需要 ${cost} 金幣`);
+            return;
+          }
+          submitAction({ kind: 'add_second_element', params: { towerId, secondElement: e2 } });
+        },
+      };
+    }),
+  );
 });
 
 towerSellBtn.addEventListener('click', () => {
@@ -1402,6 +1443,7 @@ function setArmedSkill(skillId: SkillId | null): void {
   armedSkill = skillId;
   document.body.classList.toggle('skill-arming', skillId !== null);
   renderSkillBar(latestState);
+  renderSkillHint(null); // 帶 null:施放模式下 renderSkillHint 會自己顯示 armedSkill 的說明
 }
 
 /**
@@ -1417,6 +1459,7 @@ function setArmedSkill(skillId: SkillId | null): void {
 function renderSkillBar(state: SimulationState | null): void {
   if (!state || !matchActive) {
     skillBarEl.replaceChildren();
+    skillHintEl.innerHTML = '';
     return;
   }
 
@@ -1470,6 +1513,34 @@ skillBarEl.addEventListener('click', (ev) => {
   setArmedSkill(armedSkill === skillId ? null : skillId);
   if (armedSkill) showToast(`選擇${SKILL_DEFS[skillId].name}的施放位置(點地圖)`);
 });
+
+/**
+ * 技能說明:顯示在技能列正上方。**冷卻中的技能也要看得到說明**——玩家常常就是在等冷卻的
+ * 時候在想「這顆到底能幹嘛」,所以這裡不看 disabled 狀態。
+ * 傳 null 就清掉(除非正在施放模式,那時候固定顯示該技能的說明)。
+ */
+function renderSkillHint(skillId: SkillId | null): void {
+  const target = skillId ?? armedSkill;
+  if (!target || !matchActive) {
+    skillHintEl.innerHTML = '';
+    return;
+  }
+  const def = SKILL_DEFS[target];
+  const cooldownSec = Math.round((def.cooldownTicks * currentTickRateMs) / 1000);
+  const rangeTiles = (def.rangeFp / FP_SCALE).toFixed(1);
+  skillHintEl.innerHTML =
+    `<b>${escapeHtml(def.name)}</b> — ${escapeHtml(def.description)}` +
+    `<div class="skill-hint-meta">冷卻 ${cooldownSec} 秒 · 範圍 ${rangeTiles} 格 · 不花金幣${
+      armedSkill === target ? ' · 點地圖決定施放位置' : ''
+    }</div>`;
+}
+
+// 滑鼠移到技能按鈕上就顯示說明,移開就收起來(施放模式下維持顯示該技能的說明)。
+skillBarEl.addEventListener('mouseover', (ev) => {
+  const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>('.skill-btn');
+  renderSkillHint((btn?.dataset.skill as SkillId | undefined) ?? null);
+});
+skillBarEl.addEventListener('mouseleave', () => renderSkillHint(null));
 
 function endLocalMatch(): void {
   if (!localEngine) return;

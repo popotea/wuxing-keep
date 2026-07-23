@@ -459,6 +459,32 @@
         pointer-events: none;
       }
       #skillBar:empty { display: none; }
+      /* 選了塔的時候塔面板會從畫面下緣升起來,技能列固定在 bottom:14px 會被壓在它底下
+         (實測截圖看到兩者疊在一起)——選取狀態下把技能列跟說明整組往上推到面板上方。
+         用 body class 而不是 :has() 選擇器,不依賴瀏覽器對 :has() 的支援。 */
+      body.tower-panel-open #skillBar { bottom: 200px; }
+      body.tower-panel-open #skillHint { bottom: 278px; }
+      /* 技能說明:浮在技能列正上方置中。:empty 時整個不佔位置(跟 #bonusWave 同一套做法)。 */
+      #skillHint {
+        position: fixed;
+        left: 50%;
+        bottom: 92px;
+        transform: translateX(-50%);
+        z-index: 10;
+        max-width: min(560px, 92vw);
+        padding: 6px 12px;
+        border-radius: 8px;
+        background: rgba(18, 20, 28, 0.92);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        color: #e8e8ea;
+        font-size: 13px;
+        line-height: 1.5;
+        text-align: center;
+        pointer-events: none;
+      }
+      #skillHint:empty { display: none; }
+      #skillHint b { color: var(--accent); }
+      #skillHint .skill-hint-meta { opacity: 0.7; font-size: 12px; }
       .skill-btn {
         pointer-events: auto;
         display: flex;
@@ -590,9 +616,18 @@
         line-height: 0;
         box-shadow: var(--shadow-soft);
         aspect-ratio: 40 / 24;
-        width: 100%;
+        /* 2026-07-23 修水平置中:原本是 width:100% + max-height:100%,高度受限時
+           aspect-ratio 會把「畫出來的內容」縮窄(例如 1280 → 955),但這個 flex item 的
+           box 仍然佔著 100% 的寬度,於是內容整個靠左、右邊留一大塊黑(實測截圖看到的,
+           塔面板一開就特別明顯,因為可用高度變小、寬度縮得更多)。
+           改成讓寬度由高度推算(height:100% + width:auto),box 本身就是內容的實際寬度,
+           再用 margin:auto 讓水平/垂直都置中。max-width:100% 負責另一個方向:視窗很扁時
+           改由寬度決定,不會超出畫面。 */
+        height: 100%;
+        width: auto;
+        max-width: 100%;
         max-height: 100%;
-        margin-block: auto;
+        margin: auto;
         flex: 0 1 auto;
         min-height: 0;
       }
@@ -629,7 +664,9 @@
       /* ---- 塔選取面板(魔獸爭霸式,選塔才顯示,不是點下去就直接動作) ---- */
       .tower-panel {
         width: 100%;
-        max-width: 460px;
+        /* 2026-07-23 從 460 加寬:多了「加第二屬性」按鈕之後,四顆按鈕平分寬度會把
+           比較長的按鈕文字擠到換行、被面板邊界切掉(實測截圖看到的)。 */
+        max-width: 560px;
         border: 2px solid var(--accent);
         border-radius: 10px;
         padding: 10px 16px;
@@ -653,6 +690,9 @@
       .tower-panel-actions { display: flex; gap: 8px; }
       .tower-panel-actions button {
         flex: 1;
+        /* 按鈕文字一律不換行:換行的話第二行會超出按鈕高度被切掉,只看得到半個字 */
+        white-space: nowrap;
+        font-size: 13px;
         padding: 8px;
         border-radius: 6px;
         border: 1px solid var(--border);
@@ -665,6 +705,21 @@
       .tower-panel-actions button:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.1); }
       .tower-panel-actions button:disabled { opacity: 0.4; cursor: default; transform: none; }
       #towerUpgradeBtn { background: linear-gradient(160deg, #3a9d3a, #256b25); border-color: #256b25; }
+      /* 加第二屬性:用紫色跟一般升級(綠)區分開,它是「換一種塔」不是單純變強 */
+      #towerSecondElementBtn { background: linear-gradient(160deg, #7d5bb5, #4e357a); border-color: #4e357a; }
+
+      /* ---- 「金幣不足」的專用樣式 ----
+         單純的 :disabled 只是整顆變淡,玩家看不出到底是「條件還沒到」還是「只差錢」。
+         錢不夠的按鈕/選項另外上紅色調 + 保留較高的不透明度(要看得清楚寫什麼),
+         讓「存夠錢就能按」這件事一眼分得出來。需要蓋過 :disabled 的樣式所以放在它後面。 */
+      .cost-unaffordable:disabled,
+      .choice-option.cost-unaffordable:disabled {
+        opacity: 0.8;
+        background: linear-gradient(160deg, #6b2f2f, #4a1f1f);
+        border-color: #8a3a3a;
+        color: #ffb4b4;
+      }
+      .tower-panel-actions button.cost-unaffordable:disabled { filter: none; }
       #towerSellBtn { background: linear-gradient(160deg, #b9924a, #7a5f2a); border-color: #7a5f2a; }
       #towerDeselectBtn { flex: 0 0 auto; padding: 8px 12px; }
 
@@ -1093,6 +1148,10 @@
         </div>
       </div>
       <div id="bonusWave"></div>
+      <!-- 技能說明:滑鼠移到技能按鈕上、或已經進入施放模式時,在技能列正上方顯示這個技能
+           做什麼。原本只靠按鈕的 title 屬性(瀏覽器原生 tooltip)——要停住等一兩秒才會出現,
+           而且觸控裝置根本沒有 hover 這回事,等於完全看不到說明。 -->
+      <div id="skillHint"></div>
       <!-- 主動技能列(sim/skills.ts):固定貼在畫面下緣置中。點一下進入「選施放位置」模式,
            再點地圖決定圓心;冷卻中的按鈕會 disabled 並顯示剩餘秒數。內容由 main.ts 的
            renderSkillBar() 動態產生,不是寫死的三顆按鈕。 -->
@@ -1167,6 +1226,11 @@
         <div class="tower-panel-actions">
           <button id="towerUpgradeBtn">
             <svg class="icon"><use href="#icon-up" /></svg> 升級(<span id="towerUpgradeCost">-</span>)
+          </button>
+          <!-- 加第二屬性:只有塔到了 DUAL_ELEMENT_MIN_LEVEL 且還沒有第二屬性時才顯示
+               (main.ts 的 renderTowerPanel() 控制),見 sim/towers.ts 的說明 -->
+          <button id="towerSecondElementBtn" hidden>
+            <svg class="icon"><use href="#icon-spark" /></svg> 加第二屬性(<span id="towerSecondElementCost">-</span>)
           </button>
           <button id="towerSellBtn">
             <svg class="icon"><use href="#icon-coin" /></svg> 賣出(+<span id="towerSellValue">-</span>)
