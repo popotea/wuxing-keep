@@ -13,15 +13,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 常用指令
 
 ```
-npm install       # 安裝依賴
-npm run dev       # 啟動 Vite dev server(預設 http://localhost:5173)
-npm run typecheck # tsc --noEmit,快速型別檢查
-npm run build     # tsc --noEmit && vite build,輸出到 dist/
-npm run preview   # 預覽 build 出來的 dist/
-npm run assets    # AI 美術產圖工具(獨立於遊戲本體,不會被 build 打包)
+npm install        # 安裝依賴
+npm run dev        # 啟動 Vite dev server(預設 http://localhost:5173)
+npm run typecheck  # tsc --noEmit,快速型別檢查
+npm run build      # tsc --noEmit && vite build,輸出到 dist/
+npm run preview    # 預覽 build 出來的 dist/
+npm run verify     # 模擬層決定性驗證(改過 src/sim/ 一定要跑)
+npm run verify:browser  # 實機瀏覽器驗證(需要 dev server + Playwright,見下)
+npm run assets     # AI 美術產圖工具(獨立於遊戲本體,不會被 build 打包)
 ```
 
-**沒有自動化測試套件,也沒有設定 lint。** 驗證方式是手動 `npm run dev` 實際連線測試。多人同步的驗證流程(含 checksum 怎麼比對)見 `multiplayer-verify` skill——**單一瀏覽器分頁測不出 lockstep 跑飛問題**。
+**沒有測試框架,也沒有設定 lint**,但有兩支驗證腳本當回歸測試:
+
+| 指令 | 涵蓋範圍 | 前置需求 |
+|---|---|---|
+| `npm run verify` | 地圖定義合法性、擊退邊界、雜湊決定性、每張地圖跑兩次 2600 tick 比對 checksum 序列、各機制真的會發生 | 無(esbuild 來自 vite 的傳遞依賴) |
+| `npm run verify:browser` | 三張地圖的單人流程、換地圖時靜態層有沒有重畫(解碼截圖像素)、多人 2 玩家 checksum 一致性 | 另開終端機跑 `npm run dev`;Playwright 要自己裝(`npm i -D playwright && npx playwright install chromium`,刻意不列進專案依賴——會連帶下載數百 MB 瀏覽器) |
+
+**改過 `src/sim/` 一定要跑 `npm run verify`。** 多人同步的驗證方法論見 `multiplayer-verify` skill——**單一瀏覽器分頁測不出 lockstep 跑飛問題**。
 
 除錯資訊不顯示在頁面上(刻意的),在瀏覽器主控台執行 `window.__wuxingDebug` 看 `{tick, checksum}`。
 

@@ -17,6 +17,24 @@ lockstep 的 bug 幾乎都是「兩台機器算出不同結果」,單一分頁**
 window.__wuxingDebug   // → { tick, checksum }
 ```
 
+## 自動化腳本(優先用這個)
+
+```
+npm run dev              # 另一個終端機
+npm run verify:browser   # scripts/verify-browser.mjs
+```
+
+已經涵蓋:三張地圖的單人流程、同一分頁換地圖時靜態層有沒有重畫、**多人 2 玩家在同一 tick 上的 checksum 比對**。
+
+Playwright 要自己裝(刻意不列進專案依賴,會連帶下載數百 MB 瀏覽器):
+
+```
+npm i -D playwright
+npx playwright install chromium
+```
+
+下面的手動流程留著給「腳本沒涵蓋的情境」用(例如換房主——那需要真的砍掉某個 context)。
+
 ## 手動驗證(最低限度)
 
 1. `npm run dev`

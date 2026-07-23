@@ -8,6 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "verify": "node scripts/verify-sim.mjs",
+    "verify:browser": "node scripts/verify-browser.mjs",
     "assets": "node scripts/asset-server.cjs"
   },
   "dependencies": {

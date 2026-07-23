@@ -98,5 +98,6 @@ HUD 那層也一樣(`main.ts` 的 `renderWaveHud()`/`currentWaveNumberFor()`)—
 ## 改完之後
 
 1. `npm run typecheck` 過
-2. 多人情境必須實際跑 `multiplayer-verify` skill 的流程比對 checksum——**單一瀏覽器分頁測不出跑飛問題**
-3. 改到數值平衡的話,細節與歷史脈絡見 `docs/SIMULATION.md`
+2. **`npm run verify` 過**(`scripts/verify-sim.mjs`)——這是模擬層的回歸測試:每張地圖跑兩次 2600 tick 比對 checksum 序列完全一致,加上各機制真的會發生。新增機制時也應該往這支腳本加對應的檢查
+3. 多人情境再跑 `npm run verify:browser`,或照 `multiplayer-verify` skill 的流程手動比對——**單一瀏覽器分頁測不出跑飛問題**
+4. 改到數值平衡的話,細節與歷史脈絡見 `docs/SIMULATION.md`
