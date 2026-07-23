@@ -148,26 +148,54 @@ console.log('\n=== (B) 同一分頁連續換地圖 ===');
   // **不能比對 PNG 壓縮後的 bytes**——壓縮資料只要有一點差異後續就全不同,算出來的
   // 「差異率」永遠接近 1,兩張圖再像也分不出來(第一版就是這樣完全測不到東西)。
   const { PNG } = await import('pngjs');
-  const GRID_W = 40;
-  const GRID_H = 24;
-  const pixelAt = (buf, gx, gy) => {
-    const png = PNG.sync.read(buf);
-    const px = Math.floor(((gx + 0.5) / GRID_W) * png.width);
-    const py = Math.floor(((gy + 0.5) / GRID_H) * png.height);
-    const idx = (png.width * py + px) << 2;
-    return [png.data[idx], png.data[idx + 1], png.data[idx + 2]];
-  };
-  // 路徑材質是土色(r > g),草地是綠色(g > r)。
-  const looksLikePath = ([r, g]) => r > g;
 
-  // (0,12):crossroads 是路徑起點,serpent 在這格是草地(它的 y=12 那段從 x=3 才開始)
-  // (0,2) :serpent 是路徑起點,crossroads 在這格是草地
-  check('crossroads:(0,12) 畫成路徑', looksLikePath(pixelAt(shots.first, 0, 12)));
-  check('crossroads:(0,2) 畫成草地', !looksLikePath(pixelAt(shots.first, 0, 2)));
-  check('serpent:(0,2) 畫成路徑(新地圖的路徑有出現)', looksLikePath(pixelAt(shots.other, 0, 2)));
-  check('serpent:(0,12) 畫成草地(舊地圖的路徑沒殘留)', !looksLikePath(pixelAt(shots.other, 0, 12)));
-  check('換回 crossroads:(0,12) 又變回路徑', looksLikePath(pixelAt(shots.again, 0, 12)));
-  check('換回 crossroads:(0,2) 又變回草地', !looksLikePath(pixelAt(shots.again, 0, 2)));
+  /**
+   * 整張畫面的平均色。
+   *
+   * **不能取單一格子的像素**:第一版這樣做,結果取到的 (0,12) 剛好是 crossroads 的
+   * 怪物出生點,像素被路過的怪蓋掉,同一張地圖兩次量到的顏色就差很多(誤判成「有殘留」);
+   * 而且土路跟沙地的顏色本來就接近,單點比對也分不出換了地圖(誤判成「沒重畫」)。
+   * 取整張平均可以把怪物/裝飾物這些少數像素的影響攤掉,剩下的就是地形本身的色調。
+   */
+  const averageColor = (buf) => {
+    const png = PNG.sync.read(buf);
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let n = 0;
+    // 每隔幾個像素取一次就夠了,不用逐像素掃(整張 1280x800 太慢)
+    for (let i = 0; i < png.data.length; i += 4 * 17) {
+      r += png.data[i];
+      g += png.data[i + 1];
+      b += png.data[i + 2];
+      n++;
+    }
+    return [r / n, g / n, b / n];
+  };
+  // **不能用「路徑是土色 r>g、地面是綠色 g>r」這種色相判斷**:每張地圖現在有各自的
+  // 地形材質(草原/沙漠/雪原),沙漠的沙地本身就是 r>g、雪原的石板路是冷藍 r<g,
+  // 色相假設整個不成立。改成比「顏色距離」——不管實際是什麼顏色,只看有沒有變:
+  //   換地圖 → 同一格的顏色應該差很多(靜態層真的重畫了)
+  //   換回同一張地圖 → 同一格的顏色應該幾乎一樣(沒有殘留、也沒有畫錯)
+  const colorDist = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+  const CHANGED = 40; // 三通道差值總和,超過這個就算「明顯不同」(草原↔沙漠實測遠大於此)
+  const SAME = 12; // 低於這個就算「幾乎一樣」(平均色下,怪物位置不同只造成個位數差異)
+
+  const first = averageColor(shots.first);
+  const other = averageColor(shots.other);
+  const again = averageColor(shots.again);
+  const fmt = (c) => c.map((v) => Math.round(v)).join(',');
+
+  check(
+    '換地圖後整體色調明顯改變(靜態層有照新地圖重畫)',
+    colorDist(first, other) > CHANGED,
+    `dist=${colorDist(first, other).toFixed(1)} — crossroads(${fmt(first)}) vs serpent(${fmt(other)})`,
+  );
+  check(
+    '換回同一地圖後色調復原(沒有殘留舊地圖)',
+    colorDist(first, again) < SAME,
+    `dist=${colorDist(first, again).toFixed(1)} — ${fmt(first)} vs ${fmt(again)}`,
+  );
   check('全程沒有 console error', errors.length === 0, errors.slice(0, 3).join(' | '));
   await ctx.close();
 }

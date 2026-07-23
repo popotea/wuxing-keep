@@ -99,7 +99,12 @@
 - **實作取捨:地圖資料用模組層級快取(`setActiveMap`),不是每個函式都帶 `mapId` 參數**——後者要波及 `towers.ts`/`simulation.ts`/`GameScene.ts` 幾十個呼叫點。決定性仍成立(所有機器在 `createInitialState()` 用同一個 mapId 設定一次,之後整場不變),**代價是任何不走 `createInitialState()` 建立 state 的路徑都要記得自己補呼叫**(換房主 resume、RESYNC、`resetCamera()` 之前),漏掉會直接跑飛。這三處都已經處理,並寫進 `sim-determinism` skill 的檢查清單
 - **`GameScene` 的靜態層要能重畫**:地板/路徑/裝飾物原本只在 `create()` 畫一次,多地圖之後每場對局可能不一樣,新增 `staticObjects` 追蹤 + `rebuildStaticLayer()`,由 `resetCamera()` 呼叫
 
-路線本身仍然沒有經過美術/關卡設計,是「玩得出差異」的初版——形狀、交叉點位置、要不要更多張地圖都還可以再調整。
+**✅ 每張地圖各自的地形美術也完成了(2026-07-23)**:`scripts/generate-map-terrain-assets.mjs`(新的一支,用免金鑰的 Pollinations,**不需要 `HF_TOKEN`**,無縫鋪磚的後處理從 `generate-terrain-assets.mjs` 複製過來)產了沙漠(沙地+石板路)跟雪原(雪地+凍礫路)兩組;`crossroads` 沿用既有那組草原材質(已經過一輪「太亮太飽和」的調校,重產反而可能退步),直接複製一份到 `tiles/crossroads/` 讓每張地圖都有實際檔案(避免 Phaser loader 噴 console error)。
+
+- **疊色要依主題換顏色**(`TERRAIN_TINT_BY_MAP`):雪原疊原本的灰卡其會變成髒黃色,沙漠疊冷色會死氣沉沉
+- **順手修掉一個新地形暴露出來的既有問題**:AI 生的裝飾物圖沒有去背(prompt 是「站在草地上」,每張都帶一塊綠色草地方形背景),鋪在草原上看不太出來,但鋪在沙漠/雪原上會變成一格一格突兀的綠色補丁(截圖確認過)。非草原地圖改用程序生成的幾何造型 + 依主題換配色(`DECOR_THEME_BY_MAP`),`drawDecor*()` 都改成吃可選顏色參數
+
+路線本身仍然沒有經過關卡設計,是「玩得出差異」的初版——形狀、交叉點位置、要不要更多張地圖都還可以再調整。
 
 ## 關卡提示與特殊波次
 

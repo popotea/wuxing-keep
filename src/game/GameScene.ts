@@ -3,7 +3,17 @@
 
 import Phaser from 'phaser';
 import { ELEMENT_NAMES, GENERATED_BY, type Element } from '../sim/elements';
-import { FP_SCALE, GRID_HEIGHT, GRID_WIDTH, inBounds, isOnPath, paths, worldPositionFp } from '../sim/map';
+import {
+  activeMapDefId,
+  FP_SCALE,
+  GRID_HEIGHT,
+  GRID_WIDTH,
+  inBounds,
+  isOnPath,
+  MAP_DEFS,
+  paths,
+  worldPositionFp,
+} from '../sim/map';
 import type { Monster } from '../sim/monsters';
 import { RUNE_TOTEM_RANGE_FP } from '../sim/placements';
 import { STATUS_NAMES, type StatusKind } from '../sim/statuses';
@@ -135,6 +145,88 @@ function towerEvolutionTextureKey(element: Element, path: UpgradePath): string {
 const TILE_FLOOR_KEY = 'tile-floor';
 const TILE_PATH_KEY = 'tile-path';
 
+/**
+ * 每張地圖各自的地形材質(scripts/generate-map-terrain-assets.mjs 產的),讓三張地圖一眼
+ * 看得出是不同場景——原本三張共用同一套草地+土路,只有路徑形狀不同,視覺上分不出來。
+ *
+ * **三層備援**(跟塔的 resolveTowerTextureKey() 同一套精神):
+ *   地圖專屬材質 → 共用的 tiles/floor.png|path.png → 純色棋盤格/純色填滿
+ * 所以只有部分地圖有專屬材質也不會壞(`crossroads` 就刻意沒產,它用的就是共用那組——
+ * 那組已經過一輪「太亮太飽和」的調校,重產反而可能退步)。
+ */
+function mapTileKey(mapId: string, kind: 'floor' | 'path'): string {
+  return `tile-${kind}-${mapId}`;
+}
+
+/**
+ * 地形疊色(壓暗降飽和)。AI 生的材質色調普遍偏亮偏飽和,長時間盯著玩不舒服,
+ * 疊一層半透明色壓下來——但**不同主題要疊不同顏色**:雪原疊灰卡其會變成髒黃色,
+ * 沙漠疊冷色會變得死氣沉沉。沒列在表裡的地圖走 DEFAULT(原本的灰卡其)。
+ */
+const TERRAIN_TINT_DEFAULT = { color: 0x4a4f3a, alpha: 0.3 };
+const TERRAIN_TINT_BY_MAP: Record<string, { color: number; alpha: number }> = {
+  crossroads: { color: 0x4a4f3a, alpha: 0.3 }, // 草原:原本調校過的灰卡其
+  serpent: { color: 0x5a4a35, alpha: 0.26 }, // 沙漠:暖褐,保留一點乾燥感
+  trident: { color: 0x3f4a5a, alpha: 0.26 }, // 雪原:冷灰藍,壓亮度但不弄髒白色
+};
+
+/**
+ * 每張地圖的裝飾物主題。`useAiImages` 只有草原地圖是 true——AI 生的裝飾圖沒有去背、
+ * 帶著綠色草地方形背景,鋪在沙漠/雪原上會變成一格格突兀的綠色補丁。
+ * `kinds` 決定用哪幾種程序生成造型,`foliage`/`trunk`/`rock` 是配色。
+ */
+interface DecorTheme {
+  useAiImages: boolean;
+  kinds: readonly string[];
+  foliage: number;
+  trunk: number;
+  rock: number;
+}
+
+const DECOR_THEME_DEFAULT: DecorTheme = {
+  useAiImages: true,
+  kinds: ['tree', 'bush', 'rock', 'flowers', 'critter'],
+  foliage: 0x3f7a3f,
+  trunk: 0x6b4a2f,
+  rock: 0x7a7a72,
+};
+
+const DECOR_THEME_BY_MAP: Record<string, DecorTheme> = {
+  crossroads: DECOR_THEME_DEFAULT,
+  // 沙漠:沒有樹,只有石頭跟乾枯的灌木,配色偏黃褐
+  serpent: {
+    useAiImages: false,
+    kinds: ['rock', 'bush', 'rock'],
+    foliage: 0x8a7a45,
+    trunk: 0x7a5c38,
+    rock: 0x9a8259,
+  },
+  // 雪原:枯樹 + 石頭,配色偏冷灰
+  trident: {
+    useAiImages: false,
+    kinds: ['rock', 'tree', 'rock'],
+    foliage: 0x8fa3ad,
+    trunk: 0x5f5348,
+    rock: 0x9aa6ad,
+  },
+};
+
+/** 有專屬材質就用專屬的,否則退回共用的;兩個都沒載入成功回傳 null(呼叫端退回純色畫法)。 */
+function resolveTileKey(mapId: string, kind: 'floor' | 'path', scene: Phaser.Scene): string | null {
+  const specific = mapTileKey(mapId, kind);
+  if (scene.textures.exists(specific)) return specific;
+  const shared = kind === 'floor' ? TILE_FLOOR_KEY : TILE_PATH_KEY;
+  return scene.textures.exists(shared) ? shared : null;
+}
+
+/** 把顏色往白色拉一點(amount 0~1),用來從主色算出高光色,不用每個主題都手動配兩個顏色。 */
+function lighten(color: number, amount: number): number {
+  const r = Math.min(255, Math.round(((color >> 16) & 0xff) + 255 * amount));
+  const g = Math.min(255, Math.round(((color >> 8) & 0xff) + 255 * amount));
+  const b = Math.min(255, Math.round((color & 0xff) + 255 * amount));
+  return (r << 16) | (g << 8) | b;
+}
+
 /** 純視覺用的簡單雜湊(不是密碼學等級),只用來決定哪幾格灑裝飾物、灑哪一種,裝飾物不是模擬狀態不用管跨機器一不一致。 */
 function tileHash(x: number, y: number): number {
   let h = (x * 374761393 + y * 668265263) ^ 0x9e3779b9;
@@ -217,6 +309,19 @@ export class GameScene extends Phaser.Scene {
     }
     this.load.image(TILE_FLOOR_KEY, 'assets/tiles/floor.png');
     this.load.image(TILE_PATH_KEY, 'assets/tiles/path.png');
+    // 每張地圖的專屬地形材質。preload 只在整個網頁生命週期跑一次(Phaser.Game 跨對局重複
+    // 使用),沒辦法等玩家選了地圖才載——所以一次把所有地圖的都載進來。材質是 256x256,
+    // 全部加起來也才幾百 KB,不值得為了省這點流量去搞動態 loader。
+    //
+    // **每張地圖都要有實際檔案存在**:Phaser 的 loader 載不到檔會往 console 噴 error
+    // (「Failed to process file: image tile-floor-xxx」),雖然 resolveTileKey() 會正常
+    // 退回共用材質、功能不受影響,但主控台一直有紅字很干擾排查真正的問題。crossroads 因此
+    // 直接複製了一份共用材質到 tiles/crossroads/(它的材質已經過調校,不重新產)。
+    // resolveTileKey() 的備援路徑仍然留著當保險,不是拿掉。
+    for (const def of MAP_DEFS) {
+      this.load.image(mapTileKey(def.id, 'floor'), `assets/tiles/${def.id}/floor.png`);
+      this.load.image(mapTileKey(def.id, 'path'), `assets/tiles/${def.id}/path.png`);
+    }
   }
 
   create(): void {
@@ -631,10 +736,15 @@ export class GameScene extends Phaser.Scene {
     const mapWidthPx = GRID_WIDTH * TILE_PX;
     const mapHeightPx = GRID_HEIGHT * TILE_PX;
 
+    // 這場對局用哪張地圖的材質(有專屬的用專屬,否則退回共用的,見 resolveTileKey)。
+    const mapId = activeMapDefId();
+    const floorKey = resolveTileKey(mapId, 'floor', this);
+    const pathKey = resolveTileKey(mapId, 'path', this);
+
     // 有正式地板材質就整片鋪滿(材質已經做過 seamless tiling,TileSprite 重複貼不會有接縫);
     // 沒有就退回棋盤式雙色交錯畫法。地板先整片蓋住全部格子(含路徑格),路徑材質等等疊上去蓋掉。
-    if (this.textures.exists(TILE_FLOOR_KEY)) {
-      this.trackStatic(this.add.tileSprite(0, 0, mapWidthPx, mapHeightPx, TILE_FLOOR_KEY).setOrigin(0, 0));
+    if (floorKey) {
+      this.trackStatic(this.add.tileSprite(0, 0, mapWidthPx, mapHeightPx, floorKey).setOrigin(0, 0));
     } else {
       for (let x = 0; x < GRID_WIDTH; x++) {
         for (let y = 0; y < GRID_HEIGHT; y++) {
@@ -648,13 +758,13 @@ export class GameScene extends Phaser.Scene {
     // 路徑格各自貼一張材質圖(不是整片 TileSprite 疊 GeometryMask)——mask 每影格都要重新
     // 運算合成,路徑格一多(百來格)會拖影格率,滑鼠移動時邊緣平移/預覽格跟著卡頓。
     // 材質已經做過 seamless tiling,同一張圖照格子排就會自然接起來,靜態貼一次完全不用 mask。
-    if (this.textures.exists(TILE_PATH_KEY)) {
+    if (pathKey) {
       for (let x = 0; x < GRID_WIDTH; x++) {
         for (let y = 0; y < GRID_HEIGHT; y++) {
           if (!isOnPath(x, y)) continue;
           this.trackStatic(
             this.add
-              .image(x * TILE_PX + TILE_PX / 2, y * TILE_PX + TILE_PX / 2, TILE_PATH_KEY)
+              .image(x * TILE_PX + TILE_PX / 2, y * TILE_PX + TILE_PX / 2, pathKey)
               .setDisplaySize(TILE_PX, TILE_PX),
           );
         }
@@ -675,9 +785,12 @@ export class GameScene extends Phaser.Scene {
     // 刻意在地板/路徑圖片都貼完之後才建立:同深度(預設 0)時疊放順序看加入順序,晚加入的蓋在
     // 上面,才不會反而被蓋在圖片底下變成完全看不到。只有真的載入了材質圖才需要壓,棋盤格/純色
     // 填滿的備援畫法本來配色就偏暗,不用再疊一次。
-    if (this.textures.exists(TILE_FLOOR_KEY) || this.textures.exists(TILE_PATH_KEY)) {
+    // 疊色的顏色依地圖主題換:草原壓灰卡其(原本的值),雪原用冷灰藍才不會把雪壓成髒黃色,
+    // 沙漠用暖褐。三張地圖的材質色調差很多,套同一個疊色會有一張看起來很不對。
+    if (floorKey || pathKey) {
+      const tint = TERRAIN_TINT_BY_MAP[mapId] ?? TERRAIN_TINT_DEFAULT;
       const terrainTint = this.trackStatic(this.add.graphics());
-      terrainTint.fillStyle(0x4a4f3a, 0.3);
+      terrainTint.fillStyle(tint.color, tint.alpha);
       terrainTint.fillRect(0, 0, mapWidthPx, mapHeightPx);
     }
 
@@ -755,16 +868,30 @@ export class GameScene extends Phaser.Scene {
     g.lineBetween(cx - size, cy + size, cx + size, cy - size);
   }
 
-  /** 非路徑格灑一點樹/草叢/石頭/花/小動物,地圖比較大之後大片空草地才不會太單調。畫一次不用每 tick 重畫。 */
+  /**
+   * 非路徑格灑一點樹/草叢/石頭/花/小動物,大片空地才不會太單調。畫一次不用每 tick 重畫。
+   *
+   * **AI 生的裝飾圖只在草原地圖用**:那批圖沒有去背,prompt 是「站在草地上」,所以每張都
+   * 帶著一塊綠色草地方形背景——鋪在草原上看不太出來,但鋪在沙漠/雪原上會變成一格一格
+   * 突兀的綠色補丁(實測截圖確認過)。非草原地圖改用程序生成的幾何造型(沒有背景方塊),
+   * 並依地圖主題換掉造型組合跟配色,見 DECOR_THEME_BY_MAP。
+   */
   private drawDecorations(): void {
     const g = this.trackStatic(this.add.graphics());
-    const proceduralDrawers: Array<(cx: number, cy: number, seed: number) => void> = [
-      (cx, cy) => this.drawDecorTree(g, cx, cy),
-      (cx, cy) => this.drawDecorBush(g, cx, cy),
-      (cx, cy) => this.drawDecorRock(g, cx, cy),
-      (cx, cy) => this.drawDecorFlowers(g, cx, cy),
-      (cx, cy, seed) => this.drawDecorCritter(g, cx, cy, seed),
-    ];
+    const mapId = activeMapDefId();
+    const theme = DECOR_THEME_BY_MAP[mapId] ?? DECOR_THEME_DEFAULT;
+
+    // 每個主題自己的造型組合:草原有樹/草叢/花/小動物,沙漠只有石頭跟乾枯的灌木,
+    // 雪原是石頭跟枯樹——用同一批 drawDecor*() 函式配不同顏色,不用另外畫新造型。
+    const drawersByKind: Record<string, (cx: number, cy: number, seed: number) => void> = {
+      tree: (cx, cy) => this.drawDecorTree(g, cx, cy, theme.foliage, theme.trunk),
+      bush: (cx, cy) => this.drawDecorBush(g, cx, cy, theme.foliage),
+      rock: (cx, cy) => this.drawDecorRock(g, cx, cy, theme.rock),
+      flowers: (cx, cy) => this.drawDecorFlowers(g, cx, cy, theme.foliage),
+      critter: (cx, cy, seed) => this.drawDecorCritter(g, cx, cy, seed),
+    };
+    const proceduralDrawers = theme.kinds.map((k) => drawersByKind[k]);
+
     for (let x = 0; x < GRID_WIDTH; x++) {
       for (let y = 0; y < GRID_HEIGHT; y++) {
         if (isOnPath(x, y)) continue;
@@ -773,7 +900,7 @@ export class GameScene extends Phaser.Scene {
         const cx = x * TILE_PX + TILE_PX / 2;
         const cy = y * TILE_PX + TILE_PX / 2;
         const imageKey = DECOR_IMAGE_KEYS[Math.floor(h / 100) % DECOR_IMAGE_KEYS.length];
-        if (this.textures.exists(imageKey)) {
+        if (theme.useAiImages && this.textures.exists(imageKey)) {
           this.placeDecorImage(imageKey, cx, cy);
         } else {
           const drawer = proceduralDrawers[Math.floor(h / 100) % proceduralDrawers.length];
@@ -793,30 +920,38 @@ export class GameScene extends Phaser.Scene {
     image.setMask(maskShape.createGeometryMask());
   }
 
-  private drawDecorTree(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
+  // 這幾個 drawDecor*() 都吃可選的顏色參數(見 DecorTheme):沙漠/雪原用同一批造型
+  // 換配色就好,不用另外畫新造型。不傳就用原本草原的配色。
+  private drawDecorTree(
+    g: Phaser.GameObjects.Graphics,
+    cx: number,
+    cy: number,
+    foliage = 0x2e6b3e,
+    trunk = 0x5b3a22,
+  ): void {
     g.fillStyle(0x000000, 0.15);
     g.fillEllipse(cx, cy + 6 * DECOR_SCALE, 14 * DECOR_SCALE, 4 * DECOR_SCALE);
-    g.fillStyle(0x5b3a22, 1);
+    g.fillStyle(trunk, 1);
     g.fillRect(cx - 2 * DECOR_SCALE, cy, 4 * DECOR_SCALE, 7 * DECOR_SCALE);
-    g.fillStyle(0x2e6b3e, 1);
+    g.fillStyle(foliage, 1);
     g.fillCircle(cx, cy - 4 * DECOR_SCALE, 7 * DECOR_SCALE);
-    g.fillStyle(0x3f8a52, 1);
+    g.fillStyle(lighten(foliage, 0.18), 1);
     g.fillCircle(cx - 2 * DECOR_SCALE, cy - 6 * DECOR_SCALE, 4 * DECOR_SCALE);
   }
 
-  private drawDecorBush(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
+  private drawDecorBush(g: Phaser.GameObjects.Graphics, cx: number, cy: number, foliage = 0x336b3a): void {
     g.fillStyle(0x000000, 0.15);
     g.fillEllipse(cx, cy + 4 * DECOR_SCALE, 14 * DECOR_SCALE, 4 * DECOR_SCALE);
-    g.fillStyle(0x336b3a, 1);
+    g.fillStyle(foliage, 1);
     g.fillCircle(cx - 4 * DECOR_SCALE, cy, 5 * DECOR_SCALE);
     g.fillCircle(cx + 4 * DECOR_SCALE, cy, 5 * DECOR_SCALE);
     g.fillCircle(cx, cy - 3 * DECOR_SCALE, 5.5 * DECOR_SCALE);
   }
 
-  private drawDecorRock(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
+  private drawDecorRock(g: Phaser.GameObjects.Graphics, cx: number, cy: number, rockColor = 0x6b6b6b): void {
     g.fillStyle(0x000000, 0.15);
     g.fillEllipse(cx, cy + 4 * DECOR_SCALE, 12 * DECOR_SCALE, 3 * DECOR_SCALE);
-    g.fillStyle(0x6b6b6b, 1);
+    g.fillStyle(rockColor, 1);
     g.fillPoints(
       [
         new Phaser.Math.Vector2(cx - 6 * DECOR_SCALE, cy + 2 * DECOR_SCALE),
@@ -828,14 +963,15 @@ export class GameScene extends Phaser.Scene {
       ],
       true,
     );
-    g.fillStyle(0x4a7a52, 0.5);
+    // 石頭上的一小塊苔蘚——用比石頭亮一點的同色系,沙漠/雪原就不會出現突兀的綠色苔蘚
+    g.fillStyle(lighten(rockColor, 0.22), 0.5);
     g.fillCircle(cx - 2 * DECOR_SCALE, cy - 3 * DECOR_SCALE, 2 * DECOR_SCALE);
   }
 
-  private drawDecorFlowers(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
+  private drawDecorFlowers(g: Phaser.GameObjects.Graphics, cx: number, cy: number, foliage = 0x3a7d3a): void {
     g.fillStyle(0x000000, 0.12);
     g.fillEllipse(cx, cy + 3 * DECOR_SCALE, 10 * DECOR_SCALE, 3 * DECOR_SCALE);
-    g.fillStyle(0x3a7d3a, 1);
+    g.fillStyle(foliage, 1);
     g.fillCircle(cx, cy, 4 * DECOR_SCALE);
     const petalColors = [0xe86b9b, 0xf2d13d, 0xffffff];
     for (let i = 0; i < petalColors.length; i++) {
@@ -1208,11 +1344,71 @@ export class GameScene extends Phaser.Scene {
     if (abilityColor !== undefined) {
       g.lineStyle(1.5 * SCALE, abilityColor, 0.85);
       g.strokeCircle(px, py, 10 * SCALE * bossMul);
+      // 光一圈顏色環只分得出「這隻特別」,分不出「特別在哪」——再畫一個代表能力的小符號。
+      this.drawAbilityGlyph(g, m.ability, abilityColor, px, py, bossMul);
     }
 
     if (m.statusEntangleTicks > 0) {
       g.lineStyle(2 * SCALE, 0x3a9d3a, 0.9);
       g.strokeCircle(px, py + 6 * SCALE * bossMul, 7 * SCALE * bossMul);
+    }
+  }
+
+  /**
+   * 怪物能力的識別符號,畫在身體右上角(避開頭上的元素名稱文字跟上方的血條)。
+   *
+   * **刻意用 Graphics 畫幾何符號,不另外產美術**:5 種能力 × 5 種元素 = 25 張圖,
+   * 產圖成本跟維護成本都不划算,而且能力是「疊加在既有怪物上的標記」,本來就不該
+   * 換掉整隻怪的造型。幾何符號縮到這個尺寸(約 5px)反而比縮小的插圖好認。
+   * 每種符號的造型對齊 index.html 裡對應的 SVG 圖示,玩家在 tooltip 跟地圖上看到的是同一個形狀。
+   */
+  private drawAbilityGlyph(
+    g: Phaser.GameObjects.Graphics,
+    ability: Monster['ability'],
+    color: number,
+    px: number,
+    py: number,
+    bossMul: number,
+  ): void {
+    const s = 2.6 * SCALE * bossMul; // 符號的半尺寸
+    const cx = px + 8 * SCALE * bossMul;
+    const cy = py - 7 * SCALE * bossMul;
+
+    // 深色底盤,讓符號在任何顏色的怪身上都看得清楚
+    g.fillStyle(0x000000, 0.55);
+    g.fillCircle(cx, cy, s * 1.7);
+    g.lineStyle(1 * SCALE, color, 1);
+    g.fillStyle(color, 1);
+
+    if (ability === 'healer') {
+      // 十字
+      g.fillRect(cx - s * 0.35, cy - s, s * 0.7, s * 2);
+      g.fillRect(cx - s, cy - s * 0.35, s * 2, s * 0.7);
+    } else if (ability === 'shield') {
+      // 盾牌:上緣平、下緣收尖
+      g.beginPath();
+      g.moveTo(cx - s, cy - s * 0.9);
+      g.lineTo(cx + s, cy - s * 0.9);
+      g.lineTo(cx + s * 0.75, cy + s * 0.5);
+      g.lineTo(cx, cy + s * 1.2);
+      g.lineTo(cx - s * 0.75, cy + s * 0.5);
+      g.closePath();
+      g.fillPath();
+    } else if (ability === 'splitter') {
+      // 一個分成兩個
+      g.fillCircle(cx, cy - s * 0.7, s * 0.55);
+      g.fillCircle(cx - s * 0.75, cy + s * 0.75, s * 0.5);
+      g.fillCircle(cx + s * 0.75, cy + s * 0.75, s * 0.5);
+    } else if (ability === 'aura') {
+      // speed lines
+      g.fillRect(cx - s, cy - s * 0.75, s * 1.6, s * 0.4);
+      g.fillRect(cx - s, cy - s * 0.1, s * 2, s * 0.4);
+      g.fillRect(cx - s, cy + s * 0.55, s * 1.6, s * 0.4);
+    } else {
+      // bomber:圓身 + 引信
+      g.fillCircle(cx, cy + s * 0.25, s * 0.9);
+      g.lineStyle(1.2 * SCALE, color, 1);
+      g.lineBetween(cx + s * 0.5, cy - s * 0.4, cx + s * 1.1, cy - s * 1.1);
     }
   }
 

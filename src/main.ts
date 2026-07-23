@@ -16,8 +16,8 @@ import {
   skillCooldownRemaining,
   type SkillId,
 } from './sim/skills';
-import { STATUS_DESCRIPTIONS, STATUS_NAMES } from './sim/statuses';
-import { ABILITY_DESCRIPTIONS, ABILITY_NAMES } from './sim/monsters';
+import { STATUS_DESCRIPTIONS, STATUS_NAMES, type StatusKind } from './sim/statuses';
+import { ABILITY_DESCRIPTIONS, ABILITY_NAMES, type MonsterAbility } from './sim/monsters';
 import {
   activeBonusWaveInfo,
   currentWaveNumber,
@@ -185,6 +185,59 @@ let rehostInProgress = false;
  * 施放模式下點地圖不會開建造選單,而是直接送出 cast_skill 指令,見 onTilePlaced。
  */
 let armedSkill: SkillId | null = null;
+
+// ---- SVG 圖示對應(<symbol> 定義在 index.html 的 <body> 開頭)----
+// 放在 main.ts 而不是 sim/ 底下的模組:圖示純粹是顯示層的事,模擬層不該知道 UI 用什麼圖。
+
+const SKILL_ICONS: Record<SkillId, string> = {
+  meteor: 'icon-meteor',
+  frost: 'icon-frost',
+  warcry: 'icon-warcry',
+};
+
+const ABILITY_ICONS: Record<MonsterAbility, string | null> = {
+  none: null,
+  healer: 'icon-healer',
+  shield: 'icon-shield',
+  splitter: 'icon-split',
+  aura: 'icon-aura',
+  bomber: 'icon-bomb',
+};
+
+const STATUS_ICONS: Record<StatusKind, string> = {
+  burn: 'icon-burn',
+  chill: 'icon-chill',
+  entangle: 'icon-entangle',
+  sunder: 'icon-sunder',
+  knockback: 'icon-knockback',
+};
+
+/**
+ * 狀態圖示的顏色。刻意跟 GameScene.ts 的 statusTintColor()/STATUS_TEXT_COLORS 同一套配色——
+ * 玩家在 tooltip 看到的顏色,要跟他在地圖上看到那隻怪被染成的顏色一致,才建立得起關聯。
+ */
+const STATUS_UI_COLORS: Record<StatusKind, string> = {
+  burn: '#ff9b6b',
+  chill: '#8ecdff',
+  entangle: '#7ee08a',
+  sunder: '#ffd27e',
+  knockback: '#e8e8ea',
+};
+
+/** 能力圖示的顏色,同樣對齊 GameScene.ts 的 ABILITY_RING_COLORS(怪物外圈那個環)。 */
+const ABILITY_UI_COLORS: Record<MonsterAbility, string> = {
+  none: '#e8e8ea',
+  healer: '#7ee08a',
+  shield: '#6ec6ff',
+  splitter: '#c98aff',
+  aura: '#ffe98a',
+  bomber: '#ff6b6b',
+};
+
+/** 產生一個 `<svg class="icon">` 標記。color 是 CSS 顏色字串(通常是 var(--xxx)),省略就繼承文字顏色。 */
+function iconMarkup(symbolId: string, color?: string): string {
+  return `<svg class="icon"${color ? ` style="color: ${color}"` : ''}><use href="#${symbolId}" /></svg>`;
+}
 
 // ---- 地圖選擇 ----
 // 兩個下拉選單(單人/建房)共用同一份 MAP_DEFS,選項是程式產生的,不是寫死在 HTML 裡——
@@ -467,7 +520,7 @@ function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: n
     }
     // 元素異常狀態:玩家看不到這個機制存在的話,選屬性又退回只看傷害倍率了(見 statuses.ts)。
     rows.push(
-      `<div class="tooltip-row">${STATUS_NAMES[stats.statusKind]}(${stats.statusChancePercent}% 機率):${STATUS_DESCRIPTIONS[stats.statusKind]}</div>`,
+      `<div class="tooltip-row">${iconMarkup(STATUS_ICONS[stats.statusKind], STATUS_UI_COLORS[stats.statusKind])} ${STATUS_NAMES[stats.statusKind]}(${stats.statusChancePercent}% 機率):${STATUS_DESCRIPTIONS[stats.statusKind]}</div>`,
     );
     rows.push(`<div class="tooltip-row">建造者:${escapeHtml(displayNameFor(tower.ownerId))}</div>`);
     const elementLabel = tower.secondElement
@@ -488,19 +541,24 @@ function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: n
     if (m.shieldHp > 0) {
       monsterRows.push(`<div class="tooltip-row" style="color: var(--water)">護盾 <b>${m.shieldHp}</b> / ${m.maxShieldHp}</div>`);
     }
-    if (m.ability !== 'none') {
+    const abilityIcon = ABILITY_ICONS[m.ability];
+    if (m.ability !== 'none' && abilityIcon) {
       monsterRows.push(
-        `<div class="tooltip-row" style="color: var(--accent)">${ABILITY_NAMES[m.ability]}:${ABILITY_DESCRIPTIONS[m.ability]}</div>`,
+        `<div class="tooltip-row" style="color: ${ABILITY_UI_COLORS[m.ability]}">${iconMarkup(abilityIcon)} ${ABILITY_NAMES[m.ability]}:${ABILITY_DESCRIPTIONS[m.ability]}</div>`,
       );
     }
     // 身上正在生效的異常狀態,讓玩家知道自己的塔真的有觸發效果(不然這個機制等於隱形的)。
-    const activeStatuses: string[] = [];
-    if (m.statusBurnTicks > 0) activeStatuses.push(STATUS_NAMES.burn);
-    if (m.statusChillTicks > 0) activeStatuses.push(STATUS_NAMES.chill);
-    if (m.statusEntangleTicks > 0) activeStatuses.push(STATUS_NAMES.entangle);
-    if (m.statusSunderTicks > 0) activeStatuses.push(STATUS_NAMES.sunder);
+    // 每個狀態各自配自己的圖示+顏色,跟地圖上那隻怪被染成的顏色對得起來。
+    const activeStatuses: StatusKind[] = [];
+    if (m.statusBurnTicks > 0) activeStatuses.push('burn');
+    if (m.statusChillTicks > 0) activeStatuses.push('chill');
+    if (m.statusEntangleTicks > 0) activeStatuses.push('entangle');
+    if (m.statusSunderTicks > 0) activeStatuses.push('sunder');
     if (activeStatuses.length > 0) {
-      monsterRows.push(`<div class="tooltip-row" style="color: var(--fire)">狀態:${activeStatuses.join('、')}</div>`);
+      const parts = activeStatuses
+        .map((k) => `<span style="color: ${STATUS_UI_COLORS[k]}">${iconMarkup(STATUS_ICONS[k])} ${STATUS_NAMES[k]}</span>`)
+        .join(' ');
+      monsterRows.push(`<div class="tooltip-row">狀態:${parts}</div>`);
     }
     html = `<div class="tooltip-title">${ELEMENT_NAMES[m.element]}${m.isBoss ? ' · 首領' : ''}</div>${monsterRows.join('')}`;
   } else if (info.kind === 'trap') {
@@ -1318,7 +1376,15 @@ function renderWaveHud(state: SimulationState): void {
         : upcoming.moveType === 'water'
           ? ` <svg class="icon" style="color: var(--water)"><use href="#icon-wave" /></svg> 水路`
           : '';
-    nextWaveElementEl.innerHTML = `${bossBadge}${ELEMENT_NAMES[upcoming.element]}${upcoming.isBoss ? '首領' : ''}${moveTypeBadge}`;
+    // 特殊能力也提前預告(跟空中/水路同樣的理由):玩家要先知道下一波會不會有治療兵/
+    // 護盾兵才來得及調整佈陣,等怪出來了才發現「打不動」就太晚了。
+    const ability = upcoming.ability ?? 'none';
+    const abilityIcon = ABILITY_ICONS[ability];
+    const abilityBadge =
+      ability !== 'none' && abilityIcon
+        ? ` ${iconMarkup(abilityIcon, ABILITY_UI_COLORS[ability])} ${ABILITY_NAMES[ability]}`
+        : '';
+    nextWaveElementEl.innerHTML = `${bossBadge}${ELEMENT_NAMES[upcoming.element]}${upcoming.isBoss ? '首領' : ''}${moveTypeBadge}${abilityBadge}`;
   }
 
   const bonus = activeBonusWaveInfo(tick);
@@ -1364,12 +1430,17 @@ function renderSkillBar(state: SimulationState | null): void {
         btn.className = 'skill-btn';
         btn.dataset.skill = skillId;
         btn.title = `${def.description}(冷卻 ${Math.round((def.cooldownTicks * currentTickRateMs) / 1000)} 秒)`;
+        // 圖示 + 名稱 + 冷卻三層。圖示用 innerHTML 塞是安全的(symbolId 是寫死的常數,
+        // 不是使用者輸入),名稱/冷卻仍走 textContent。
+        const icon = document.createElement('span');
+        icon.className = 'skill-btn-icon';
+        icon.innerHTML = iconMarkup(SKILL_ICONS[skillId]);
         const name = document.createElement('span');
         name.className = 'skill-btn-name';
         name.textContent = def.name;
         const cd = document.createElement('span');
         cd.className = 'skill-btn-cd';
-        btn.append(name, cd);
+        btn.append(icon, name, cd);
         return btn;
       }),
     );
