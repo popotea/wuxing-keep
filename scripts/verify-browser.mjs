@@ -45,7 +45,7 @@ try {
 }
 
 const browser = await chromium.launch();
-const MAP_IDS = ['crossroads', 'serpent', 'trident'];
+const MAP_IDS = ['crossroads', 'serpent', 'trident', 'quad'];
 
 // ---------------------------------------------------------------------------
 // (A) 每張地圖的單人流程
@@ -67,6 +67,9 @@ for (const mapId of MAP_IDS) {
 
   await page.click('#soloBtn');
   await page.waitForTimeout(2500);
+  // 開局預設是拉近 1.4 倍——先按「全圖」回到 fit,下面用畫布比例算的點擊座標才會落在預期的格子附近
+  await page.click('#zoomResetBtn');
+  await page.waitForTimeout(200);
 
   const dbg = await page.evaluate(() => window.__wuxingDebug);
   check('模擬有在跑', dbg && dbg.tick > 10, JSON.stringify(dbg));
@@ -137,6 +140,9 @@ console.log('\n=== (B) 同一分頁連續換地圖 ===');
     await page.selectOption('#soloMap', mapId);
     await page.click('#soloBtn');
     await page.waitForTimeout(1800);
+    // 回到全圖再截圖:預設開局是拉近的,截全圖比對整張地形色調才穩定
+    await page.click('#zoomResetBtn');
+    await page.waitForTimeout(200);
     shots[key] = await page.locator('#gameCanvas canvas').first().screenshot();
     // 「回到選單」在對局進行中是隱藏的(只有結束後才顯示),用 DOM 直接觸發 click 繞過
     // 可見性限制——走的仍是真正的 listener,只是省掉「先把這局玩到結束」的時間。
@@ -245,6 +251,10 @@ console.log('\n=== (C) 多人 2 玩家 checksum ===');
   await host.waitForTimeout(1200);
   await host.click('#startBtn');
   await host.waitForTimeout(6000);
+  // 回到全圖:預設開局是拉近的,下面用畫布比例算的點擊座標才會落在預期位置
+  await host.click('#zoomResetBtn');
+  await guest.click('#zoomResetBtn');
+  await host.waitForTimeout(200);
 
   // 兩邊各放一次技能,製造「有指令」的狀況(不只是空心跳 tick)
   const castOn = async (page) => {

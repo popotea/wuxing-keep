@@ -37,6 +37,12 @@ const DECOR_SCALE = SCALE * 1.6;
 const WHEEL_ZOOM_STEP = 1.15;
 /** 使用者縮放上限;下限固定 1(fit 全圖)——允許 <1 只會露出地圖外的空白,沒有意義。 */
 const MAX_USER_ZOOM = 3;
+/**
+ * 開局預設的使用者縮放(2026-07-24 加的,玩家反映 fit 全圖時內容太小,尤其大螢幕)。
+ * 開局視野置中在地圖中央,玩家再用滾輪/雙指/縮放按鈕依自己的需求調整;
+ * 按「全圖」按鈕(resetZoom)隨時可以回到 1 看整張地圖。
+ */
+const DEFAULT_USER_ZOOM = 1.4;
 /** 按下後移動超過這個距離(畫布 px)就當作拖曳平移,放開時不再觸發點擊(建造/選取)。觸控手指容易微顫,門檻放寬。 */
 const DRAG_THRESHOLD_PX = 6;
 const DRAG_THRESHOLD_TOUCH_PX = 10;
@@ -628,11 +634,12 @@ export class GameScene extends Phaser.Scene {
       if (!anchor) continue;
       const owners = state.pathOwners[pathId] ?? [];
       const mine = this.localPlayerId !== null && owners.includes(this.localPlayerId);
+      // 沒人負責的路線不會生怪(個人生命模式的「依人數開線」,見 simulation.ts),標成未啟用。
       const text = mine
         ? `路徑${pathId + 1}(你負責)`
         : owners.length > 0
           ? `路徑${pathId + 1}`
-          : `路徑${pathId + 1}(無人)`;
+          : `路徑${pathId + 1}(未啟用)`;
       const color = owners.length > 0 ? ownerColorCss(state, owners[0]) : '#8b93a1';
       const label = this.add
         .text(anchor.x, anchor.y - 30 * SCALE, text, {
@@ -771,10 +778,13 @@ export class GameScene extends Phaser.Scene {
    * 可能被誤認成同 id 的新實體重複使用(貼圖沒換成新的元素)。
    */
   resetCamera(): void {
-    // 使用者縮放不跨對局殘留(Phaser.Game 整個網頁只建立一次、跨對局重複使用)。
-    this.userZoom = 1;
+    // 開局用預設拉近倍率、視野置中在地圖中央(玩家反映 fit 全圖時內容太小)——不沿用上一場
+    // 調過的縮放(Phaser.Game 跨對局重複使用),每場都從同一個狀態開始,行為好預期。
+    this.userZoom = DEFAULT_USER_ZOOM;
     this.applyViewportZoom();
-    this.cameras.main.setScroll(0, 0);
+    const cam = this.cameras.main;
+    // scroll 的語意:midPoint = scroll + 畫布尺寸的一半(見 zoomAt 的說明);超界交給 bounds clamp。
+    cam.setScroll((GRID_WIDTH * TILE_PX - cam.width) / 2, (GRID_HEIGHT * TILE_PX - cam.height) / 2);
     // 多地圖:每場新對局的地圖可能不一樣,靜態層(地板/路徑/裝飾物)要照新地圖整個重畫。
     // main.ts 一定是在引擎建立完(createInitialState 已經呼叫過 setActiveMap)之後才呼叫
     // resetCamera(),所以這裡讀到的 isOnPath()/paths() 已經是新地圖的資料。

@@ -50,6 +50,7 @@ import {
   STARTING_LIVES,
   effectiveWaveTick,
   isPlayerEliminated,
+  startingLivesPerOwnedPath,
   type SimulationState,
 } from './sim/simulation';
 import {
@@ -458,11 +459,14 @@ function buildableTowerElements(): readonly Element[] {
 // 無人負責的路徑任何塔都能打。UI 這邊要在蓋塔前/選塔時講清楚,不然玩家只會看到
 // 「塔在射程內卻不開火」,以為是 bug。
 
-/** 這個玩家的塔會攻擊哪些路徑(自己負責的 + 無人負責的)——跟 sim 端同一條規則。 */
+/**
+ * 這個玩家的塔「有意義防守」的路徑——自己負責的路徑。依人數開線之後,沒人負責的路線
+ * 根本不會生怪(見 simulation.ts 的生怪重新分配),搆得到也沒有東西可打,不算防守範圍。
+ */
 function defendablePathIds(state: SimulationState, playerId: string): Set<number> {
   const out = new Set<number>();
   state.pathOwners.forEach((owners, pathId) => {
-    if (owners.length === 0 || owners.includes(playerId)) out.add(pathId);
+    if (owners.includes(playerId)) out.add(pathId);
   });
   return out;
 }
@@ -1547,9 +1551,10 @@ function evaluateAchievements(state: SimulationState): void {
   };
   unlock('full-clear');
   // 個人生命模式下 state.lives 這個欄位是凍結不動的(見 simulation.ts 的說明,漏怪改扣
-  // pathLives),不能直接拿來判斷「無傷」,要改比對每條路徑的生命是不是都還在開局的滿血狀態。
+  // pathLives),不能直接拿來判斷「無傷」,要改比對每條**啟用**路徑的生命是不是都還在開局
+  // 滿血(未啟用的路線固定 0,不能算進去,不然依人數開線後永遠判不成無傷)。
   const flawless = state.individualLivesMode
-    ? state.pathLives.every((l) => l === Math.max(1, Math.floor(STARTING_LIVES / state.pathLives.length)))
+    ? state.pathLives.every((l, p) => (state.pathOwners[p]?.length ?? 0) === 0 || l === startingLivesPerOwnedPath(state))
     : state.lives === STARTING_LIVES;
   if (flawless) unlock('flawless');
   if (!everSoldTowerThisMatch) unlock('no-sell');
@@ -1576,6 +1581,8 @@ function renderLivesBar(lives: number): void {
  * 改成結構只建一次,每 tick 只更新數字/顏色/按鈕的 hidden 屬性(比照 renderSkillBar)。
  */
 interface PathLivesRowEls {
+  /** 對應的 pathId——依人數開線後只有「有人負責」的路線有列,索引不再等於 pathId。 */
+  pathId: number;
   root: HTMLDivElement;
   barOuter: HTMLDivElement;
   barInner: HTMLDivElement;
@@ -1588,9 +1595,13 @@ let pathLivesRowEls: PathLivesRowEls[] = [];
 let pathLivesRowsKey = '';
 
 function buildPathLivesRows(state: SimulationState): void {
-  pathLivesRowEls = state.pathLives.map((_, pathId) => {
-    const owners = state.pathOwners[pathId] ?? [];
-    const ownerLabel = owners.length > 0 ? owners.map((id) => displayNameFor(id)).join('、') : '無人負責';
+  // 未啟用(沒人負責)的路線不生怪也沒有生命,HUD 直接不顯示那一列——顯示一條永遠 0 的
+  // 血條只會讓玩家以為出了什麼問題。
+  const ownedPathIds = state.pathOwners
+    .map((owners, pathId) => ({ owners, pathId }))
+    .filter(({ owners }) => owners.length > 0);
+  pathLivesRowEls = ownedPathIds.map(({ owners, pathId }) => {
+    const ownerLabel = owners.map((id) => displayNameFor(id)).join('、');
 
     const root = document.createElement('div');
     root.className = 'hud-stat';
@@ -1616,7 +1627,7 @@ function buildPathLivesRows(state: SimulationState): void {
     healBtn.hidden = true;
     root.appendChild(healBtn);
 
-    return { root, barOuter, barInner, livesText, healBtn };
+    return { pathId, root, barOuter, barInner, livesText, healBtn };
   });
   pathLivesStatsEl.replaceChildren(...pathLivesRowEls.map((r) => r.root));
 }
@@ -1644,10 +1655,9 @@ function renderLivesHud(state: SimulationState): void {
     buildPathLivesRows(state);
   }
 
-  const startingPerPath = Math.max(1, Math.floor(STARTING_LIVES / state.pathLives.length));
-  state.pathLives.forEach((lives, pathId) => {
-    const els = pathLivesRowEls[pathId];
-    if (!els) return;
+  const startingPerPath = startingLivesPerOwnedPath(state);
+  for (const els of pathLivesRowEls) {
+    const lives = state.pathLives[els.pathId] ?? 0;
     const ratio = Math.max(0, Math.min(1, lives / startingPerPath));
     const barColor = ratio > 0.5 ? '#3a9d3a' : ratio > 0.25 ? '#d4af37' : '#e05a2b';
     els.barOuter.classList.toggle('lives-critical', ratio <= 0.25);
@@ -1656,7 +1666,7 @@ function renderLivesHud(state: SimulationState): void {
     els.livesText.data = String(lives);
     // 同樣只有那條路徑快歸零時才顯示補命按鈕(切 hidden,不是整段 HTML 有無)。
     els.healBtn.hidden = lives > EMERGENCY_HEAL_THRESHOLD;
-  });
+  }
 }
 
 /** 對局開始/回選單時清掉上一場的勝敗橫幅/結算彈窗/出局狀態,不然舊的會殘留到下一場。 */

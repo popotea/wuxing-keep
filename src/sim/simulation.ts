@@ -208,6 +208,16 @@ export const EMERGENCY_HEAL_COST = 400;
 export const EMERGENCY_HEAL_AMOUNT = 5;
 export const EMERGENCY_HEAL_THRESHOLD = 5;
 
+/**
+ * 個人生命模式:每條「有人負責」的路徑開局分到的生命值(未啟用的路線固定 0)。
+ * 依人數開線後分母是啟用線數而不是路徑總數——2 人玩四線圖是每線 10 命,不是每線 5 命。
+ * UI 端(血條比例、無傷成就判定)跟 sim 端(補命上限)都用這個,不要各自重算。
+ */
+export function startingLivesPerOwnedPath(state: SimulationState): number {
+  const owned = state.pathOwners.filter((o) => o.length > 0).length;
+  return Math.max(1, Math.floor(STARTING_LIVES / Math.max(1, owned)));
+}
+
 export function createInitialState(
   seed: number,
   difficultyPercent = 100,
@@ -236,13 +246,19 @@ export function createInitialState(
 
   // 個人生命模式:把玩家排序後依 index % PATH_COUNT 分組,每條路徑的生命池子是團隊生命
   // 平均分下去(而不是每條路徑各自滿額),維持整體難度跟預設模式差不多,不會憑空變兩倍簡單。
+  //
+  // 依人數開線(2026-07-24 加的):玩家數少於路徑數時,沒分到負責人的路線「未啟用」——
+  // 生命直接是 0(生怪過濾/全滅判定都吃這個既有欄位,不用另外加狀態),生怪會重新分配到
+  // 啟用的路線(見 step(),不是直接丟掉,不然波次怪量會縮水變相變簡單)。生命也改成只除以
+  // 啟用線數:2 人玩四線圖是每線 10 命,不是每線 5 命外加兩條空線。
   const sortedPlayerIds = Object.keys(playerElements).sort();
   const pathTotal = pathCount();
   const pathOwners: PlayerId[][] = Array.from({ length: pathTotal }, () => []);
   for (let i = 0; i < sortedPlayerIds.length; i++) {
     pathOwners[i % pathTotal].push(sortedPlayerIds[i]);
   }
-  const livesPerPath = Math.max(1, Math.floor(STARTING_LIVES / pathTotal));
+  const ownedPathCount = pathOwners.filter((o) => o.length > 0).length;
+  const livesPerPath = Math.max(1, Math.floor(STARTING_LIVES / Math.max(1, ownedPathCount)));
 
   return {
     tick: 0,
@@ -262,7 +278,9 @@ export function createInitialState(
     victory: false,
     waveTickOffset: 0,
     individualLivesMode,
-    pathLives: Array.from({ length: pathTotal }, () => livesPerPath),
+    // 未啟用(沒人負責)的路線生命 0:生怪過濾自然跳過、全滅判定自然算進去,不用特例。
+    // 團隊模式不看 pathLives,照舊初始化沒有影響。
+    pathLives: Array.from({ length: pathTotal }, (_, p) => (pathOwners[p].length > 0 ? livesPerPath : 0)),
     pathOwners,
     mapId: resolvedMapId,
     skillCooldowns,
@@ -575,10 +593,12 @@ function applyEmergencyHeal(state: SimulationState, playerId: PlayerId, action: 
   if (state.individualLivesMode) {
     const pathId = asFiniteInt(action.params.pathId);
     if (pathId === null || pathId < 0 || pathId >= state.pathLives.length) return;
+    // 未啟用(沒人負責)的路線不能補——補下去會把原本不生怪的線「啟用」開始湧怪,
+    // 是花 400 金幣害整隊的負面操作,違反「只做正面互助」原則,直接當 no-op。
+    if ((state.pathOwners[pathId]?.length ?? 0) === 0) return;
     if (state.pathLives[pathId] > EMERGENCY_HEAL_THRESHOLD) return;
-    const startingPerPath = Math.max(1, Math.floor(STARTING_LIVES / state.pathLives.length));
     state.gold[playerId] = gold - EMERGENCY_HEAL_COST;
-    state.pathLives[pathId] = Math.min(startingPerPath, state.pathLives[pathId] + EMERGENCY_HEAL_AMOUNT);
+    state.pathLives[pathId] = Math.min(startingLivesPerOwnedPath(state), state.pathLives[pathId] + EMERGENCY_HEAL_AMOUNT);
   } else {
     if (state.lives > EMERGENCY_HEAL_THRESHOLD) return;
     state.gold[playerId] = gold - EMERGENCY_HEAL_COST;
@@ -799,11 +819,21 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
 
   const waveTick = effectiveWaveTick(next);
   const rawSpawnEvents = next.endlessMode ? getEndlessSpawnEventsForTick(waveTick) : getSpawnEventsForTick(waveTick);
-  // 個人生命模式下,生命池子歸零的路徑直接停止生怪(不是暫停,是永久不會再出現),
-  // 過濾掉指定給死路徑的 SpawnEvent 就好,不用另外處理「這隻怪生出來要不要立刻消失」。
-  const spawnEvents = next.individualLivesMode
-    ? rawSpawnEvents.filter((spawn) => next.pathLives[spawn.pathId] > 0)
-    : rawSpawnEvents;
+  // 個人生命模式的兩段處理(2026-07-24 起):
+  // 1. 依人數開線:生怪先重新分配到「有人負責」的路線(monsters.ts 排程時是對全部路徑
+  //    輪流分配,不知道哪些線未啟用)——**重新分配而不是丟掉**,不然玩家數少於路徑數時
+  //    波次怪量會等比例縮水,變相變簡單。pathOwners 開局定案、所有機器一致,決定性不變。
+  // 2. 生命歸零的路徑停止生怪:過濾是每 tick 動態判斷,補命把生命補回來就會恢復生怪。
+  let spawnEvents = rawSpawnEvents;
+  if (next.individualLivesMode) {
+    const ownedPathIds: number[] = [];
+    for (let p = 0; p < next.pathOwners.length; p++) {
+      if (next.pathOwners[p].length > 0) ownedPathIds.push(p);
+    }
+    spawnEvents = rawSpawnEvents
+      .map((spawn) => ({ ...spawn, pathId: ownedPathIds[spawn.pathId % ownedPathIds.length] }))
+      .filter((spawn) => next.pathLives[spawn.pathId] > 0);
+  }
   for (const spawn of spawnEvents) {
     const scaled = scaledSpawn(spawn, next.difficultyPercent, next.playerCountScalePercent);
     next.monsters.push(createMonster(next.nextMonsterId++, scaled));
