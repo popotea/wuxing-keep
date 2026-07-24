@@ -13,6 +13,16 @@ export interface GameRenderer {
   setSelectedTower(towerId: number | null): void;
   /** 格子座標 → 畫布像素座標(鏡頭縮放/平移都算進去),塔的浮動操作選單定位用。 */
   tileToCanvas(tileX: number, tileY: number): { x: number; y: number };
+  /**
+   * 告訴渲染層「本機玩家是誰」——個人生命模式要在地圖上標出「你負責的路徑」
+   * (識別色鋪色 + 起點標籤 + 浮動箭頭),這是每台機器各自不同的顯示,不是模擬狀態。
+   * 對局開始時呼叫(單人是 LOCAL_PLAYER_ID,連線是 room 給的 playerId)。
+   */
+  setLocalPlayerId(playerId: string | null): void;
+  /** 畫面縮放按鈕用:以畫布中心為錨點縮放(factor >1 放大、<1 縮小,內部夾在 1~上限)。 */
+  zoomBy(factor: number): void;
+  /** 畫面縮放按鈕用:回到看全圖的預設狀態。 */
+  resetZoom(): void;
   /** 新對局開始時呼叫:Phaser.Game 整個網頁只建立一次、跨對局重複使用,鏡頭捲動位置不會自己歸零。 */
   resetCamera(): void;
   /**
@@ -54,6 +64,11 @@ export function createGameRenderer(
     renderState: (state) => scene.renderState(state),
     setSelectedTower: (towerId) => scene.setSelectedTower(towerId),
     tileToCanvas: (tileX, tileY) => scene.tileToCanvas(tileX, tileY),
+    setLocalPlayerId: (playerId) => {
+      scene.localPlayerId = playerId;
+    },
+    zoomBy: (factor) => scene.zoomByFactor(factor),
+    resetZoom: () => scene.resetZoom(),
     resetCamera: () => scene.resetCamera(),
     refreshSize: () => game.scale.refresh(),
     destroy: () => game.destroy(true),

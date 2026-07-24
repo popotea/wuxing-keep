@@ -684,6 +684,82 @@
         width: 100%;
         height: 100%;
       }
+      /* ---- 對局結算彈窗(2026-07-24 加的):原本只有畫面底部一行 #resultBanner 小字,
+         勝敗當下玩家的體感是「畫面整個卡住」——改成全螢幕置中的明顯結算,附回到選單按鈕。 ---- */
+      .match-result-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(5, 7, 10, 0.78);
+        z-index: 35;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .match-result-overlay.show { display: flex; animation: fade-in-up 0.25s ease-out; }
+      .match-result-panel {
+        padding: 32px 44px;
+        text-align: center;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        min-width: min(320px, 90vw);
+        max-width: 90vw;
+      }
+      #matchResultTitle { margin: 0 0 8px; font-size: 30px; letter-spacing: 4px; }
+      #matchResultTitle.result-victory { color: var(--accent); text-shadow: 0 0 18px rgba(212, 175, 55, 0.6); }
+      #matchResultTitle.result-defeat { color: var(--fire); text-shadow: 0 0 18px rgba(224, 90, 43, 0.5); }
+      #matchResultDetail { color: var(--muted); margin: 0 0 20px; font-size: 15px; line-height: 1.6; }
+      .match-result-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+      .match-result-actions .btn { margin-top: 0; }
+
+      /* ---- 畫面縮放按鈕(2026-07-24 加的):筆電/沒有滾輪的裝置也要能縮放,
+         貼在畫面右側中間直排,只在對局中顯示。 ---- */
+      #zoomControls {
+        position: fixed;
+        right: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 10;
+        display: none;
+        flex-direction: column;
+        gap: 6px;
+      }
+      body.game-active #zoomControls { display: flex; }
+      .zoom-btn {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        background: rgba(15, 18, 24, 0.78);
+        border: 1px solid var(--border);
+        color: var(--text);
+        font-size: 17px;
+        line-height: 1;
+        cursor: pointer;
+        transition: border-color 0.15s, color 0.15s;
+      }
+      .zoom-btn:hover { border-color: var(--accent); color: var(--accent); }
+      @media (pointer: coarse) {
+        .zoom-btn { width: 46px; height: 46px; font-size: 21px; }
+      }
+
+      /* 個人生命模式:自己的路徑全失守(出局觀戰中)的常駐提示,貼在 HUD 下方置中。 */
+      #eliminatedBanner {
+        position: fixed;
+        top: calc(58px + env(safe-area-inset-top, 0px));
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+        max-width: min(560px, 92vw);
+        padding: 8px 16px;
+        border-radius: 10px;
+        background: rgba(90, 25, 20, 0.9);
+        border: 1px solid var(--fire);
+        color: #ffd9cc;
+        font-size: 13px;
+        text-align: center;
+        pointer-events: none;
+      }
+
       #resultBanner { font-size: 22px; font-weight: bold; min-height: 1.4em; }
       #resultBanner.result-victory {
         color: var(--accent);
@@ -1159,6 +1235,12 @@
         <button id="scoreboardBtn" class="hud-compact-toggle" type="button">記分板</button>
         <button id="hudCompactBtn" class="hud-compact-toggle" type="button">精簡檢視</button>
       </div>
+      <!-- 畫面縮放:滾輪/雙指之外的第三種方式——筆電沒滾輪、或不想用手勢的人用按鈕。 -->
+      <div id="zoomControls">
+        <button id="zoomInBtn" class="zoom-btn" type="button" title="放大">＋</button>
+        <button id="zoomOutBtn" class="zoom-btn" type="button" title="縮小">－</button>
+        <button id="zoomResetBtn" class="zoom-btn" type="button" title="回到全圖">⤢</button>
+      </div>
       <!-- gameCanvasArea 佔滿剩餘空間;gameCanvasWrap 是 JS 算出的 5:3 contain 畫布
            (main.ts 的 layoutGameCanvas() + ResizeObserver);gameCanvas 是 PhaserGame.ts 交給
            Phaser 掛載的容器——wrap/canvas 兩層分開是因為 Phaser 的 Scale.RESIZE 模式會直接把
@@ -1214,6 +1296,23 @@
 
       <div id="resultBanner"></div>
       <button id="backToMenuBtn">回到選單</button>
+
+      <!-- 個人生命模式:出局觀戰中的常駐提示(main.ts 依 isPlayerEliminated 切換顯示)。 -->
+      <div id="eliminatedBanner" hidden>
+        你負責的路徑已失守,觀戰中——任何人(包括你)花 400 金幣「緊急補命」可讓路徑復活;也可以在記分板送金幣支援隊友
+      </div>
+
+      <!-- 對局結算彈窗:勝利/失敗都跳這個,比底部一行小字明顯得多(main.ts 的 showMatchResultOverlay)。 -->
+      <div id="matchResultOverlay" class="match-result-overlay">
+        <div class="match-result-panel panel-frame">
+          <h2 id="matchResultTitle"></h2>
+          <p id="matchResultDetail"></p>
+          <div class="match-result-actions">
+            <button id="matchResultMenuBtn" class="btn" type="button">回到選單</button>
+            <button id="matchResultViewBtn" class="btn" type="button">觀看戰場</button>
+          </div>
+        </div>
+      </div>
 
       <!-- 通用選擇彈窗:蓋塔時隨機英雄選擇、升級到分岐級選路線,都共用這個(main.ts 的 showChoiceModal())。
            不用 hidden 屬性控制顯示(教訓見 body.game-active 那條規則的註解),改用 .show class 切換。 -->

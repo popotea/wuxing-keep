@@ -49,6 +49,7 @@ import {
   EMERGENCY_HEAL_THRESHOLD,
   STARTING_LIVES,
   effectiveWaveTick,
+  isPlayerEliminated,
   type SimulationState,
 } from './sim/simulation';
 import {
@@ -151,6 +152,12 @@ const scoreboardBtn = $<HTMLButtonElement>('scoreboardBtn');
 const scoreboardOverlayEl = $<HTMLDivElement>('scoreboardOverlay');
 const scoreboardBodyEl = $<HTMLTableSectionElement>('scoreboardBody');
 const scoreboardMetaEl = $<HTMLDivElement>('scoreboardMeta');
+const matchResultOverlayEl = $<HTMLDivElement>('matchResultOverlay');
+const matchResultTitleEl = $<HTMLHeadingElement>('matchResultTitle');
+const matchResultDetailEl = $<HTMLParagraphElement>('matchResultDetail');
+const matchResultMenuBtn = $<HTMLButtonElement>('matchResultMenuBtn');
+const matchResultViewBtn = $<HTMLButtonElement>('matchResultViewBtn');
+const eliminatedBannerEl = $<HTMLDivElement>('eliminatedBanner');
 const bestRecordEl = $<HTMLSpanElement>('bestRecord');
 const dailyBestEl = $<HTMLSpanElement>('dailyBest');
 const achievementsEl = $<HTMLDivElement>('achievements');
@@ -748,6 +755,12 @@ const gameRenderer = createGameRenderer(
     // 跳建造選單,不然玩家搞不清楚「這格不能蓋」到底是裝飾物(純視覺不影響蓋塔)擋住了,
     // 還是這格真的已經有陷阱/資源建築。
     if (!matchActive || (!room && !localEngine)) return;
+    // 個人生命模式:出局觀戰中不能操作(sim 端本來就會忽略,這裡給明確回饋而不是靜默沒反應)。
+    if (latestState && isPlayerEliminated(latestState, myPlayerId())) {
+      setArmedSkill(null);
+      showToast('觀戰中——路徑被補命復活前無法操作(可在記分板送金幣支援隊友)');
+      return;
+    }
     // 施放模式:這一下點擊是在選技能的施放位置,不是要蓋東西——直接送指令然後結束施放模式。
     // 放在最前面攔截,免得又跳出建造選單讓玩家困惑。
     if (armedSkill) {
@@ -964,6 +977,17 @@ $<HTMLButtonElement>('rotateHintDismiss').addEventListener('click', () => {
   document.body.classList.add('rotate-hint-dismissed');
 });
 
+// ---- 畫面縮放按鈕(2026-07-24 加的):滾輪/雙指之外的第三種縮放方式——
+// 筆電沒有滾輪、或不想用觸控板手勢的人用按鈕操作。 ----
+$<HTMLButtonElement>('zoomInBtn').addEventListener('click', () => gameRenderer.zoomBy(1.25));
+$<HTMLButtonElement>('zoomOutBtn').addEventListener('click', () => gameRenderer.zoomBy(1 / 1.25));
+$<HTMLButtonElement>('zoomResetBtn').addEventListener('click', () => gameRenderer.resetZoom());
+
+// 筆電觸控板的捏合手勢會送出 ctrl+wheel = 瀏覽器「頁面縮放」,整個版面突然變小,
+// 玩家的體感是「畫面不知道為什麼縮小了」——對局畫布上把 wheel 的預設行為整個擋掉
+// (preventDefault 不影響 Phaser 自己的 wheel 縮放,那是遊戲內的鏡頭縮放,照常運作)。
+gameCanvasWrapEl.addEventListener('wheel', (ev) => ev.preventDefault(), { passive: false });
+
 /**
  * 塔的浮動操作選單重建簽章:等級/費用/可負擔與否等會影響選單內容的欄位串起來,
  * 變了才整個重建——每 tick 都重建的話,進行中的點擊會落在被銷毀的按鈕上而失效
@@ -991,7 +1015,8 @@ const NEXT_STRATEGY: Record<TargetStrategy, TargetStrategy> = {
  */
 function renderTowerMenu(): void {
   const tower = selectedTowerId !== null ? latestState?.towers.find((t) => t.id === selectedTowerId) : undefined;
-  if (!tower || !latestState) {
+  // 個人生命模式:出局觀戰中不開塔選單(選取白框/射程圈仍照常顯示,看得到但動不了)。
+  if (!tower || !latestState || isPlayerEliminated(latestState, myPlayerId())) {
     if (towerMenuSignature) {
       towerMenuSignature = '';
       hideFloatingBuildMenu();
@@ -1634,10 +1659,14 @@ function renderLivesHud(state: SimulationState): void {
   });
 }
 
-/** 對局開始/回選單時清掉上一場的勝敗橫幅跟樣式,不然舊的發光顏色會殘留。 */
+/** 對局開始/回選單時清掉上一場的勝敗橫幅/結算彈窗/出局狀態,不然舊的會殘留到下一場。 */
 function resetResultBanner(): void {
   resultBannerEl.textContent = '';
   resultBannerEl.classList.remove('result-victory', 'result-defeat');
+  matchResultOverlayEl.classList.remove('show');
+  matchResultShown = false;
+  eliminatedBannerEl.hidden = true;
+  wasEliminated = false;
 }
 
 function showResult(text: string, variant: 'victory' | 'defeat'): void {
@@ -1645,6 +1674,27 @@ function showResult(text: string, variant: 'victory' | 'defeat'): void {
   resultBannerEl.classList.remove('result-victory', 'result-defeat');
   resultBannerEl.classList.add(`result-${variant}`);
 }
+
+/**
+ * 對局結算彈窗(2026-07-24 加的):勝敗當下只有底部一行小字的話,玩家的體感是「畫面整個
+ * 卡住」——改成全螢幕置中的明顯結算。每場只跳一次(對局結束後 onStateUpdated 每 tick 還會
+ * 繼續來,multi 的引擎不會馬上停;玩家按「觀看戰場」收掉之後不能又自己彈回來)。
+ */
+let matchResultShown = false;
+
+function showMatchResultOverlay(title: string, detail: string, variant: 'victory' | 'defeat'): void {
+  if (matchResultShown) return;
+  matchResultShown = true;
+  matchResultTitleEl.textContent = title;
+  matchResultTitleEl.className = `result-${variant}`;
+  matchResultDetailEl.textContent = detail;
+  matchResultOverlayEl.classList.add('show');
+}
+
+matchResultViewBtn.addEventListener('click', () => matchResultOverlayEl.classList.remove('show'));
+
+/** 個人生命模式:上一個 tick 是否已出局——只在「剛出局」那一刻跳提示/收選單,不是每 tick 洗版。 */
+let wasEliminated = false;
 
 /** 兩種模式都適用的「目前第幾波」,無限模式沒有上限、固定模式封頂在 WAVES.length。 */
 function currentWaveNumberFor(state: SimulationState): number {
@@ -1659,9 +1709,10 @@ function renderWaveHud(state: SimulationState): void {
   waveNumberEl.textContent = String(currentWaveNumberFor(state));
 
   // 目前這波還在出怪時不能提早叫下一波(跟 simulation.ts 的 applySkipToNextWave 同一個判定)
-  // ——跳波只壓縮「出完怪之後的空檔」,不會把還沒生出來的怪跳掉。
-  const spawning = !waveFullySpawned(tick, state.endlessMode);
-  const spawningTitle = '這一波還在出怪,出完才能提早呼叫下一波';
+  // ——跳波只壓縮「出完怪之後的空檔」,不會把還沒生出來的怪跳掉。出局觀戰中也不能按。
+  const eliminatedNow = isPlayerEliminated(state, myPlayerId());
+  const spawning = !waveFullySpawned(tick, state.endlessMode) || eliminatedNow;
+  const spawningTitle = eliminatedNow ? '觀戰中無法操作' : '這一波還在出怪,出完才能提早呼叫下一波';
 
   if (state.endlessMode) {
     // 無限模式永遠有下一波、永遠有預覽,不會是 null;沒有加碼波這個機制。
@@ -1781,16 +1832,17 @@ function renderSkillBar(state: SimulationState | null): void {
   }
 
   const myId = myPlayerId();
+  const eliminated = isPlayerEliminated(state, myId); // 出局觀戰中技能整排鎖住(sim 端也會忽略)
   for (const btn of Array.from(skillBarEl.children) as HTMLButtonElement[]) {
     const skillId = btn.dataset.skill as SkillId;
     const remaining = skillCooldownRemaining(state.skillCooldowns, myId, skillId);
     const armed = armedSkill === skillId;
-    btn.disabled = remaining > 0;
+    btn.disabled = remaining > 0 || eliminated;
     btn.classList.toggle('skill-arming', armed);
     const cdEl = btn.querySelector('.skill-btn-cd');
     if (cdEl) {
       const seconds = Math.ceil((remaining * currentTickRateMs) / 1000);
-      cdEl.textContent = remaining > 0 ? `${seconds}s` : armed ? '點地圖' : '就緒';
+      cdEl.textContent = eliminated ? '觀戰' : remaining > 0 ? `${seconds}s` : armed ? '點地圖' : '就緒';
     }
   }
 }
@@ -1856,14 +1908,30 @@ const lockstepHandlers: LockstepHandlers = {
     gameRenderer.renderState(state);
     renderTowerMenu();
     if (scoreboardOverlayEl.classList.contains('show')) renderScoreboard();
+
+    // 個人生命模式:自己的路徑全失守=出局觀戰(sim 端會忽略大多數指令,這裡是對應的 UI)。
+    // 補命把路徑救回來就會自動解除(isPlayerEliminated 每 tick 重算)。
+    const eliminated = !state.gameOver && !state.victory && isPlayerEliminated(state, myPlayerId());
+    eliminatedBannerEl.hidden = !eliminated;
+    if (eliminated && !wasEliminated) {
+      // 剛出局的那一刻:收掉進行中的操作,提示一次(常駐說明交給 eliminatedBanner)。
+      setArmedSkill(null);
+      hideFloatingBuildMenu();
+      gameRenderer.setSelectedTower(null);
+      showToast('你負責的路徑已失守!觀戰中——緊急補命可讓路徑復活');
+    }
+    wasEliminated = eliminated;
+
     if (state.gameOver) {
       // 無限模式沒有「破完」這回事,唯一的結局就是撐不住——顯示撐到第幾波當作這局的成績,
       // 不動最佳紀錄/今日最佳/成就系統(那套是繞著固定模式「全破」設計的,無限模式波次
       // 可以遠超過 8,兩種模式的數字混在一起比較沒有意義,先各自獨立,之後有需要再另外設計)。
       if (state.endlessMode) {
         showResult(`撐到第 ${currentWaveNumberFor(state)} 波,守備失敗`, 'defeat');
+        showMatchResultOverlay('守備失敗', `撐到第 ${currentWaveNumberFor(state)} 波`, 'defeat');
       } else {
         showResult('守備失敗(生命歸零)', 'defeat');
+        showMatchResultOverlay('守備失敗', `生命歸零,止步於第 ${currentWaveNumber(state.tick)} 波`, 'defeat');
         saveBestRecordIfBetter({ wave: currentWaveNumber(state.tick), cleared: false });
         saveDailyBestIfBetter({ wave: currentWaveNumber(state.tick), cleared: false });
       }
@@ -1871,6 +1939,7 @@ const lockstepHandlers: LockstepHandlers = {
       backToMenuBtn.style.display = 'inline-block';
     } else if (state.victory) {
       showResult('守備成功!全部波次清空', 'victory');
+      showMatchResultOverlay('守備成功!', '全部波次清空,防線守住了', 'victory');
       saveBestRecordIfBetter({ wave: currentWaveNumber(state.tick), cleared: true });
       saveDailyBestIfBetter({ wave: currentWaveNumber(state.tick), cleared: true });
       evaluateAchievements(state);
@@ -1893,7 +1962,11 @@ const lockstepHandlers: LockstepHandlers = {
 /** 多人同步跑飛(通常是玩家間版本不同):中止對局並明確告知,不讓兩邊各玩各的以為自己正常。 */
 function endMatchAfterDesync(playerId: string): void {
   showResult('多人同步失效,對局中止', 'defeat');
-  showToast(`偵測到 ${displayNameFor(playerId)} 的遊戲狀態跟房主不一致——請所有人重新整理頁面(Ctrl+F5)後再開新房`);
+  showMatchResultOverlay(
+    '對局中止',
+    `偵測到 ${displayNameFor(playerId)} 的遊戲狀態跟房主不一致(通常是版本不同)——請所有人按 Ctrl+F5 重新整理後再開新房`,
+    'defeat',
+  );
   endMatchAfterUnrecoverableDisconnect();
 }
 
@@ -1913,6 +1986,8 @@ const roomHandlers: RoomHandlers = {
     resetResultBanner();
     showGameScreen(true);
     gameRenderer.setSelectedTower(null);
+    // 個人生命模式的「你負責的路徑」標示需要知道本機玩家是誰(純顯示,每台機器各自不同)。
+    gameRenderer.setLocalPlayerId(room?.getMyPlayerId() ?? null);
     // 同單人模式:resetCamera() 依活躍地圖重畫靜態層,所以要先切好地圖再呼叫。
     setActiveMap(payload.mapId);
     gameRenderer.resetCamera();
@@ -2025,6 +2100,9 @@ function endMatchAfterUnrecoverableDisconnect(): void {
   readyBtn.disabled = true;
   startBtn.disabled = true;
   backToMenuBtn.style.display = 'inline-block';
+  // 斷線/desync 這類非勝敗的結束也要有明顯結算(matchResultShown 防重複,desync 那條
+  // 已經先跳過更具體訊息的話,這裡就不會蓋掉)。
+  showMatchResultOverlay('對局中止', '連線無法繼續,請回到選單重新開房', 'defeat');
 }
 
 soloBtn.addEventListener('click', () => {
@@ -2041,6 +2119,7 @@ soloBtn.addEventListener('click', () => {
   resetResultBanner();
   showGameScreen(true);
   gameRenderer.setSelectedTower(null);
+  gameRenderer.setLocalPlayerId(LOCAL_PLAYER_ID); // 單人沒有個人生命模式,設了也只是備著
   // 一定要在 resetCamera() 之前切好地圖——resetCamera() 會依「目前的活躍地圖」重畫靜態層
   // (地板/路徑/裝飾物),這行漏掉的話畫面上會是上一張地圖的路徑,但實際模擬走的是新地圖。
   // (LocalEngine 建構子裡的 createInitialState() 也會呼叫一次,重複呼叫是安全的。)
@@ -2062,7 +2141,7 @@ soloBtn.addEventListener('click', () => {
   log(`單人模式開始,seed=${seed}`);
 });
 
-backToMenuBtn.addEventListener('click', () => {
+function returnToMenu(): void {
   showGameScreen(false);
   resetResultBanner();
   gameRenderer.setSelectedTower(null);
@@ -2077,7 +2156,10 @@ backToMenuBtn.addEventListener('click', () => {
     room.destroy();
     resetToMultiSetup();
   }
-});
+}
+
+backToMenuBtn.addEventListener('click', returnToMenu);
+matchResultMenuBtn.addEventListener('click', returnToMenu);
 
 hostBtn.addEventListener('click', () => {
   const elements = selectedElements(multiPanelEl);

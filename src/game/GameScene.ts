@@ -20,7 +20,7 @@ import { RUNE_TOTEM_RANGE_FP } from '../sim/placements';
 import { STATUS_NAMES, type StatusKind } from '../sim/statuses';
 import type { SimulationState } from '../sim/simulation';
 import { towerRangeFp, UPGRADE_PATH_LEVEL, type CombatEvent, type Tower, type UpgradePath } from '../sim/towers';
-import { isMultiplayer, ownerColorHex } from './playerColors';
+import { isMultiplayer, ownerColorCss, ownerColorHex } from './playerColors';
 
 export const TILE_PX = 40;
 // 塔/怪物的造型尺寸都是照 TILE_PX=32 時的手感調的,乘這個比例就能跟著 TILE_PX 一起放大,不用重調數字。
@@ -262,6 +262,11 @@ export class GameScene extends Phaser.Scene {
    * 沒有停在任何物件上面(main.ts 收到 null 要把浮動說明藏起來)。screenX/screenY 同上。
    */
   onHoverInfoChanged: ((info: HoverInfo | null, screenX: number, screenY: number) => void) | null = null;
+  /**
+   * 本機玩家的 playerId(main.ts 在對局開始時透過 GameRenderer.setLocalPlayerId 設定)。
+   * 個人生命模式的「你負責的路徑」標示要用——這是每台機器各自不同的純顯示,不影響模擬。
+   */
+  localPlayerId: string | null = null;
 
   /** 水路怪的流水視覺效果、飛行怪的地面影子——要蓋在地板材質上面、但在塔/怪物圖片下面。 */
   private groundEffectsLayer!: Phaser.GameObjects.Graphics;
@@ -279,6 +284,9 @@ export class GameScene extends Phaser.Scene {
   private monsterNameTexts = new Map<number, Phaser.GameObjects.Text>();
   /** 符文圖騰上方「Lv.N」文字,獨立一個 Map(理由同 trapLevelTexts,id 計數器各自獨立)。 */
   private totemLevelTexts = new Map<number, Phaser.GameObjects.Text>();
+  /** 個人生命模式:每條路徑起點附近的「路徑N(你負責)」標籤,整場固定,依簽章重建。 */
+  private pathOwnerLabels: Phaser.GameObjects.Text[] = [];
+  private pathOwnerLabelsKey = '';
   private pendingState: SimulationState | null = null;
   private hoverX: number | null = null;
   private hoverY: number | null = null;
@@ -575,11 +583,70 @@ export class GameScene extends Phaser.Scene {
       this.setSelectedTower(null);
     }
     if (this.dynamicLayer) {
+      this.updatePathOwnerLabels(state);
       this.drawDynamicLayer(state);
       for (const event of state.combatEvents) this.spawnDamageNumber(event);
       for (const cast of state.skillCasts) this.spawnSkillEffect(cast);
     }
     if (this.previewLayer) this.drawPreview();
+  }
+
+  /**
+   * 路徑起點附近的標籤錨點(像素座標)。起點常貼著地圖邊緣,直接畫在起點會被裁掉,
+   * 沿路徑方向往內移一格半;標籤/箭頭都用同一個錨點,兩者才對得齊。
+   */
+  private pathLabelAnchor(pathId: number): { x: number; y: number } | null {
+    const waypoints = paths()[pathId];
+    if (!waypoints || waypoints.length < 2) return null;
+    const [sx, sy] = waypoints[0];
+    const [nx, ny] = waypoints[1];
+    const dx = Math.sign(nx - sx);
+    const dy = Math.sign(ny - sy);
+    return {
+      x: (sx + dx * 1.5 + 0.5) * TILE_PX,
+      y: (sy + dy * 1.5 + 0.5) * TILE_PX,
+    };
+  }
+
+  /**
+   * 個人生命模式:每條路徑起點附近標「路徑N(你負責)」文字,顏色用負責玩家的識別色
+   * (跟 HUD 的「路徑N(名字)」、塔底identity色同一套,玩家看 HUD 就能對上地圖)。
+   * 整場固定不變,簽章(地圖/負責人/本機玩家)變了才重建;團隊模式不畫。
+   */
+  private updatePathOwnerLabels(state: SimulationState): void {
+    const key = state.individualLivesMode
+      ? `${state.mapId}|${this.localPlayerId ?? ''}|${state.pathOwners.map((o) => o.join(',')).join(';')}`
+      : '';
+    if (key === this.pathOwnerLabelsKey) return;
+    this.pathOwnerLabelsKey = key;
+    for (const label of this.pathOwnerLabels) label.destroy();
+    this.pathOwnerLabels = [];
+    if (!state.individualLivesMode) return;
+
+    for (let pathId = 0; pathId < state.pathOwners.length; pathId++) {
+      const anchor = this.pathLabelAnchor(pathId);
+      if (!anchor) continue;
+      const owners = state.pathOwners[pathId] ?? [];
+      const mine = this.localPlayerId !== null && owners.includes(this.localPlayerId);
+      const text = mine
+        ? `路徑${pathId + 1}(你負責)`
+        : owners.length > 0
+          ? `路徑${pathId + 1}`
+          : `路徑${pathId + 1}(無人)`;
+      const color = owners.length > 0 ? ownerColorCss(state, owners[0]) : '#8b93a1';
+      const label = this.add
+        .text(anchor.x, anchor.y - 30 * SCALE, text, {
+          fontSize: `${(mine ? 13 : 10) * SCALE}px`,
+          fontFamily: '"Microsoft JhengHei", sans-serif',
+          fontStyle: mine ? 'bold' : 'normal',
+          color,
+          stroke: '#000000',
+          strokeThickness: 3 * SCALE,
+        })
+        .setOrigin(0.5, 1)
+        .setDepth(2);
+      this.pathOwnerLabels.push(label);
+    }
   }
 
   /** 打中怪物時飄出一個往上淡出的傷害數字,不用等真的做出命中特效素材前先有基本回饋感。 */
@@ -665,6 +732,18 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /** 以畫布中心為錨點縮放——給沒有滾輪的裝置用的畫面縮放按鈕(main.ts 的 #zoomControls)。 */
+  zoomByFactor(factor: number): void {
+    this.zoomAt(this.scale.width / 2, this.scale.height / 2, factor);
+  }
+
+  /** 回到看全圖的預設狀態(userZoom=1 + 置中),縮放按鈕的「全圖」用。 */
+  resetZoom(): void {
+    this.userZoom = 1;
+    this.applyViewportZoom();
+    this.cameras.main.setScroll(0, 0);
+  }
+
   /**
    * 格子座標(可帶小數,例如 x+1 代表塔的右緣)→ 畫布像素座標,tileUnderPointer 的逆運算。
    * main.ts 用來把塔的浮動操作選單錨定在塔旁邊(建造選單有點擊當下的 pointer 座標可用,
@@ -714,6 +793,10 @@ export class GameScene extends Phaser.Scene {
     this.monsterNameTexts.clear();
     for (const label of this.totemLevelTexts.values()) label.destroy();
     this.totemLevelTexts.clear();
+    // 路徑負責人標籤也要清(新對局的地圖/模式/負責人可能不一樣),簽章歸零讓下一場重建。
+    for (const label of this.pathOwnerLabels) label.destroy();
+    this.pathOwnerLabels = [];
+    this.pathOwnerLabelsKey = '';
   }
 
   /** 把靜態層建立的物件記下來,重畫地圖時才清得掉(見 staticObjects / rebuildStaticLayer)。 */
@@ -1032,6 +1115,39 @@ export class GameScene extends Phaser.Scene {
   private drawGroundEffects(state: SimulationState): void {
     const g = this.groundEffectsLayer;
     g.clear();
+
+    // 個人生命模式:每條路徑鋪一層負責玩家的識別色(自己的路徑明顯、別人的淡淡的),
+    // 自己路徑的起點另外畫一個上下浮動的箭頭——玩家反映光靠 HUD 文字認不出地圖上
+    // 哪條是自己要守的路(2026-07-24 加的)。無人負責的路徑不鋪色(保持中性)。
+    if (state.individualLivesMode) {
+      for (let pathId = 0; pathId < state.pathOwners.length; pathId++) {
+        const owners = state.pathOwners[pathId] ?? [];
+        if (owners.length === 0) continue;
+        const mine = this.localPlayerId !== null && owners.includes(this.localPlayerId);
+        const color = ownerColorHex(state, owners[0]);
+        g.fillStyle(color, mine ? 0.16 : 0.06);
+        for (const [x, y] of tilesOfPath(pathId)) {
+          g.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+        }
+        if (mine) {
+          const anchor = this.pathLabelAnchor(pathId);
+          if (anchor) {
+            // 標籤(見 updatePathOwnerLabels)跟路徑之間,一個往下指、上下浮動的箭頭
+            const bob = Math.sin(this.time.now / 250) * 3 * SCALE;
+            const top = anchor.y - 26 * SCALE + bob;
+            g.fillStyle(color, 0.95);
+            g.fillTriangle(
+              anchor.x - 6 * SCALE,
+              top,
+              anchor.x + 6 * SCALE,
+              top,
+              anchor.x,
+              top + 10 * SCALE,
+            );
+          }
+        }
+      }
+    }
 
     const wetPathIds = new Set(
       state.monsters.filter((m) => m.moveType === 'water').map((m) => m.pos.pathId),

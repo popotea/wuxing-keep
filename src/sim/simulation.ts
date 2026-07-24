@@ -643,7 +643,34 @@ function applyCastSkill(state: SimulationState, playerId: PlayerId, action: Acti
   state.skillCasts.push({ skillId, playerId, x, y, rangeFp: def.rangeFp });
 }
 
+/**
+ * 個人生命模式:這個玩家負責的路徑是否已經全部失守(出局)。出局後大多數指令會被忽略
+ * (見 applyCommand),變成觀戰狀態——但**不是永久淘汰**:生怪過濾是每 tick 動態看
+ * `pathLives > 0`,任何人(包括出局者自己)花錢緊急補命把那條路徑的生命補回來,生怪
+ * 恢復、玩家也跟著「復活」。團隊模式一律回傳 false(沒有個人出局這回事)。
+ * UI 端(main.ts)也用這個函式判斷要不要鎖操作,跟 sim 同一條規則。
+ */
+export function isPlayerEliminated(state: SimulationState, playerId: PlayerId): boolean {
+  if (!state.individualLivesMode) return false;
+  let ownsAny = false;
+  for (let pathId = 0; pathId < state.pathOwners.length; pathId++) {
+    if (!state.pathOwners[pathId].includes(playerId)) continue;
+    ownsAny = true;
+    if (state.pathLives[pathId] > 0) return false;
+  }
+  // 沒負責任何路徑的玩家(理論上不會發生,round-robin 保證每人至少一條)不算出局
+  return ownsAny;
+}
+
+/**
+ * 出局後仍然允許的指令:緊急補命(可以花自己的錢把自己的路徑救回來=復活,隊友也能救)
+ * 跟送金幣(把用不到的錢支援隊友,純正面互助)。其他操作一律忽略——出局就是觀戰,
+ * 不能繼續蓋塔/升級/放技能影響戰局。
+ */
+const ELIMINATED_ALLOWED_KINDS: ReadonlySet<string> = new Set(['emergency_heal', 'gift_gold']);
+
 function applyCommand(state: SimulationState, playerId: PlayerId, action: Action): void {
+  if (!ELIMINATED_ALLOWED_KINDS.has(action.kind) && isPlayerEliminated(state, playerId)) return;
   if (action.kind === 'build_tower') applyBuildTower(state, playerId, action);
   else if (action.kind === 'add_second_element') applyAddSecondElement(state, playerId, action);
   else if (action.kind === 'sell_tower') applySellTower(state, playerId, action);
