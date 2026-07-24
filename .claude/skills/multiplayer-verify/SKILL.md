@@ -14,17 +14,21 @@ lockstep 的 bug 幾乎都是「兩台機器算出不同結果」,單一分頁**
 **2026-07-21 起 tick/checksum 不會顯示在頁面上了**(頁面刻意不放除錯資訊)。改在瀏覽器主控台查:
 
 ```js
-window.__wuxingDebug   // → { tick, checksum }
+window.__wuxingDebug   // → { tick, checksum, towers }
 ```
 
 ## 自動化腳本(優先用這個)
 
 ```
-npm run dev              # 另一個終端機
-npm run verify:browser   # scripts/verify-browser.mjs
+npm run build && npm run preview                          # 另一個終端機(服務 dist,預設 4173 埠)
+WUXING_VERIFY_URL=http://localhost:4173/ npm run verify:browser
 ```
 
-已經涵蓋:三張地圖的單人流程、同一分頁換地圖時靜態層有沒有重畫、**多人 2 玩家在同一 tick 上的 checksum 比對**。
+> ⚠️ **不要用 `npm run dev` 測多人**(2026-07-23 實測踩到):dev server 只要有任何工具讀寫
+> `src/*.ts` 就會對所有連線分頁觸發 full reload,把房間整個毀掉,會誤判成連線 bug。
+> 一定要用 build + preview 測靜態產物。
+
+已經涵蓋:每張地圖的單人流程、同一分頁換地圖時靜態層有沒有重畫、**多人 2 玩家在同一 tick 上的 checksum 比對 + 加入者建塔真的生效**(checksum 一致證明不了 client 指令有進模擬,塔數走 `window.__wuxingDebug.towers`)。
 
 Playwright 要自己裝(刻意不列進專案依賴,會連帶下載數百 MB 瀏覽器):
 
@@ -37,7 +41,7 @@ npx playwright install chromium
 
 ## 手動驗證(最低限度)
 
-1. `npm run dev`
+1. `npm run build && npm run preview`(理由同上,不要用 dev server)
 2. 開兩個瀏覽器分頁(一個房主一個客戶端),實際連線跑一局
 3. 兩邊各自 F12 主控台執行 `window.__wuxingDebug`
 4. **必須在同一個 `tick` 上比對 `checksum`**——tick 不同的兩筆數值沒有比較意義
