@@ -886,9 +886,13 @@ export function step(state: SimulationState, tick: number, commands: TimedComman
 
   // 記分板統計:傷害依塔的 ownerId 歸戶;擊殺數只算一次,同一隻怪這個 tick 被好幾座塔
   // 一起打死(常見於 splash 路線)只算給第一個把牠打進 0 血以下的塔主人,不會重複計算。
+  // 個人生命模式:塔只攻擊「塔主人負責路徑」上的怪(2026-07-24 加的,見 towers.ts 的
+  // canTowerDefendPath;無人負責的路徑任何塔都能打)。pathOwners 是開局定案的靜態資料,
+  // 所有機器一致,傳進去不影響決定性;團隊模式傳 null,行為跟以前完全一樣。
+  const pathOwnershipFilter = next.individualLivesMode ? next.pathOwners : null;
   const killedMonsterIdsThisTick = new Set<number>();
   for (const tower of next.towers) {
-    const events = tryAttack(tower, next.monsters, next.towers, next.runeTotems, tick);
+    const events = tryAttack(tower, next.monsters, next.towers, next.runeTotems, tick, pathOwnershipFilter);
     const stats = next.playerStats[tower.ownerId];
     for (const event of events) {
       next.combatEvents.push(event);

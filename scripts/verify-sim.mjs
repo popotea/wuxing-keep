@@ -389,6 +389,57 @@ console.log('\n[9] 呼叫下一波(狂按防護)');
 }
 
 // ---------------------------------------------------------------------------
+console.log('\n[10] 個人生命模式的路徑守備限制(塔只打塔主人負責的路徑)');
+{
+  // crossroads 有 2 條路徑:2 個玩家(排序後 p1→路徑0、p2→路徑1)。
+  // (25,2) 只搆得到路徑 1(x=23 那段,距離 2 格),離路徑 0 很遠——
+  // p1 的塔蓋在這裡,個人生命模式下應該完全不開火。
+  const runWith = (individualMode) => {
+    let s = sim.createInitialState(
+      11,
+      100,
+      { p1: ['wood'], p2: ['wood'] },
+      false,
+      individualMode,
+      'crossroads',
+    );
+    s.gold.p1 = 999999;
+    s = sim.step(s, 0, [{ playerId: 'p1', action: { kind: 'build_tower', params: { x: 25, y: 2, element: 'wood' } } }]);
+    for (let t = 1; t < 600; t++) s = sim.step(s, t, []);
+    return s;
+  };
+
+  const individual = runWith(true);
+  const team = runWith(false);
+  check(
+    '個人生命模式:p1 蓋在 p2 路徑旁的塔完全不開火',
+    (individual.playerStats.p1?.damageDealt ?? -1) === 0,
+    `實際傷害 ${individual.playerStats.p1?.damageDealt}`,
+  );
+  check(
+    '團隊模式:同一座塔照常攻擊(限制只在個人生命模式生效)',
+    (team.playerStats.p1?.damageDealt ?? 0) > 0,
+    `實際傷害 ${team.playerStats.p1?.damageDealt}`,
+  );
+
+  // p1 蓋在自己路徑(路徑 0)旁邊 → 個人生命模式下照常開火。
+  // (7,10) 搆得到路徑 0 的 y=12 橫段(距離 2 格),離路徑 1(x=23)很遠。
+  let own = sim.createInitialState(11, 100, { p1: ['wood'], p2: ['wood'] }, false, true, 'crossroads');
+  own.gold.p1 = 999999;
+  own = sim.step(own, 0, [{ playerId: 'p1', action: { kind: 'build_tower', params: { x: 7, y: 10, element: 'wood' } } }]);
+  for (let t = 1; t < 600; t++) own = sim.step(own, t, []);
+  check('個人生命模式:p1 蓋在自己路徑旁的塔照常攻擊', (own.playerStats.p1?.damageDealt ?? 0) > 0);
+
+  // trident 有 3 條路徑但只有 2 個玩家 → 路徑 2 無人負責,任何塔都能打
+  // (不放行的話那條路沒有火力管得到,必掉)。(17,4) 只搆得到路徑 2 的 x=19 直段。
+  let unowned = sim.createInitialState(11, 100, { p1: ['wood'], p2: ['wood'] }, false, true, 'trident');
+  unowned.gold.p1 = 999999;
+  unowned = sim.step(unowned, 0, [{ playerId: 'p1', action: { kind: 'build_tower', params: { x: 17, y: 4, element: 'wood' } } }]);
+  for (let t = 1; t < 600; t++) unowned = sim.step(unowned, t, []);
+  check('無人負責的路徑任何塔都能打(玩家數 < 路徑數)', (unowned.playerStats.p1?.damageDealt ?? 0) > 0);
+}
+
+// ---------------------------------------------------------------------------
 rmSync(outDir, { recursive: true, force: true });
 console.log(`\n${failures === 0 ? '全部通過' : `${failures} 項失敗`}\n`);
 process.exit(failures === 0 ? 0 : 1);

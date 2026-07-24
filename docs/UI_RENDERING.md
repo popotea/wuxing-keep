@@ -34,6 +34,8 @@
 
 **資源建築選項會顯示「已蓋 N/上限」**(2026-07-23 加的,對應 `MAX_RESOURCE_BUILDINGS_PER_PLAYER`),達上限就 disabled 並標「已達上限」;`onChoose` 內會用最新 `latestState` 重查一次座數(選單開著時 state 可能已前進),超限就 `showToast`。UI 只是體驗層,權威驗證仍在 sim。
 
+**個人生命模式的蓋塔警告**(2026-07-24 加的):塔只攻擊塔主人負責路徑上的怪(見 `docs/SIMULATION.md` 的路徑守備限制),點到「連最長射程的塔都搆不到自己守備路徑」的格子時,建造選單標頭顯示紅色警告「蓋塔不會開火」——`main.ts` 的 `towerWouldBeIdle()`(`defendablePathIds` + `reachablePathIds`,用 `map.ts` 的 `tilesOfPath()` 算),跟 sim 端 `canTowerDefendPath()` 同一條規則。塔選單標頭與 tooltip 也有對應提示。
+
 每個屬性配了 `TOWER_CHARACTER_NAMES` 角色名顯示在選項上。點地圖建造若金幣不足會跳 `#toast` 浮動訊息提示(`showToast()`,通用機制,之後別的地方需要跳提示也能直接複用)且不會送出注定失敗的指令。
 
 ### 「金幣不足」要跟「不能做」分得出來(2026-07-23 加的)

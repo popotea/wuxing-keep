@@ -70,8 +70,10 @@ export const MAP_DEFS: readonly MapDef[] = [
   },
   {
     id: 'trident',
+    // 說明修正(2026-07-24):原本寫「各走各的互不交會」,但實際上路徑 0-2 在 (27,8)、
+    // 路徑 1-2 在 (33,21) 有交叉——排查個人生命模式的跨路徑火力時算出來的,說明要誠實。
     name: '三叉分流',
-    description: '三條路線各走各的互不交會,火力必須分散,考驗資源分配。',
+    description: '三條路線大致分流,少數交會點可以蓋協防塔,火力必須分散,考驗資源分配。',
     paths: [
       [
         [0, 3],
@@ -179,6 +181,26 @@ export function pathCount(): number {
 
 export function isOnPath(x: number, y: number): boolean {
   return activePathTiles.has(`${x},${y}`);
+}
+
+/**
+ * 列出某條路徑經過的所有格子座標(跟 computePathTiles 同一套走法,只是單一路徑分開算)。
+ * UI 端用:GameScene 的水路視覺效果、main.ts 算「這一格蓋塔搆得到哪些路徑」
+ * (個人生命模式的蓋塔提示)。回傳每次都重算,呼叫端不要在熱路徑裡每影格呼叫。
+ */
+export function tilesOfPath(pathId: number): Array<[number, number]> {
+  const tiles: Array<[number, number]> = [];
+  const waypoints = activePaths[pathId];
+  if (!waypoints) return tiles;
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const [ax, ay] = waypoints[i];
+    const [bx, by] = waypoints[i + 1];
+    const dx = Math.sign(bx - ax);
+    const dy = Math.sign(by - ay);
+    const steps = Math.max(Math.abs(bx - ax), Math.abs(by - ay));
+    for (let s = 0; s <= steps; s++) tiles.push([ax + dx * s, ay + dy * s]);
+  }
+  return tiles;
 }
 
 export function inBounds(x: number, y: number): boolean {

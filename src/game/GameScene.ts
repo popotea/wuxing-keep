@@ -12,6 +12,7 @@ import {
   isOnPath,
   MAP_DEFS,
   paths,
+  tilesOfPath,
   worldPositionFp,
 } from '../sim/map';
 import type { Monster } from '../sim/monsters';
@@ -1039,7 +1040,7 @@ export class GameScene extends Phaser.Scene {
       const pulse = 0.16 + 0.07 * Math.sin(this.time.now / 300);
       g.fillStyle(0x3a7bd5, pulse);
       for (const pathId of wetPathIds) {
-        for (const [x, y] of this.tilesForPath(pathId)) {
+        for (const [x, y] of tilesOfPath(pathId)) {
           g.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
         }
       }
@@ -1093,22 +1094,6 @@ export class GameScene extends Phaser.Scene {
         g.lineBetween(cx1, cy1, cx2, cy2);
       }
     }
-  }
-
-  /** 列出某條路徑經過的所有格子座標,跟 map.ts 的 computePathTiles() 是同一套走法,只是這裡要分開算單一路徑。 */
-  private tilesForPath(pathId: number): Array<[number, number]> {
-    const tiles: Array<[number, number]> = [];
-    const waypoints = paths()[pathId];
-    if (!waypoints) return tiles; // 換地圖後路徑數可能變少,防禦性處理
-    for (let i = 0; i < waypoints.length - 1; i++) {
-      const [ax, ay] = waypoints[i];
-      const [bx, by] = waypoints[i + 1];
-      const dx = Math.sign(bx - ax);
-      const dy = Math.sign(by - ay);
-      const steps = Math.max(Math.abs(bx - ax), Math.abs(by - ay));
-      for (let s = 0; s <= steps; s++) tiles.push([ax + dx * s, ay + dy * s]);
-    }
-    return tiles;
   }
 
   private drawDynamicLayer(state: SimulationState): void {

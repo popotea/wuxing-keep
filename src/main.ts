@@ -9,7 +9,7 @@ import { createGameRenderer, type HoverInfo } from './game/PhaserGame';
 import { isMultiplayer, ownerColorCss } from './game/playerColors';
 import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
 import { LOCAL_PLAYER_ID, LocalEngine } from './sim/localEngine';
-import { DEFAULT_MAP_ID, FP_SCALE, isOnPath, MAP_DEFS, setActiveMap } from './sim/map';
+import { DEFAULT_MAP_ID, FP_SCALE, isOnPath, MAP_DEFS, setActiveMap, tilesOfPath } from './sim/map';
 import {
   SKILL_DEFS,
   SKILL_IDS,
@@ -446,6 +446,47 @@ function buildableTowerElements(): readonly Element[] {
   return latestState?.playerElements[myPlayerId()] ?? ALL_ELEMENTS;
 }
 
+// ---- 個人生命模式的守備範圍提示(2026-07-24 加的) ----
+// sim 端規則(towers.ts 的 canTowerDefendPath):塔只攻擊「塔主人負責路徑」上的怪,
+// 無人負責的路徑任何塔都能打。UI 這邊要在蓋塔前/選塔時講清楚,不然玩家只會看到
+// 「塔在射程內卻不開火」,以為是 bug。
+
+/** 這個玩家的塔會攻擊哪些路徑(自己負責的 + 無人負責的)——跟 sim 端同一條規則。 */
+function defendablePathIds(state: SimulationState, playerId: string): Set<number> {
+  const out = new Set<number>();
+  state.pathOwners.forEach((owners, pathId) => {
+    if (owners.length === 0 || owners.includes(playerId)) out.add(pathId);
+  });
+  return out;
+}
+
+/** 以 (x,y) 為塔位、rangeFp 為射程,搆得到哪些路徑(跟 findTarget 一樣用整格距離平方比較)。 */
+function reachablePathIds(state: SimulationState, x: number, y: number, rangeFp: number): Set<number> {
+  const out = new Set<number>();
+  const rangeSq = rangeFp * rangeFp;
+  for (let pathId = 0; pathId < state.pathOwners.length; pathId++) {
+    for (const [px, py] of tilesOfPath(pathId)) {
+      const dx = (x - px) * FP_SCALE;
+      const dy = (y - py) * FP_SCALE;
+      if (dx * dx + dy * dy <= rangeSq) {
+        out.add(pathId);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** 個人生命模式下,(x,y) 這個塔位(以 rangeFp 射程)是否完全搆不到任何「這個玩家的塔會攻擊」的路徑。 */
+function towerWouldBeIdle(state: SimulationState, playerId: string, x: number, y: number, rangeFp: number): boolean {
+  if (!state.individualLivesMode) return false;
+  const defendable = defendablePathIds(state, playerId);
+  for (const pathId of reachablePathIds(state, x, y, rangeFp)) {
+    if (defendable.has(pathId)) return false;
+  }
+  return true;
+}
+
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** 短暫浮現的訊息提示(例如金幣不足),淡入後停留一下再淡出,再次呼叫會重新計時。 */
@@ -610,6 +651,12 @@ function renderObjectTooltip(info: HoverInfo | null, canvasX: number, canvasY: n
     rows.push(
       `<div class="tooltip-row">${iconMarkup(STATUS_ICONS[stats.statusKind], STATUS_UI_COLORS[stats.statusKind])} ${STATUS_NAMES[stats.statusKind]}(${stats.statusChancePercent}% 機率):${STATUS_DESCRIPTIONS[stats.statusKind]}</div>`,
     );
+    // 個人生命模式的路徑守備限制要讓玩家隨時查得到,不然「塔不開火」看起來像 bug。
+    if (state.individualLivesMode) {
+      rows.push(
+        `<div class="tooltip-row">個人生命模式:只攻擊 ${escapeHtml(displayNameFor(tower.ownerId))} 負責(或無人負責)路徑上的怪</div>`,
+      );
+    }
     rows.push(`<div class="tooltip-row">建造者:${escapeHtml(displayNameFor(tower.ownerId))}</div>`);
     const elementLabel = tower.secondElement
       ? `${ELEMENT_NAMES[tower.element]}×${ELEMENT_NAMES[tower.secondElement]}`
@@ -857,7 +904,20 @@ const gameRenderer = createGameRenderer(
       });
     }
 
-    showFloatingBuildMenu(screenX, screenY, options);
+    // 個人生命模式:這一格就算蓋最長射程的塔也搆不到「我會攻擊」的路徑時,先警告——
+    // 蓋下去塔會完全不開火,不講清楚玩家只會以為是 bug。用最長射程判斷(只警告
+    // 「怎麼蓋都沒用」的位置),射程較短的屬性蓋在邊緣格的細部差異靠選取後的射程圈看。
+    let buildHeader: string | undefined;
+    if (latestState?.individualLivesMode && !isOnPath(x, y)) {
+      const maxRangeFp = Math.max(...ALL_ELEMENTS.map((e) => TOWER_DEFS[e].rangeFp));
+      if (towerWouldBeIdle(latestState, myPlayerId(), x, y, maxRangeFp)) {
+        buildHeader =
+          '<small style="color: var(--fire)">⚠️ 個人生命模式:塔只攻擊你負責(或無人負責)路徑上的怪,' +
+          '這個位置搆不到那些路徑,蓋塔不會開火(資源建築/圖騰不受影響)</small>';
+      }
+    }
+
+    showFloatingBuildMenu(screenX, screenY, options, buildHeader);
   },
   (towerId) => {
     selectedTowerId = towerId;
@@ -1081,10 +1141,14 @@ function renderTowerMenu(): void {
     ? `${ELEMENT_NAMES[tower.element]}×${ELEMENT_NAMES[tower.secondElement]}`
     : `${ELEMENT_NAMES[tower.element]}塔`;
   const pathLabel = tower.upgradePath !== 'none' ? ` · ${escapeHtml(UPGRADE_PATH_NAMES[tower.upgradePath])}` : '';
-  const headerHtml =
+  let headerHtml =
     `<b class="element-${tower.element}">${escapeHtml(towerDisplayName(tower))}</b>(${elementLabel})Lv.${tower.level}` +
     `<small>攻擊 ${stats.damage} · 範圍 ${(stats.rangeFp / FP_SCALE).toFixed(1)} 格 · 攻速 ${((stats.cooldownTicks * currentTickRateMs) / 1000).toFixed(2)}s` +
     `${pathLabel} · ${escapeHtml(displayNameFor(tower.ownerId))}</small>`;
+  // 個人生命模式:這座塔(以實際射程)搆不到塔主人守備的任何路徑 → 不會開火,標紅講清楚。
+  if (state.individualLivesMode && towerWouldBeIdle(state, tower.ownerId, tower.x, tower.y, stats.rangeFp)) {
+    headerHtml += `<small style="color: var(--fire)">⚠️ 搆不到 ${escapeHtml(displayNameFor(tower.ownerId))} 負責的路徑,這座塔不會開火</small>`;
+  }
 
   // 錨定在塔的右緣,選單不壓住塔本體;縮放/平移都反映在 tileToCanvas 的換算裡。
   const pos = gameRenderer.tileToCanvas(tower.x + 1, tower.y);

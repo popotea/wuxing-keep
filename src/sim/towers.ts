@@ -376,6 +376,26 @@ function towerCanTargetMoveType(tower: Pick<Tower, 'element' | 'secondElement'>,
     : canTargetMoveType(tower.element, moveType);
 }
 
+/**
+ * 個人生命模式的路徑守備限制(2026-07-24 加的,使用者的產品決策):塔只攻擊「塔主人負責
+ * 路徑」上的怪——路徑交叉/相鄰的地圖上,A 的塔會順手把 B 路徑的怪打死,稀釋掉「各守各的
+ * 路」這個模式的意義。`pathOwners` 傳 null 代表不限制(團隊模式/單人,行為完全不變)。
+ *
+ * **無人負責的路徑(owners 為空)任何塔都能打**:玩家數少於路徑數時會出現沒有負責人的
+ * 路徑(見 createInitialState 的 round-robin 分組),不放行的話那條路徑沒有任何火力管得到,
+ * 生命必定歸零,變成開局就註定的死路。
+ */
+function canTowerDefendPath(
+  tower: Pick<Tower, 'ownerId'>,
+  pathId: number,
+  pathOwners: ReadonlyArray<readonly PlayerId[]> | null,
+): boolean {
+  if (!pathOwners) return true;
+  const owners = pathOwners[pathId];
+  if (!owners || owners.length === 0) return true;
+  return owners.includes(tower.ownerId);
+}
+
 /** 這座塔打中 defender 時的傷害倍率判定——單屬性用一般的 elementRelation,雙屬性取兩屬性較好的那個。 */
 function towerElementalDamage(tower: Pick<Tower, 'element' | 'secondElement'>, baseDamage: number, defender: Element): number {
   return tower.secondElement
@@ -384,13 +404,19 @@ function towerElementalDamage(tower: Pick<Tower, 'element' | 'secondElement'>, b
 }
 
 /** 範圍內依塔的集火策略選一個目標(預設 first=最靠近終點)。 */
-function findTarget(monsters: readonly Monster[], tower: Tower, def: TowerDef): Monster | null {
+function findTarget(
+  monsters: readonly Monster[],
+  tower: Tower,
+  def: TowerDef,
+  pathOwners: ReadonlyArray<readonly PlayerId[]> | null,
+): Monster | null {
   const towerXFp = tower.x * FP_SCALE;
   const towerYFp = tower.y * FP_SCALE;
   const rangeSq = def.rangeFp * def.rangeFp;
   let best: Monster | null = null;
   for (const m of monsters) {
     if (!towerCanTargetMoveType(tower, m.moveType)) continue;
+    if (!canTowerDefendPath(tower, m.pos.pathId, pathOwners)) continue;
     const { xFp, yFp } = worldPositionFp(m.pos);
     const dx = towerXFp - xFp;
     const dy = towerYFp - yFp;
@@ -476,11 +502,13 @@ export function tryAttack(
   allTowers: readonly Tower[],
   runeTotems: readonly RuneTotem[],
   tick: number,
+  // 個人生命模式的路徑守備限制(見 canTowerDefendPath);null/省略 = 不限制,行為跟以前完全一樣。
+  pathOwners: ReadonlyArray<readonly PlayerId[]> | null = null,
 ): CombatEvent[] {
   const def = baseTowerDef(tower);
   tower.ticksSinceLastAttack += 1;
   if (tower.ticksSinceLastAttack < effectiveCooldownTicks(tower, allTowers, runeTotems)) return [];
-  const target = findTarget(monsters, tower, def);
+  const target = findTarget(monsters, tower, def, pathOwners);
   if (!target) return [];
   tower.ticksSinceLastAttack = 0;
   const rawDamage = towerElementalDamage(tower, effectiveDamage(tower, runeTotems), target.element);
@@ -507,6 +535,9 @@ export function tryAttack(
     for (const m of monsters) {
       if (m.id === target.id) continue;
       if (!towerCanTargetMoveType(tower, m.moveType)) continue;
+      // splash 波及的次要目標也吃同一條路徑守備限制——不然主目標在自己路徑上、
+      // 波及卻打到隔壁路徑的怪,限制就被繞過了(交叉點附近很容易發生)。
+      if (!canTowerDefendPath(tower, m.pos.pathId, pathOwners)) continue;
       const { xFp, yFp } = worldPositionFp(m.pos);
       const dx = targetPosFp.xFp - xFp;
       const dy = targetPosFp.yFp - yFp;
