@@ -293,6 +293,11 @@ export class GameScene extends Phaser.Scene {
   /** 個人生命模式:每條路徑起點附近的「路徑N(你負責)」標籤,整場固定,依簽章重建。 */
   private pathOwnerLabels: Phaser.GameObjects.Text[] = [];
   private pathOwnerLabelsKey = '';
+  /**
+   * 建造中的暫置虛影(main.ts 維護:送出建造指令到模擬反映之間的格子)。多人 lockstep 有
+   * input delay(300ms+),沒有立即回饋的話玩家會以為沒點到而連點——純顯示,不進模擬。
+   */
+  pendingBuilds: ReadonlyArray<{ x: number; y: number }> = [];
   private pendingState: SimulationState | null = null;
   private hoverX: number | null = null;
   private hoverY: number | null = null;
@@ -1294,6 +1299,17 @@ export class GameScene extends Phaser.Scene {
     }
     this.pruneStaleSprites(this.monsterSprites, liveMonsterIds);
     this.pruneStaleSprites(this.monsterNameTexts, liveMonsterIds);
+
+    // 建造中的暫置虛影:脈動的金色格子,模擬反映(格子上長出真的建築)後 main.ts 會移除。
+    if (this.pendingBuilds.length > 0) {
+      const pulse = 0.4 + 0.25 * Math.sin(this.time.now / 140);
+      for (const p of this.pendingBuilds) {
+        g.fillStyle(0xffe98a, pulse * 0.35);
+        g.fillRect(p.x * TILE_PX, p.y * TILE_PX, TILE_PX, TILE_PX);
+        g.lineStyle(2 * SCALE, 0xffe98a, Math.min(1, pulse + 0.3));
+        g.strokeRect(p.x * TILE_PX + 2, p.y * TILE_PX + 2, TILE_PX - 4, TILE_PX - 4);
+      }
+    }
   }
 
   /** state 裡已經不存在的 id(賣掉的塔、死掉/走出地圖的怪物)要把對應的 GameObject 銷毀,不然會一直留在畫面上。 */

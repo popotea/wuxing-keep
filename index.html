@@ -708,7 +708,15 @@
       #matchResultTitle { margin: 0 0 8px; font-size: 30px; letter-spacing: 4px; }
       #matchResultTitle.result-victory { color: var(--accent); text-shadow: 0 0 18px rgba(212, 175, 55, 0.6); }
       #matchResultTitle.result-defeat { color: var(--fire); text-shadow: 0 0 18px rgba(224, 90, 43, 0.5); }
-      #matchResultDetail { color: var(--muted); margin: 0 0 20px; font-size: 15px; line-height: 1.6; }
+      #matchResultDetail { color: var(--muted); margin: 0 0 14px; font-size: 15px; line-height: 1.6; }
+      /* 結算戰績表:各玩家傷害/擊殺/塔數,資料跟記分板同一套(playerStats)。 */
+      #matchResultStats { margin: 0 0 18px; }
+      #matchResultStats:empty { display: none; }
+      #matchResultStats table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      #matchResultStats th, #matchResultStats td { padding: 5px 10px; text-align: right; }
+      #matchResultStats th:first-child, #matchResultStats td:first-child { text-align: left; }
+      #matchResultStats th { color: var(--muted); font-weight: normal; font-size: 12px; border-bottom: 1px solid var(--border); }
+      #matchResultStats tr.scoreboard-me { color: var(--accent); font-weight: bold; }
       .match-result-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
       .match-result-actions .btn { margin-top: 0; }
 
@@ -1234,6 +1242,7 @@
       <div id="hudToggles">
         <button id="scoreboardBtn" class="hud-compact-toggle" type="button">記分板</button>
         <button id="hudCompactBtn" class="hud-compact-toggle" type="button">精簡檢視</button>
+        <button id="muteBtn" class="hud-compact-toggle" type="button">音效:開</button>
       </div>
       <!-- 畫面縮放:滾輪/雙指之外的第三種方式——筆電沒滾輪、或不想用手勢的人用按鈕。 -->
       <div id="zoomControls">
@@ -1307,6 +1316,7 @@
         <div class="match-result-panel panel-frame">
           <h2 id="matchResultTitle"></h2>
           <p id="matchResultDetail"></p>
+          <div id="matchResultStats"></div>
           <div class="match-result-actions">
             <button id="matchResultMenuBtn" class="btn" type="button">回到選單</button>
             <button id="matchResultViewBtn" class="btn" type="button">觀看戰場</button>

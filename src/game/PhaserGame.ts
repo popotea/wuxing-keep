@@ -23,6 +23,8 @@ export interface GameRenderer {
   zoomBy(factor: number): void;
   /** 畫面縮放按鈕用:回到看全圖的預設狀態。 */
   resetZoom(): void;
+  /** 建造中的暫置虛影格子(送出指令到模擬反映之間),main.ts 每 tick 更新。 */
+  setPendingBuilds(list: ReadonlyArray<{ x: number; y: number }>): void;
   /** 新對局開始時呼叫:Phaser.Game 整個網頁只建立一次、跨對局重複使用,鏡頭捲動位置不會自己歸零。 */
   resetCamera(): void;
   /**
@@ -69,6 +71,9 @@ export function createGameRenderer(
     },
     zoomBy: (factor) => scene.zoomByFactor(factor),
     resetZoom: () => scene.resetZoom(),
+    setPendingBuilds: (list) => {
+      scene.pendingBuilds = list;
+    },
     resetCamera: () => scene.resetCamera(),
     refreshSize: () => game.scale.refresh(),
     destroy: () => game.destroy(true),

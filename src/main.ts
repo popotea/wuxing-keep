@@ -7,6 +7,7 @@ import { Room, type MatchConfig, type RoomHandlers } from './net/room';
 import type { Action, PlayerInfo, RejectReason } from './net/protocol';
 import { createGameRenderer, type HoverInfo } from './game/PhaserGame';
 import { isMultiplayer, ownerColorCss } from './game/playerColors';
+import { isMuted, setMuted, sfx, unlockAudio } from './game/sound';
 import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
 import { LOCAL_PLAYER_ID, LocalEngine } from './sim/localEngine';
 import { DEFAULT_MAP_ID, FP_SCALE, isOnPath, MAP_DEFS, setActiveMap, tilesOfPath } from './sim/map';
@@ -34,7 +35,10 @@ import {
   MAX_RUNE_TOTEM_LEVEL,
   RESOURCE_BUILDING_INCOME,
   RESOURCE_BUILDING_INTERVAL_TICKS,
+  resourceBuildingSellValue,
   RUNE_TOTEM_COST,
+  runeTotemSellValue,
+  trapSellValue,
   RUNE_TOTEM_DAMAGE_BONUS_PERCENT,
   RUNE_TOTEM_DAMAGE_BONUS_PERCENT_SPECIALIZED,
   RUNE_TOTEM_HASTE_PERCENT,
@@ -156,6 +160,7 @@ const scoreboardMetaEl = $<HTMLDivElement>('scoreboardMeta');
 const matchResultOverlayEl = $<HTMLDivElement>('matchResultOverlay');
 const matchResultTitleEl = $<HTMLHeadingElement>('matchResultTitle');
 const matchResultDetailEl = $<HTMLParagraphElement>('matchResultDetail');
+const matchResultStatsEl = $<HTMLDivElement>('matchResultStats');
 const matchResultMenuBtn = $<HTMLButtonElement>('matchResultMenuBtn');
 const matchResultViewBtn = $<HTMLButtonElement>('matchResultViewBtn');
 const eliminatedBannerEl = $<HTMLDivElement>('eliminatedBanner');
@@ -263,6 +268,24 @@ function submitAction(action: Action): void {
   if (localEngine) localEngine.submitCommand(action);
   else if (room?.getRole() === 'host') hostEngine?.submitLocalCommand(action);
   else clientEngine?.submitLocalCommand(action);
+}
+
+/**
+ * 建造中的暫置虛影(2026-07-24 加的):lockstep 有 input delay(多人 300ms+ 再加網路往返),
+ * 點了建造要等一下才看到東西長出來,玩家容易以為沒點到而連點。送出建造指令時記下格子,
+ * 模擬反映(那格有東西了)或逾時(指令被 sim 安全忽略,例如錢不夠)就移除。純顯示,不進模擬。
+ */
+interface PendingBuild {
+  x: number;
+  y: number;
+  expiresAt: number;
+}
+
+let pendingBuilds: PendingBuild[] = [];
+
+function submitBuildAction(action: Action, x: number, y: number): void {
+  submitAction(action);
+  pendingBuilds.push({ x, y, expiresAt: Date.now() + 3000 });
 }
 
 /** 單人模式固定是 LOCAL_PLAYER_ID,連線模式是 room 給的 playerId。 */
@@ -411,6 +434,7 @@ function showGiftGoldModal(toPlayerId: string): void {
         // sim 端對不合法指令是刻意的靜默 no-op,UI 不給回饋的話,玩家會把 input delay
         // 的短暫延遲感知成「沒效果」——送出當下就先給個確認訊息。
         showToast(`已送出 ${amount} 金幣給 ${toName}`);
+        sfx.gift();
       },
     })),
   );
@@ -776,22 +800,19 @@ const gameRenderer = createGameRenderer(
     }
     const myGold = latestState?.gold[myPlayerId()] ?? 0;
     const existingTrap = latestState?.traps.find((t) => t.x === x && t.y === y);
-    const occupiedByResource = latestState?.resourceBuildings.some((r) => r.x === x && r.y === y);
+    const existingResource = latestState?.resourceBuildings.find((r) => r.x === x && r.y === y);
     const existingTotem = latestState?.runeTotems.find((r) => r.x === x && r.y === y);
-    // 已經有陷阱的格子改成跳「升級陷阱」選單(不分誰蓋的,誰都能出錢升級,跟塔升級同一套慣例),
-    // 只有真的封頂了才單純跳提示,不會讓玩家搞不清楚這格到底能不能再做點什麼。
+    // 已經有陷阱的格子跳「升級/拆除」選單(升級不分誰蓋的、拆除限本人,跟塔同一套慣例)。
     if (existingTrap) {
+      const trapOptions: ChoiceOption[] = [];
       const cost = trapUpgradeCost(existingTrap);
-      if (cost === null) {
-        showToast('陷阱已經滿級了');
-        return;
-      }
-      const nextLevel = existingTrap.level + 1;
-      showFloatingBuildMenu(screenX, screenY, [
-        {
+      if (cost !== null) {
+        const nextLevel = existingTrap.level + 1;
+        trapOptions.push({
           label: `升級陷阱(Lv.${existingTrap.level} → ${nextLevel})`,
           sublabel: `${cost} 金幣 · 減速 ${TRAP_SLOW_PERCENT_BY_LEVEL[existingTrap.level]}% → ${TRAP_SLOW_PERCENT_BY_LEVEL[nextLevel]}%`,
           disabled: myGold < cost,
+          unaffordable: myGold < cost,
           onChoose: () => {
             if ((latestState?.gold[myPlayerId()] ?? 0) < cost) {
               showToast(`金幣不足!升級陷阱需要 ${cost} 金幣`);
@@ -799,48 +820,87 @@ const gameRenderer = createGameRenderer(
             }
             submitAction({ kind: 'upgrade_trap', params: { trapId: existingTrap.id } });
           },
-        },
-      ]);
-      return;
-    }
-    if (occupiedByResource) {
-      showToast('這格已經有資源建築了');
-      return;
-    }
-    // 已經有符文圖騰的格子改成跳「升級圖騰」選單——圖騰只有 1→2 級這一次升級,而且這次
-    // 升級一定要選分歧路線(跟塔升到分岐級同一套慣例),所以直接跳分歧選擇,不用先跳一個
-    // 中間的「要不要升級」選單。
-    if (existingTotem) {
-      if (existingTotem.level >= MAX_RUNE_TOTEM_LEVEL) {
-        showToast('符文圖騰已經滿級了');
+        });
+      }
+      if (existingTrap.ownerId === myPlayerId()) {
+        trapOptions.push({
+          label: `拆除陷阱(+${trapSellValue()} 金幣)`,
+          sublabel: '退基礎造價一半,升級投入不退',
+          onChoose: () => submitAction({ kind: 'sell_trap', params: { trapId: existingTrap.id } }),
+        });
+      }
+      if (trapOptions.length === 0) {
+        showToast('陷阱已經滿級了(只有蓋的人可以拆除)');
         return;
       }
-      showChoiceModal(`升級符文圖騰(選一條分歧路線)`, [
+      showFloatingBuildMenu(screenX, screenY, trapOptions);
+      return;
+    }
+    // 資源建築:本人可拆除(有座數上限之後蓋錯不能永遠卡著一個名額),別人的只跳提示。
+    if (existingResource) {
+      if (existingResource.ownerId !== myPlayerId()) {
+        showToast(`這格是 ${displayNameFor(existingResource.ownerId)} 的資源建築`);
+        return;
+      }
+      showFloatingBuildMenu(screenX, screenY, [
         {
-          label: '強化圖騰',
-          sublabel: `${RUNE_TOTEM_UPGRADE_COST} 金幣 · 攻擊力加成 +${RUNE_TOTEM_DAMAGE_BONUS_PERCENT_SPECIALIZED}%`,
-          disabled: myGold < RUNE_TOTEM_UPGRADE_COST,
-          onChoose: () => {
-            if ((latestState?.gold[myPlayerId()] ?? 0) < RUNE_TOTEM_UPGRADE_COST) {
-              showToast(`金幣不足!升級圖騰需要 ${RUNE_TOTEM_UPGRADE_COST} 金幣`);
-              return;
-            }
-            submitAction({ kind: 'upgrade_rune_totem', params: { totemId: existingTotem.id, path: 'damage' } });
-          },
-        },
-        {
-          label: '疾風圖騰',
-          sublabel: `${RUNE_TOTEM_UPGRADE_COST} 金幣 · 攻速加成 +${RUNE_TOTEM_HASTE_PERCENT}%(取代攻擊力加成)`,
-          disabled: myGold < RUNE_TOTEM_UPGRADE_COST,
-          onChoose: () => {
-            if ((latestState?.gold[myPlayerId()] ?? 0) < RUNE_TOTEM_UPGRADE_COST) {
-              showToast(`金幣不足!升級圖騰需要 ${RUNE_TOTEM_UPGRADE_COST} 金幣`);
-              return;
-            }
-            submitAction({ kind: 'upgrade_rune_totem', params: { totemId: existingTotem.id, path: 'haste' } });
-          },
+          label: `拆除資源建築(+${resourceBuildingSellValue()} 金幣)`,
+          sublabel: '退基礎造價一半,騰出一個座數名額',
+          onChoose: () => submitAction({ kind: 'sell_resource_building', params: { buildingId: existingResource.id } }),
         },
       ]);
+      return;
+    }
+    // 已經有符文圖騰的格子跳「升級/拆除」選單——升級只有 1→2 級這一次,且一定要選分歧路線
+    // (跟塔升到分岐級同一套慣例),點升級後再跳分歧選擇彈窗。
+    if (existingTotem) {
+      const totemOptions: ChoiceOption[] = [];
+      if (existingTotem.level < MAX_RUNE_TOTEM_LEVEL) {
+        totemOptions.push({
+          label: `升級圖騰(選分歧路線)`,
+          sublabel: `${RUNE_TOTEM_UPGRADE_COST} 金幣${myGold < RUNE_TOTEM_UPGRADE_COST ? '(金幣不足)' : ''}`,
+          disabled: myGold < RUNE_TOTEM_UPGRADE_COST,
+          unaffordable: myGold < RUNE_TOTEM_UPGRADE_COST,
+          onChoose: () => {
+            showChoiceModal(`升級符文圖騰(選一條分歧路線)`, [
+              {
+                label: '強化圖騰',
+                sublabel: `${RUNE_TOTEM_UPGRADE_COST} 金幣 · 攻擊力加成 +${RUNE_TOTEM_DAMAGE_BONUS_PERCENT_SPECIALIZED}%`,
+                onChoose: () => {
+                  if ((latestState?.gold[myPlayerId()] ?? 0) < RUNE_TOTEM_UPGRADE_COST) {
+                    showToast(`金幣不足!升級圖騰需要 ${RUNE_TOTEM_UPGRADE_COST} 金幣`);
+                    return;
+                  }
+                  submitAction({ kind: 'upgrade_rune_totem', params: { totemId: existingTotem.id, path: 'damage' } });
+                },
+              },
+              {
+                label: '疾風圖騰',
+                sublabel: `${RUNE_TOTEM_UPGRADE_COST} 金幣 · 攻速加成 +${RUNE_TOTEM_HASTE_PERCENT}%(取代攻擊力加成)`,
+                onChoose: () => {
+                  if ((latestState?.gold[myPlayerId()] ?? 0) < RUNE_TOTEM_UPGRADE_COST) {
+                    showToast(`金幣不足!升級圖騰需要 ${RUNE_TOTEM_UPGRADE_COST} 金幣`);
+                    return;
+                  }
+                  submitAction({ kind: 'upgrade_rune_totem', params: { totemId: existingTotem.id, path: 'haste' } });
+                },
+              },
+            ]);
+          },
+        });
+      }
+      if (existingTotem.ownerId === myPlayerId()) {
+        totemOptions.push({
+          label: `拆除圖騰(+${runeTotemSellValue()} 金幣)`,
+          sublabel: '退基礎造價一半,升級投入不退',
+          onChoose: () => submitAction({ kind: 'sell_rune_totem', params: { totemId: existingTotem.id } }),
+        });
+      }
+      if (totemOptions.length === 0) {
+        showToast('符文圖騰已經滿級了(只有蓋的人可以拆除)');
+        return;
+      }
+      showFloatingBuildMenu(screenX, screenY, totemOptions);
       return;
     }
     const options: ChoiceOption[] = [];
@@ -857,7 +917,7 @@ const gameRenderer = createGameRenderer(
             showToast(`金幣不足!建造陷阱需要 ${TRAP_COST} 金幣`);
             return;
           }
-          submitAction({ kind: 'build_trap', params: { x, y } });
+          submitBuildAction({ kind: 'build_trap', params: { x, y } }, x, y);
         },
       });
     } else {
@@ -876,7 +936,7 @@ const gameRenderer = createGameRenderer(
               showToast(`金幣不足!建造${ELEMENT_NAMES[element]}塔需要 ${cost} 金幣`);
               return;
             }
-            submitAction({ kind: 'build_tower', params: { x, y, element } });
+            submitBuildAction({ kind: 'build_tower', params: { x, y, element } }, x, y);
           },
         });
       }
@@ -903,7 +963,7 @@ const gameRenderer = createGameRenderer(
             showToast(`金幣不足!建造資源建築需要 ${RESOURCE_BUILDING_COST} 金幣`);
             return;
           }
-          submitAction({ kind: 'build_resource_building', params: { x, y } });
+          submitBuildAction({ kind: 'build_resource_building', params: { x, y } }, x, y);
         },
       });
       options.push({
@@ -916,7 +976,7 @@ const gameRenderer = createGameRenderer(
             showToast(`金幣不足!建造符文圖騰需要 ${RUNE_TOTEM_COST} 金幣`);
             return;
           }
-          submitAction({ kind: 'build_rune_totem', params: { x, y } });
+          submitBuildAction({ kind: 'build_rune_totem', params: { x, y } }, x, y);
         },
       });
     }
@@ -991,6 +1051,55 @@ $<HTMLButtonElement>('zoomResetBtn').addEventListener('click', () => gameRendere
 // 玩家的體感是「畫面不知道為什麼縮小了」——對局畫布上把 wheel 的預設行為整個擋掉
 // (preventDefault 不影響 Phaser 自己的 wheel 縮放,那是遊戲內的鏡頭縮放,照常運作)。
 gameCanvasWrapEl.addEventListener('wheel', (ev) => ev.preventDefault(), { passive: false });
+
+// ---- 音效(src/game/sound.ts,WebAudio 程序合成) ----
+// 瀏覽器自動播放政策:AudioContext 要在使用者手勢後才能出聲,第一次按下就解鎖。
+document.addEventListener('pointerdown', unlockAudio, { once: true });
+
+const muteBtn = $<HTMLButtonElement>('muteBtn');
+
+function renderMuteBtn(): void {
+  muteBtn.textContent = isMuted() ? '音效:關' : '音效:開';
+}
+
+muteBtn.addEventListener('click', () => {
+  setMuted(!isMuted());
+  renderMuteBtn();
+});
+renderMuteBtn();
+
+/**
+ * 音效觸發要靠「跟上一個 tick 比對」的差值(模擬層不會通知 UI 發生了什麼,只給整份 state)。
+ * 對局開始/RESYNC 整份換 state 時差值會跳一下,可能多響一聲,無害。
+ */
+interface SoundSnapshot {
+  buildingCount: number;
+  killSum: number;
+  livesSum: number;
+  waveNumber: number;
+}
+
+let soundSnapshot: SoundSnapshot | null = null;
+
+function playStateSounds(state: SimulationState): void {
+  const buildingCount =
+    state.towers.length + state.traps.length + state.resourceBuildings.length + state.runeTotems.length;
+  const killSum = Object.values(state.playerStats).reduce((sum, s) => sum + s.kills, 0);
+  const livesSum = state.individualLivesMode ? state.pathLives.reduce((a, b) => a + b, 0) : state.lives;
+  const waveNumber = currentWaveNumberFor(state);
+
+  const prev = soundSnapshot;
+  soundSnapshot = { buildingCount, killSum, livesSum, waveNumber };
+  if (!prev) return; // 對局第一個 tick,沒有比較基準
+
+  if (state.combatEvents.length > 0) sfx.shot();
+  if (state.skillCasts.length > 0) sfx.skill();
+  if (killSum > prev.killSum) sfx.kill();
+  if (buildingCount > prev.buildingCount) sfx.build();
+  if (buildingCount < prev.buildingCount) sfx.sell();
+  if (livesSum < prev.livesSum) sfx.leak();
+  if (waveNumber > prev.waveNumber) sfx.wave();
+}
 
 /**
  * 塔的浮動操作選單重建簽章:等級/費用/可負擔與否等會影響選單內容的欄位串起來,
@@ -1677,6 +1786,9 @@ function resetResultBanner(): void {
   matchResultShown = false;
   eliminatedBannerEl.hidden = true;
   wasEliminated = false;
+  pendingBuilds = [];
+  gameRenderer.setPendingBuilds(pendingBuilds);
+  soundSnapshot = null;
 }
 
 function showResult(text: string, variant: 'victory' | 'defeat'): void {
@@ -1698,7 +1810,40 @@ function showMatchResultOverlay(title: string, detail: string, variant: 'victory
   matchResultTitleEl.textContent = title;
   matchResultTitleEl.className = `result-${variant}`;
   matchResultDetailEl.textContent = detail;
+  renderMatchResultStats();
   matchResultOverlayEl.classList.add('show');
+  if (variant === 'victory') sfx.victory();
+  else sfx.defeat();
+}
+
+/** 結算的戰績表:各玩家傷害/擊殺/塔數,依傷害排序,資料跟記分板同一套。每場只建一次,innerHTML 沒有點擊被吃的疑慮。 */
+function renderMatchResultStats(): void {
+  const state = latestState;
+  if (!state) {
+    matchResultStatsEl.innerHTML = '';
+    return;
+  }
+  const rows = Object.keys(state.gold)
+    .map((playerId) => {
+      const stats = state.playerStats[playerId] ?? { damageDealt: 0, kills: 0 };
+      return {
+        playerId,
+        name: displayNameFor(playerId),
+        damage: stats.damageDealt,
+        kills: stats.kills,
+        towers: state.towers.filter((t) => t.ownerId === playerId).length,
+      };
+    })
+    .sort((a, b) => b.damage - a.damage);
+  matchResultStatsEl.innerHTML =
+    `<table><thead><tr><th>玩家</th><th>傷害</th><th>擊殺</th><th>塔數</th></tr></thead><tbody>` +
+    rows
+      .map(
+        (r) =>
+          `<tr class="${r.playerId === myPlayerId() ? 'scoreboard-me' : ''}"><td>${escapeHtml(r.name)}</td><td>${r.damage}</td><td>${r.kills}</td><td>${r.towers}</td></tr>`,
+      )
+      .join('') +
+    `</tbody></table>`;
 }
 
 matchResultViewBtn.addEventListener('click', () => matchResultOverlayEl.classList.remove('show'));
@@ -1915,6 +2060,20 @@ const lockstepHandlers: LockstepHandlers = {
     renderLivesHud(state);
     renderWaveHud(state);
     renderSkillBar(state);
+    // 建造虛影:模擬已反映(那格長出東西)或逾時(指令被 sim 忽略,例如錢不夠)就移除。
+    if (pendingBuilds.length > 0) {
+      const now = Date.now();
+      pendingBuilds = pendingBuilds.filter(
+        (p) =>
+          now < p.expiresAt &&
+          !state.towers.some((t) => t.x === p.x && t.y === p.y) &&
+          !state.traps.some((t) => t.x === p.x && t.y === p.y) &&
+          !state.resourceBuildings.some((b) => b.x === p.x && b.y === p.y) &&
+          !state.runeTotems.some((r) => r.x === p.x && r.y === p.y),
+      );
+    }
+    gameRenderer.setPendingBuilds(pendingBuilds);
+    if (!state.gameOver && !state.victory) playStateSounds(state);
     gameRenderer.renderState(state);
     renderTowerMenu();
     if (scoreboardOverlayEl.classList.contains('show')) renderScoreboard();
@@ -1929,6 +2088,7 @@ const lockstepHandlers: LockstepHandlers = {
       hideFloatingBuildMenu();
       gameRenderer.setSelectedTower(null);
       showToast('你負責的路徑已失守!觀戰中——緊急補命可讓路徑復活');
+      sfx.eliminated();
     }
     wasEliminated = eliminated;
 

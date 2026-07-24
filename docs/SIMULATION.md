@@ -256,6 +256,7 @@
 - `applyBuildTrap`/`applyBuildResourceBuilding`/`applyBuildRuneTotem` 分別檢查蓋在路徑格/非路徑格才合法(`isBuildableTileFree` 順便擋掉塔/資源建築/符文圖騰三者互相疊格子,**新增放置物型別時這個函式要記得同步更新**,不然新的放置物就漏了互斥檢查)
 - `step()` 裡怪物移動前用 `worldPositionFp` 查目前格子座標有沒有陷阱,有就這個 tick 的 `speedFp` 依陷阱等級打折扣(`moveType === 'air'` 的飛行怪不受影響,陷阱打不到天上)
 - 資源建築每 `RESOURCE_BUILDING_INTERVAL_TICKS` 只給 `ownerId` 自己(不是全員均分)加 `RESOURCE_BUILDING_INCOME` 金幣
+- **可拆除(2026-07-24 加的)**:`sell_trap`/`sell_resource_building`/`sell_rune_totem` 三個指令,**限本人**(跟賣塔同一條規則)、退基礎造價一半、升級投入不退(`placements.ts` 的 `*SellValue()`)。動機:原本蓋錯只能認了,資源建築有座數上限後蓋錯=永久佔名額。出局玩家一樣被 `applyCommand` 的出局閘門擋掉
 - **資源建築有每人座數上限 `MAX_RESOURCE_BUILDINGS_PER_PLAYER`(2026-07-23 加的,玩家實測回報蓋一排快速補資金破壞平衡,無限模式尤其嚴重——被動收入隨「座數 × 時間」線性放大)**。上限採「每位玩家」不是「全隊」:收入本來就只入 `ownerId` 自己的帳,而且全隊共用配額會出現「先蓋先贏、隊友互佔名額」的負面互動,違反「只做正面互助」原則。驗證用「從 `state.resourceBuildings` 過濾 `ownerId` 的現數」判斷,**刻意不在 state 加計數欄位**——衍生值天生決定性,陣列本來就在 checksum 內,`computeChecksum` 完全不用動
 
 ### 團隊經濟模型

@@ -53,10 +53,13 @@ import {
   RESOURCE_BUILDING_COST,
   RESOURCE_BUILDING_INCOME,
   RESOURCE_BUILDING_INTERVAL_TICKS,
+  resourceBuildingSellValue,
   RUNE_TOTEM_COST,
   RUNE_TOTEM_UPGRADE_COST,
+  runeTotemSellValue,
   TRAP_COST,
   TRAP_SLOW_PERCENT_BY_LEVEL,
+  trapSellValue,
   trapUpgradeCost,
   type ResourceBuilding,
   type RuneTotem,
@@ -543,6 +546,39 @@ function applyUpgradeRuneTotem(state: SimulationState, playerId: PlayerId, actio
   if (path) totem.upgradePath = path;
 }
 
+// ---- 拆除放置物(2026-07-24 加的):跟賣塔同一套慣例——限本人(避免動到別人的投資)、
+// 退基礎造價的一半、升級投入不退。原本蓋錯只能認了,資源建築有座數上限後蓋錯=永久佔名額。
+
+function applySellTrap(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const trapId = asFiniteInt(action.params.trapId);
+  if (trapId === null) return;
+  const idx = state.traps.findIndex((t) => t.id === trapId);
+  if (idx === -1) return;
+  if (state.traps[idx].ownerId !== playerId) return;
+  state.gold[playerId] = (state.gold[playerId] ?? 0) + trapSellValue();
+  state.traps.splice(idx, 1);
+}
+
+function applySellResourceBuilding(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const buildingId = asFiniteInt(action.params.buildingId);
+  if (buildingId === null) return;
+  const idx = state.resourceBuildings.findIndex((b) => b.id === buildingId);
+  if (idx === -1) return;
+  if (state.resourceBuildings[idx].ownerId !== playerId) return;
+  state.gold[playerId] = (state.gold[playerId] ?? 0) + resourceBuildingSellValue();
+  state.resourceBuildings.splice(idx, 1);
+}
+
+function applySellRuneTotem(state: SimulationState, playerId: PlayerId, action: Action): void {
+  const totemId = asFiniteInt(action.params.totemId);
+  if (totemId === null) return;
+  const idx = state.runeTotems.findIndex((r) => r.id === totemId);
+  if (idx === -1) return;
+  if (state.runeTotems[idx].ownerId !== playerId) return;
+  state.gold[playerId] = (state.gold[playerId] ?? 0) + runeTotemSellValue();
+  state.runeTotems.splice(idx, 1);
+}
+
 /**
  * 「呼叫下一波」:把 waveTickOffset 往前調,讓 effectiveWaveTick() 直接跳到下一波開始的
  * 那一刻——不分誰按,任何隊友都能按(跟升級/集火策略同一套慣例)。固定模式已經是最後一波
@@ -701,6 +737,9 @@ function applyCommand(state: SimulationState, playerId: PlayerId, action: Action
   else if (action.kind === 'build_resource_building') applyBuildResourceBuilding(state, playerId, action);
   else if (action.kind === 'build_rune_totem') applyBuildRuneTotem(state, playerId, action);
   else if (action.kind === 'upgrade_rune_totem') applyUpgradeRuneTotem(state, playerId, action);
+  else if (action.kind === 'sell_trap') applySellTrap(state, playerId, action);
+  else if (action.kind === 'sell_resource_building') applySellResourceBuilding(state, playerId, action);
+  else if (action.kind === 'sell_rune_totem') applySellRuneTotem(state, playerId, action);
   else if (action.kind === 'skip_to_next_wave') applySkipToNextWave(state);
   else if (action.kind === 'gift_gold') applyGiftGold(state, playerId, action);
   else if (action.kind === 'emergency_heal') applyEmergencyHeal(state, playerId, action);

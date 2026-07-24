@@ -27,6 +27,21 @@ export function trapUpgradeCost(trap: Trap): number | null {
   return TRAP_COST * trap.level;
 }
 
+// ---- 拆除退款(2026-07-24 加的,原本蓋錯只能認了;資源建築有座數上限後蓋錯=永久佔名額)----
+// 跟賣塔同一套慣例:退基礎造價的一半,升級投入不退;拆除限本人(見 simulation.ts)。
+
+export function trapSellValue(): number {
+  return Math.floor(TRAP_COST / 2);
+}
+
+export function resourceBuildingSellValue(): number {
+  return Math.floor(RESOURCE_BUILDING_COST / 2);
+}
+
+export function runeTotemSellValue(): number {
+  return Math.floor(RUNE_TOTEM_COST / 2);
+}
+
 export interface ResourceBuilding {
   id: number;
   x: number;
