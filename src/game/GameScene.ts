@@ -334,9 +334,9 @@ export class GameScene extends Phaser.Scene {
       this.load.image(key, `assets/decor/${DECOR_IMAGE_FILES[key]}`);
     }
     for (const element of Object.keys(TOWER_IMAGE_FILES) as Element[]) {
-      this.load.image(towerTextureKey(element), `assets/towers/${TOWER_IMAGE_FILES[element]}`);
+      this.load.image(towerTextureKey(element), `assets/towers-v2/${TOWER_IMAGE_FILES[element]}`);
       for (const evolutionPath of ['burst', 'splash'] as const) {
-        this.load.image(towerEvolutionTextureKey(element, evolutionPath), `assets/towers/${element}-${evolutionPath}.png`);
+        this.load.image(towerEvolutionTextureKey(element, evolutionPath), `assets/towers-v2/${element}-${evolutionPath}.png`);
       }
     }
     for (const element of Object.keys(MONSTER_IMAGE_FILES) as Element[]) {
@@ -354,8 +354,8 @@ export class GameScene extends Phaser.Scene {
     // 直接複製了一份共用材質到 tiles/crossroads/(它的材質已經過調校,不重新產)。
     // resolveTileKey() 的備援路徑仍然留著當保險,不是拿掉。
     for (const def of MAP_DEFS) {
-      this.load.image(mapTileKey(def.id, 'floor'), `assets/tiles/${def.id}/floor.png`);
-      this.load.image(mapTileKey(def.id, 'path'), `assets/tiles/${def.id}/path.png`);
+      this.load.image(mapTileKey(def.id, 'floor'), `assets/tiles-v2/${def.id}/floor.png`);
+      this.load.image(mapTileKey(def.id, 'path'), `assets/tiles-v2/${def.id}/path.png`);
     }
   }
 

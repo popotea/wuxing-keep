@@ -568,8 +568,8 @@ const ELEMENT_UI_COLORS: Record<Element, string> = {
 
 function towerIconUrl(element: Element, path?: UpgradePath): string {
   return path && path !== 'none'
-    ? `assets/towers/${element}-${path}.png`
-    : `assets/towers/${element}.png`;
+    ? `assets/towers-v2/${element}-${path}.png`
+    : `assets/towers-v2/${element}.png`;
 }
 
 const BUILDING_ICON_URLS = {
