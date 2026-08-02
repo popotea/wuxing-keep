@@ -535,6 +535,10 @@ function showToast(message: string): void {
 interface ChoiceOption {
   label: string;
   sublabel?: string;
+  /** 建造／升級卡片左側的物品縮圖。網址只來自本專案的固定資產表。 */
+  iconUrl?: string;
+  /** 卡片 hover／選取時的重點色；只傳入程式內寫死的色碼。 */
+  accent?: string;
   disabled?: boolean;
   /**
    * 這個選項是**因為金幣不足**才不能選(而不是其他條件不符)。單純的 disabled 只是變淡,
@@ -550,26 +554,82 @@ interface ChoiceOption {
   onChoose: () => void;
 }
 
+const ELEMENT_UI_COLORS: Record<Element, string> = {
+  metal: '#e0b84b',
+  wood: '#58b85b',
+  water: '#58a3ef',
+  fire: '#ef7045',
+  earth: '#c08b50',
+};
+
+function towerIconUrl(element: Element, path?: UpgradePath): string {
+  return path && path !== 'none'
+    ? `assets/towers/${element}-${path}.png`
+    : `assets/towers/${element}.png`;
+}
+
+const BUILDING_ICON_URLS = {
+  trap: 'assets/ui-items/trap.png',
+  resource: 'assets/ui-items/resource.png',
+  totem: 'assets/ui-items/totem.png',
+} as const;
+
+/**
+ * 建立選項卡片的固定 DOM 結構。文字一律用 textContent，避免玩家名稱等動態內容被當成 HTML；
+ * 圖示網址／重點色只會由下方的程式常數傳入。
+ */
+function renderChoiceOptionContent(btn: HTMLButtonElement, opt: ChoiceOption, shortcut: number): void {
+  if (opt.accent) btn.style.setProperty('--option-accent', opt.accent);
+  if (opt.iconUrl) {
+    btn.classList.add('has-item-icon');
+    const icon = document.createElement('span');
+    icon.className = 'choice-option-icon';
+    const img = document.createElement('img');
+    img.src = opt.iconUrl;
+    img.alt = '';
+    img.draggable = false;
+    icon.appendChild(img);
+    btn.appendChild(icon);
+  }
+
+  const copy = document.createElement('span');
+  copy.className = 'choice-option-copy';
+  const title = document.createElement('span');
+  title.className = 'choice-option-title';
+  title.textContent = opt.label;
+  copy.appendChild(title);
+  if (opt.sublabel) {
+    const sublabel = document.createElement('small');
+    sublabel.textContent = opt.sublabel;
+    copy.appendChild(sublabel);
+  }
+  btn.appendChild(copy);
+
+  const key = document.createElement('kbd');
+  key.className = 'choice-option-kbd';
+  key.textContent = String(shortcut);
+  key.title = `快捷鍵 ${shortcut}`;
+  btn.appendChild(key);
+}
+
 /** 通用選擇彈窗:蓋塔的隨機英雄選擇、升級到分岐級選路線都共用這個。點取消或背景不會做任何事。 */
 function showChoiceModal(title: string, options: ChoiceOption[]): void {
   choiceModalTitleEl.textContent = title;
   choiceModalOptionsEl.innerHTML = '';
-  for (const opt of options) {
+  options.forEach((opt, index) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'choice-option';
     btn.disabled = opt.disabled ?? false;
     // 錢不夠跟其他不能選的原因要分得出來(見 ChoiceOption.unaffordable)
     if (opt.unaffordable) btn.classList.add('cost-unaffordable');
-    btn.innerHTML = opt.sublabel
-      ? `${escapeHtml(opt.label)}<small>${escapeHtml(opt.sublabel)}</small>`
-      : escapeHtml(opt.label);
+    renderChoiceOptionContent(btn, opt, index + 1);
     btn.addEventListener('click', () => {
       hideChoiceModal();
       opt.onChoose();
     });
     choiceModalOptionsEl.appendChild(btn);
-  }
+  });
   choiceModalOverlayEl.classList.add('show');
 }
 
@@ -600,36 +660,38 @@ function showFloatingBuildMenu(
     header.innerHTML = headerHtml;
     floatingBuildMenuEl.appendChild(header);
   }
-  for (const opt of options) {
+  options.forEach((opt, index) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'choice-option';
     btn.disabled = opt.disabled ?? false;
     // 錢不夠跟其他不能選的原因要分得出來(見 ChoiceOption.unaffordable)
     if (opt.unaffordable) btn.classList.add('cost-unaffordable');
-    btn.innerHTML = opt.sublabel
-      ? `${escapeHtml(opt.label)}<small>${escapeHtml(opt.sublabel)}</small>`
-      : escapeHtml(opt.label);
+    renderChoiceOptionContent(btn, opt, index + 1);
     btn.addEventListener('click', () => {
       if (!opt.keepOpen) hideFloatingBuildMenu();
       opt.onChoose();
     });
     floatingBuildMenuEl.appendChild(btn);
-  }
+  });
 
   const canvasRect = document.getElementById('gameCanvas')?.getBoundingClientRect();
   const pageX = (canvasRect?.left ?? 0) + canvasX;
   const pageY = (canvasRect?.top ?? 0) + canvasY;
-  // 夾在視窗範圍內,避免選單超出畫面邊緣被裁掉看不到(選單實際大小要等內容塞進去後才知道,
-  // 這裡用保守的估計值當夾取上限,足夠應付目前最多 8 個選項的版面:5 種屬性都固定顯示
-  // 不再隨機抽 3 個,加上雙屬性塔、資源建築、符文圖騰)。
-  const MENU_WIDTH_GUESS = 200;
-  const MENU_HEIGHT_GUESS = Math.min(450, 60 + options.length * 56);
-  floatingBuildMenuEl.style.left = `${Math.max(8, Math.min(pageX, window.innerWidth - MENU_WIDTH_GUESS))}px`;
-  floatingBuildMenuEl.style.top = `${Math.max(8, Math.min(pageY, window.innerHeight - MENU_HEIGHT_GUESS))}px`;
-
   floatingBuildMenuEl.classList.add('show');
   floatingBuildBackdropEl.classList.add('show');
+  // 內容真正排版完成後再量尺寸；優先放點擊處右下，放不下就翻到左／上，最後才夾進視窗。
+  // 舊版用 200×估計高度，加入縮圖後很容易在右下角被裁掉。
+  const MARGIN = 8;
+  const OFFSET = 12;
+  const menuWidth = floatingBuildMenuEl.offsetWidth;
+  const menuHeight = floatingBuildMenuEl.offsetHeight;
+  let left = pageX + OFFSET;
+  let top = pageY + OFFSET;
+  if (left + menuWidth > window.innerWidth - MARGIN) left = pageX - menuWidth - OFFSET;
+  if (top + menuHeight > window.innerHeight - MARGIN) top = pageY - menuHeight - OFFSET;
+  floatingBuildMenuEl.style.left = `${Math.max(MARGIN, Math.min(left, window.innerWidth - menuWidth - MARGIN))}px`;
+  floatingBuildMenuEl.style.top = `${Math.max(MARGIN, Math.min(top, window.innerHeight - menuHeight - MARGIN))}px`;
 }
 
 function hideFloatingBuildMenu(): void {
@@ -811,6 +873,8 @@ const gameRenderer = createGameRenderer(
         trapOptions.push({
           label: `升級陷阱(Lv.${existingTrap.level} → ${nextLevel})`,
           sublabel: `${cost} 金幣 · 減速 ${TRAP_SLOW_PERCENT_BY_LEVEL[existingTrap.level]}% → ${TRAP_SLOW_PERCENT_BY_LEVEL[nextLevel]}%`,
+          iconUrl: BUILDING_ICON_URLS.trap,
+          accent: '#58a3ef',
           disabled: myGold < cost,
           unaffordable: myGold < cost,
           onChoose: () => {
@@ -826,6 +890,8 @@ const gameRenderer = createGameRenderer(
         trapOptions.push({
           label: `拆除陷阱(+${trapSellValue()} 金幣)`,
           sublabel: '退基礎造價一半,升級投入不退',
+          iconUrl: BUILDING_ICON_URLS.trap,
+          accent: '#ef7045',
           onChoose: () => submitAction({ kind: 'sell_trap', params: { trapId: existingTrap.id } }),
         });
       }
@@ -846,6 +912,8 @@ const gameRenderer = createGameRenderer(
         {
           label: `拆除資源建築(+${resourceBuildingSellValue()} 金幣)`,
           sublabel: '退基礎造價一半,騰出一個座數名額',
+          iconUrl: BUILDING_ICON_URLS.resource,
+          accent: '#e0b84b',
           onChoose: () => submitAction({ kind: 'sell_resource_building', params: { buildingId: existingResource.id } }),
         },
       ]);
@@ -859,6 +927,8 @@ const gameRenderer = createGameRenderer(
         totemOptions.push({
           label: `升級圖騰(選分歧路線)`,
           sublabel: `${RUNE_TOTEM_UPGRADE_COST} 金幣${myGold < RUNE_TOTEM_UPGRADE_COST ? '(金幣不足)' : ''}`,
+          iconUrl: BUILDING_ICON_URLS.totem,
+          accent: '#b58cff',
           disabled: myGold < RUNE_TOTEM_UPGRADE_COST,
           unaffordable: myGold < RUNE_TOTEM_UPGRADE_COST,
           onChoose: () => {
@@ -866,6 +936,8 @@ const gameRenderer = createGameRenderer(
               {
                 label: '強化圖騰',
                 sublabel: `${RUNE_TOTEM_UPGRADE_COST} 金幣 · 攻擊力加成 +${RUNE_TOTEM_DAMAGE_BONUS_PERCENT_SPECIALIZED}%`,
+                iconUrl: BUILDING_ICON_URLS.totem,
+                accent: '#e0b84b',
                 onChoose: () => {
                   if ((latestState?.gold[myPlayerId()] ?? 0) < RUNE_TOTEM_UPGRADE_COST) {
                     showToast(`金幣不足!升級圖騰需要 ${RUNE_TOTEM_UPGRADE_COST} 金幣`);
@@ -877,6 +949,8 @@ const gameRenderer = createGameRenderer(
               {
                 label: '疾風圖騰',
                 sublabel: `${RUNE_TOTEM_UPGRADE_COST} 金幣 · 攻速加成 +${RUNE_TOTEM_HASTE_PERCENT}%(取代攻擊力加成)`,
+                iconUrl: BUILDING_ICON_URLS.totem,
+                accent: '#58a3ef',
                 onChoose: () => {
                   if ((latestState?.gold[myPlayerId()] ?? 0) < RUNE_TOTEM_UPGRADE_COST) {
                     showToast(`金幣不足!升級圖騰需要 ${RUNE_TOTEM_UPGRADE_COST} 金幣`);
@@ -893,6 +967,8 @@ const gameRenderer = createGameRenderer(
         totemOptions.push({
           label: `拆除圖騰(+${runeTotemSellValue()} 金幣)`,
           sublabel: '退基礎造價一半,升級投入不退',
+          iconUrl: BUILDING_ICON_URLS.totem,
+          accent: '#ef7045',
           onChoose: () => submitAction({ kind: 'sell_rune_totem', params: { totemId: existingTotem.id } }),
         });
       }
@@ -910,6 +986,8 @@ const gameRenderer = createGameRenderer(
       options.push({
         label: '陷阱',
         sublabel: `${TRAP_COST} 金幣${myGold < TRAP_COST ? '(金幣不足)' : ''}`,
+        iconUrl: BUILDING_ICON_URLS.trap,
+        accent: '#58a3ef',
         disabled: myGold < TRAP_COST,
         unaffordable: myGold < TRAP_COST,
         onChoose: () => {
@@ -929,6 +1007,8 @@ const gameRenderer = createGameRenderer(
         options.push({
           label: TOWER_CHARACTER_NAMES[element],
           sublabel: `${ELEMENT_NAMES[element]}塔 · ${cost} 金幣${myGold < cost ? '(金幣不足)' : ''}`,
+          iconUrl: towerIconUrl(element),
+          accent: ELEMENT_UI_COLORS[element],
           disabled: myGold < cost,
           unaffordable: myGold < cost,
           onChoose: () => {
@@ -950,6 +1030,8 @@ const gameRenderer = createGameRenderer(
         sublabel: resourceCapReached
           ? `已達上限(${myResourceCount}/${MAX_RESOURCE_BUILDINGS_PER_PLAYER} 座)`
           : `${RESOURCE_BUILDING_COST} 金幣 · ${myResourceCount}/${MAX_RESOURCE_BUILDINGS_PER_PLAYER} 座${myGold < RESOURCE_BUILDING_COST ? '(金幣不足)' : ''}`,
+        iconUrl: BUILDING_ICON_URLS.resource,
+        accent: '#e0b84b',
         disabled: myGold < RESOURCE_BUILDING_COST || resourceCapReached,
         unaffordable: myGold < RESOURCE_BUILDING_COST && !resourceCapReached,
         onChoose: () => {
@@ -969,6 +1051,8 @@ const gameRenderer = createGameRenderer(
       options.push({
         label: '符文圖騰',
         sublabel: `${RUNE_TOTEM_COST} 金幣 · 範圍內全隊塔 +${RUNE_TOTEM_DAMAGE_BONUS_PERCENT}% 攻擊力${myGold < RUNE_TOTEM_COST ? '(金幣不足)' : ''}`,
+        iconUrl: BUILDING_ICON_URLS.totem,
+        accent: '#b58cff',
         disabled: myGold < RUNE_TOTEM_COST,
         unaffordable: myGold < RUNE_TOTEM_COST,
         onChoose: () => {
@@ -1177,12 +1261,20 @@ function renderTowerMenu(): void {
 
   // 升級不分誰的塔,誰都能幫忙出錢升級;升到分岐級一定要先選路線(全螢幕彈窗強調不可反悔)。
   if (stats.upgradeCost === null) {
-    options.push({ label: '已滿級', disabled: true, onChoose: () => {} });
+    options.push({
+      label: '已滿級',
+      iconUrl: towerIconUrl(tower.element, tower.upgradePath),
+      accent: ELEMENT_UI_COLORS[tower.element],
+      disabled: true,
+      onChoose: () => {},
+    });
   } else {
     const nextIsBranch = tower.level + 1 === UPGRADE_PATH_LEVEL;
     options.push({
       label: `升級(Lv.${tower.level} → ${tower.level + 1})`,
       sublabel: `${stats.upgradeCost} 金幣${upgradePoor ? '(金幣不足)' : nextIsBranch ? ' · 要選分岐路線' : ''}`,
+      iconUrl: towerIconUrl(tower.element, tower.upgradePath),
+      accent: ELEMENT_UI_COLORS[tower.element],
       disabled: upgradePoor,
       unaffordable: upgradePoor,
       // 一般升級選單留著讓玩家連點;分岐級要開彈窗,選單先收掉
@@ -1204,6 +1296,8 @@ function renderTowerMenu(): void {
               label: UPGRADE_PATH_NAMES[path],
               sublabel:
                 path === 'burst' ? '傷害比一般線性升級更高,沒有範圍效果' : '攻擊會波及主目標周圍的怪物,單體傷害不額外加成',
+              iconUrl: towerIconUrl(t.element, path),
+              accent: ELEMENT_UI_COLORS[t.element],
               onChoose: () => submitAction({ kind: 'upgrade_tower', params: { towerId, path } }),
             })),
           );
@@ -1220,6 +1314,8 @@ function renderTowerMenu(): void {
     options.push({
       label: '加第二屬性',
       sublabel: `${cheapestSecond} 金幣${secondPoor ? '(金幣不足)' : ''}`,
+      iconUrl: towerIconUrl(tower.element, tower.upgradePath),
+      accent: ELEMENT_UI_COLORS[tower.element],
       disabled: secondPoor,
       unaffordable: secondPoor,
       onChoose: () => {
@@ -1234,6 +1330,8 @@ function renderTowerMenu(): void {
             return {
               label: `${ELEMENT_NAMES[t.element]}×${ELEMENT_NAMES[e2]}`,
               sublabel: `${TOWER_CHARACTER_NAMES[e2]} · ${cost} 金幣${poor ? '(金幣不足)' : ''}`,
+              iconUrl: towerIconUrl(e2),
+              accent: ELEMENT_UI_COLORS[e2],
               disabled: poor,
               unaffordable: poor,
               onChoose: () => {
@@ -1254,6 +1352,8 @@ function renderTowerMenu(): void {
   options.push({
     label: `集火:${STRATEGY_LABELS[tower.targetStrategy]}`,
     sublabel: '點擊切換目標策略',
+    iconUrl: towerIconUrl(tower.element, tower.upgradePath),
+    accent: '#d7dde8',
     keepOpen: true,
     onChoose: () => {
       const t = latestState?.towers.find((x) => x.id === towerId);
@@ -1266,6 +1366,8 @@ function renderTowerMenu(): void {
   if (isOwner) {
     options.push({
       label: `賣出(+${stats.sellValue} 金幣)`,
+      iconUrl: towerIconUrl(tower.element, tower.upgradePath),
+      accent: '#ef7045',
       onChoose: () => {
         submitAction({ kind: 'sell_tower', params: { towerId } });
         gameRenderer.setSelectedTower(null);
@@ -1280,9 +1382,10 @@ function renderTowerMenu(): void {
     : `${ELEMENT_NAMES[tower.element]}塔`;
   const pathLabel = tower.upgradePath !== 'none' ? ` · ${escapeHtml(UPGRADE_PATH_NAMES[tower.upgradePath])}` : '';
   let headerHtml =
-    `<b class="element-${tower.element}">${escapeHtml(towerDisplayName(tower))}</b>(${elementLabel})Lv.${tower.level}` +
+    `<img class="floating-menu-header-icon" src="${towerIconUrl(tower.element, tower.upgradePath)}" alt="" />` +
+    `<span class="floating-menu-header-copy"><b class="element-${tower.element}">${escapeHtml(towerDisplayName(tower))}</b>(${elementLabel})Lv.${tower.level}` +
     `<small>攻擊 ${stats.damage} · 範圍 ${(stats.rangeFp / FP_SCALE).toFixed(1)} 格 · 攻速 ${((stats.cooldownTicks * currentTickRateMs) / 1000).toFixed(2)}s` +
-    `${pathLabel} · ${escapeHtml(displayNameFor(tower.ownerId))}</small>`;
+    `${pathLabel} · ${escapeHtml(displayNameFor(tower.ownerId))}</small></span>`;
   // 個人生命模式:這座塔(以實際射程)搆不到塔主人守備的任何路徑 → 不會開火,標紅講清楚。
   if (state.individualLivesMode && towerWouldBeIdle(state, tower.ownerId, tower.x, tower.y, stats.rangeFp)) {
     headerHtml += `<small style="color: var(--fire)">⚠️ 搆不到 ${escapeHtml(displayNameFor(tower.ownerId))} 負責的路徑,這座塔不會開火</small>`;

@@ -843,9 +843,339 @@
         0%, 100% { box-shadow: 0 0 0 rgba(224, 90, 43, 0); }
         50% { box-shadow: 0 0 10px 2px rgba(224, 90, 43, 0.7); }
       }
+
+      /* ---- 2026-08 UI polish:統一主選單、HUD 與物品卡片的視覺語言 ---- */
+      :root {
+        --bg-deep: #07090d;
+        --panel: #171b23;
+        --panel-2: #202630;
+        --panel-glass: rgba(15, 19, 26, 0.88);
+        --border: #384150;
+        --border-bright: #596679;
+        --text: #f2f4f7;
+        --muted: #a6afbd;
+        --accent: #e0b84b;
+        --accent-soft: rgba(224, 184, 75, 0.16);
+        --shadow-soft: 0 18px 44px rgba(0, 0, 0, 0.48);
+      }
+      body {
+        position: relative;
+        background:
+          radial-gradient(circle at 50% -12%, rgba(72, 91, 120, 0.42), transparent 38%),
+          radial-gradient(circle at 15% 80%, rgba(41, 77, 61, 0.2), transparent 34%),
+          radial-gradient(circle at 88% 72%, rgba(112, 60, 42, 0.17), transparent 32%),
+          linear-gradient(180deg, #10141b 0%, var(--bg-deep) 66%);
+      }
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0.2;
+        background-image:
+          linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+        background-size: 42px 42px;
+        mask-image: linear-gradient(to bottom, black, transparent 78%);
+      }
+      .game-kicker {
+        margin-top: 16px;
+        color: var(--accent);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.32em;
+        opacity: 0.82;
+      }
+      h1 {
+        margin: 6px 0 2px;
+        font-size: clamp(34px, 5vw, 48px);
+        letter-spacing: 0.18em;
+        line-height: 1.15;
+      }
+      .element-strip { margin-bottom: 8px; }
+      .game-tagline {
+        margin: 0 0 20px;
+        color: var(--muted);
+        font-size: 13px;
+        letter-spacing: 0.12em;
+      }
+      body.game-active .game-kicker,
+      body.game-active .game-tagline { display: none; }
+      #menuScreen { width: min(620px, 100%); position: relative; z-index: 1; }
+      .menu-card {
+        width: 100%;
+        min-width: 0;
+        padding: 28px clamp(20px, 5vw, 38px);
+        border-color: rgba(224, 184, 75, 0.25);
+        border-radius: 16px;
+        background:
+          linear-gradient(145deg, rgba(255,255,255,0.045), transparent 28%),
+          linear-gradient(165deg, rgba(31, 37, 47, 0.97), rgba(17, 21, 28, 0.98));
+      }
+      .menu-card h2 {
+        margin-bottom: 20px;
+        font-size: 22px;
+        letter-spacing: 0.08em;
+      }
+      h3 {
+        margin: 18px 0 8px;
+        color: #c8cfda;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+      }
+      .mode-tabs {
+        padding: 4px;
+        gap: 4px;
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 12px;
+        background: rgba(5, 8, 12, 0.48);
+      }
+      .mode-tab {
+        border-color: transparent;
+        border-radius: 8px;
+        background: transparent;
+      }
+      .mode-tab.active {
+        background: linear-gradient(180deg, rgba(224,184,75,0.18), rgba(224,184,75,0.07));
+        box-shadow: inset 0 0 0 1px rgba(224,184,75,0.15), 0 5px 18px rgba(0,0,0,0.2);
+      }
+      .choice-row { gap: 8px; }
+      .choice-row label:not(.endless-mode-row) {
+        border-color: rgba(255,255,255,0.1);
+        background: linear-gradient(180deg, rgba(43,50,63,0.9), rgba(27,32,41,0.9));
+      }
+      .choice-row label:hover { border-color: var(--border-bright); }
+      .element-choice {
+        width: 88px;
+        min-height: 92px;
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        padding: 5px 8px 8px !important;
+        overflow: hidden;
+      }
+      .element-choice-icon {
+        width: 58px;
+        height: 58px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(255,255,255,0.14), transparent 68%);
+      }
+      .element-choice-icon img {
+        width: 64px;
+        height: 64px;
+        object-fit: contain;
+        filter: saturate(0.78) brightness(0.8);
+        transition: filter 0.18s, transform 0.18s;
+      }
+      .choice-row input:checked + .element-choice .element-choice-icon img {
+        filter: saturate(1.1) brightness(1.08) drop-shadow(0 4px 8px rgba(0,0,0,0.35));
+        transform: translateY(-2px) scale(1.04);
+      }
+      .choice-row input:focus-visible + label {
+        outline: 2px solid #fff;
+        outline-offset: 3px;
+      }
+      input, select {
+        color-scheme: dark;
+      }
+      .multi-section input[type="text"],
+      .multi-section input:not([type]),
+      .map-select,
+      #hostDifficulty,
+      #connectionTroubleshoot input {
+        min-height: 38px;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(8, 11, 16, 0.64);
+        color: var(--text);
+      }
+      input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .primary-btn {
+        min-height: 48px;
+        border: 1px solid #f1d16f;
+        background: linear-gradient(180deg, #f1ce63, #bd8d23);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.5), 0 8px 24px rgba(192,139,28,0.28);
+      }
+      .btn {
+        min-height: 38px;
+        border-color: var(--border);
+        background: linear-gradient(180deg, #29313d, #1b2029);
+      }
+
+      /* 建造／升級選項改成真正的物品卡片：圖示、主標、副標與快捷鍵各有固定位置。 */
+      #floatingBuildMenu {
+        width: min(350px, calc(100vw - 24px));
+        max-height: min(620px, calc(100dvh - 24px));
+        gap: 7px;
+        padding: 10px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        border-color: rgba(224,184,75,0.35);
+        background:
+          linear-gradient(150deg, rgba(255,255,255,0.04), transparent 30%),
+          rgba(11, 15, 21, 0.96);
+        backdrop-filter: blur(14px);
+        scrollbar-width: thin;
+        scrollbar-color: var(--border-bright) transparent;
+      }
+      button.choice-option {
+        position: relative;
+        width: 100%;
+        min-width: 0;
+        min-height: 58px;
+        flex-direction: row;
+        align-items: center;
+        gap: 11px;
+        padding: 8px 34px 8px 10px;
+        border-color: rgba(255,255,255,0.1);
+        background: linear-gradient(145deg, rgba(47,55,68,0.96), rgba(26,31,40,0.96));
+        text-align: left;
+      }
+      button.choice-option:hover:not(:disabled) {
+        border-color: var(--option-accent, var(--accent));
+        background: linear-gradient(145deg, rgba(60,69,84,0.98), rgba(30,36,46,0.98));
+        box-shadow: inset 3px 0 0 var(--option-accent, var(--accent)), 0 7px 18px rgba(0,0,0,0.25);
+        transform: translateY(-1px);
+      }
+      .choice-option-icon {
+        width: 52px;
+        height: 52px;
+        flex: 0 0 52px;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 10px;
+        background: radial-gradient(circle at 50% 35%, rgba(255,255,255,0.13), rgba(0,0,0,0.22));
+        overflow: hidden;
+      }
+      .choice-option-icon img { width: 58px; height: 58px; object-fit: contain; }
+      .choice-option-copy {
+        min-width: 0;
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .choice-option-title { color: var(--text); font-size: 14px; line-height: 1.25; }
+      button.choice-option small {
+        color: var(--muted);
+        font-size: 11.5px;
+        font-weight: 500;
+        line-height: 1.35;
+      }
+      .choice-option-kbd {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        min-width: 18px;
+        padding: 2px 4px;
+        border: 1px solid rgba(255,255,255,0.13);
+        border-radius: 4px;
+        color: #8f99a8;
+        background: rgba(0,0,0,0.25);
+        font: 10px/1.1 ui-monospace, monospace;
+        text-align: center;
+      }
+      button.choice-option:disabled .choice-option-icon { filter: grayscale(0.72); opacity: 0.55; }
+      .floating-menu-header {
+        max-width: none;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        padding: 4px 5px 11px;
+      }
+      .floating-menu-header-icon {
+        width: 58px;
+        height: 58px;
+        flex: 0 0 58px;
+        object-fit: contain;
+        filter: drop-shadow(0 5px 8px rgba(0,0,0,0.4));
+      }
+      .floating-menu-header-copy { min-width: 0; line-height: 1.45; }
+      .floating-menu-header-copy > b { font-size: 15px; }
+      .floating-menu-header-copy small { margin-top: 2px; }
+      .floating-menu-header > small { width: 100%; }
+      .element-metal { color: var(--metal); }
+      .element-wood { color: var(--wood); }
+      .element-water { color: var(--water); }
+      .element-fire { color: var(--fire); }
+      .element-earth { color: var(--earth); }
+      .choice-modal-panel {
+        width: min(620px, calc(100vw - 24px));
+        border: 1px solid rgba(224,184,75,0.32);
+        border-radius: 16px;
+        background: rgba(15,19,26,0.97);
+        box-shadow: var(--shadow-soft);
+      }
+      .choice-modal-panel .choice-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      }
+      .choice-modal-panel .choice-row button.choice-option { text-align: left; }
+
+      /* 對局 HUD：提高地圖上方的可讀性，操作鈕和純數值仍維持清楚分組。 */
+      .hud-stat,
+      .hud-compact-toggle,
+      .zoom-btn,
+      .skill-btn {
+        border-color: rgba(255,255,255,0.14);
+        background: var(--panel-glass);
+        backdrop-filter: blur(10px);
+        box-shadow: 0 8px 22px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05);
+      }
+      .hud-stat { padding: 7px 14px; }
+      .hud-stat-gold { border-color: rgba(224,184,75,0.38); }
+      .lives-bar-outer {
+        height: 8px;
+        border: 1px solid rgba(255,255,255,0.09);
+        background: rgba(0,0,0,0.42);
+      }
+      .hud-compact-toggle { min-height: 30px; }
+      .skill-btn { min-width: 84px; padding: 8px 11px; }
+      .skill-btn:hover:not(:disabled), .zoom-btn:hover, .hud-compact-toggle:hover {
+        border-color: var(--accent);
+        background: rgba(31,38,49,0.95);
+      }
+      #gameCanvasWrap {
+        border-color: rgba(224,184,75,0.28);
+        border-radius: 10px;
+        box-shadow: 0 20px 55px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.8);
+      }
+      #objectTooltip {
+        border-color: rgba(224,184,75,0.3);
+        background: rgba(10,14,20,0.96);
+        backdrop-filter: blur(10px);
+      }
+
+      @media (max-width: 700px) {
+        .game-kicker { margin-top: 8px; }
+        h1 { font-size: 32px; }
+        .game-tagline { margin-bottom: 14px; font-size: 11px; }
+        #menuScreen { width: 100%; }
+        .menu-card { min-width: 0; padding: 18px 14px; }
+        .element-choice { width: 60px; min-height: 74px; padding: 3px 5px 6px !important; }
+        .element-choice-icon { width: 43px; height: 43px; }
+        .element-choice-icon img { width: 49px; height: 49px; }
+        #floatingBuildMenu { width: min(330px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); }
+        .choice-option-icon { width: 46px; height: 46px; flex-basis: 46px; }
+        .choice-option-icon img { width: 52px; height: 52px; }
+        .choice-modal-panel .choice-row { grid-template-columns: 1fr; }
+        #hud { top: calc(8px + env(safe-area-inset-top, 0px)); gap: 4px; }
+        .hud-stat { padding: 5px 9px; }
+      }
     </style>
   </head>
   <body>
+    <div class="game-kicker">ELEMENTAL TOWER DEFENSE</div>
     <h1>五行<span>守衛</span></h1>
     <div class="element-strip" aria-hidden="true">
       <span style="color: #d4af37"></span>
@@ -854,6 +1184,7 @@
       <span style="color: #3a7bd5"></span>
       <span style="color: #e05a2b"></span>
     </div>
+    <p class="game-tagline">調度五行之力，守住最後一道防線</p>
 
     <svg style="display: none" aria-hidden="true">
       <symbol id="icon-coin" viewBox="0 0 24 24">
@@ -1097,15 +1428,15 @@
         <h3>選擇你的屬性(至少 1 種,可複選)</h3>
         <div class="choice-row solo-elements">
           <input type="checkbox" id="solo-el-metal" value="metal" checked />
-          <label for="solo-el-metal" class="element-metal">金</label>
+          <label for="solo-el-metal" class="element-metal element-choice"><span class="element-choice-icon"><img src="assets/towers/metal.png" alt="" /></span><span>金</span></label>
           <input type="checkbox" id="solo-el-wood" value="wood" />
-          <label for="solo-el-wood" class="element-wood">木</label>
+          <label for="solo-el-wood" class="element-wood element-choice"><span class="element-choice-icon"><img src="assets/towers/wood.png" alt="" /></span><span>木</span></label>
           <input type="checkbox" id="solo-el-water" value="water" />
-          <label for="solo-el-water" class="element-water">水</label>
+          <label for="solo-el-water" class="element-water element-choice"><span class="element-choice-icon"><img src="assets/towers/water.png" alt="" /></span><span>水</span></label>
           <input type="checkbox" id="solo-el-fire" value="fire" />
-          <label for="solo-el-fire" class="element-fire">火</label>
+          <label for="solo-el-fire" class="element-fire element-choice"><span class="element-choice-icon"><img src="assets/towers/fire.png" alt="" /></span><span>火</span></label>
           <input type="checkbox" id="solo-el-earth" value="earth" />
-          <label for="solo-el-earth" class="element-earth">土</label>
+          <label for="solo-el-earth" class="element-earth element-choice"><span class="element-choice-icon"><img src="assets/towers/earth.png" alt="" /></span><span>土</span></label>
         </div>
         <button id="soloBtn" class="primary-btn">開始遊戲</button>
         <p class="best-record">最佳紀錄: <span id="bestRecord">尚無紀錄</span></p>
@@ -1120,15 +1451,15 @@
           <h3>選擇你的屬性(至少 1 種,可複選)</h3>
           <div class="choice-row multi-elements">
             <input type="checkbox" id="multi-el-metal" value="metal" checked />
-            <label for="multi-el-metal" class="element-metal">金</label>
+            <label for="multi-el-metal" class="element-metal element-choice"><span class="element-choice-icon"><img src="assets/towers/metal.png" alt="" /></span><span>金</span></label>
             <input type="checkbox" id="multi-el-wood" value="wood" />
-            <label for="multi-el-wood" class="element-wood">木</label>
+            <label for="multi-el-wood" class="element-wood element-choice"><span class="element-choice-icon"><img src="assets/towers/wood.png" alt="" /></span><span>木</span></label>
             <input type="checkbox" id="multi-el-water" value="water" />
-            <label for="multi-el-water" class="element-water">水</label>
+            <label for="multi-el-water" class="element-water element-choice"><span class="element-choice-icon"><img src="assets/towers/water.png" alt="" /></span><span>水</span></label>
             <input type="checkbox" id="multi-el-fire" value="fire" />
-            <label for="multi-el-fire" class="element-fire">火</label>
+            <label for="multi-el-fire" class="element-fire element-choice"><span class="element-choice-icon"><img src="assets/towers/fire.png" alt="" /></span><span>火</span></label>
             <input type="checkbox" id="multi-el-earth" value="earth" />
-            <label for="multi-el-earth" class="element-earth">土</label>
+            <label for="multi-el-earth" class="element-earth element-choice"><span class="element-choice-icon"><img src="assets/towers/earth.png" alt="" /></span><span>土</span></label>
           </div>
 
           <!-- 建立/加入房間分成子頁籤,一次只顯示一邊的表單(2026-07-16 改的,原本兩塊表單
