@@ -164,6 +164,7 @@ const matchResultStatsEl = $<HTMLDivElement>('matchResultStats');
 const matchResultMenuBtn = $<HTMLButtonElement>('matchResultMenuBtn');
 const matchResultViewBtn = $<HTMLButtonElement>('matchResultViewBtn');
 const eliminatedBannerEl = $<HTMLDivElement>('eliminatedBanner');
+const hostPausedOverlayEl = $<HTMLDivElement>('hostPausedOverlay');
 const bestRecordEl = $<HTMLSpanElement>('bestRecord');
 const dailyBestEl = $<HTMLSpanElement>('dailyBest');
 const achievementsEl = $<HTMLDivElement>('achievements');
@@ -182,6 +183,8 @@ let selectedTowerId: number | null = null;
 let lastMatchConfig: MatchConfig | null = null;
 /** 避免同時收到好幾次「跟房主的連線斷了」事件(理論上只會有一條 hostConn,但保守起見防重入)。 */
 let rehostInProgress = false;
+/** 房主分頁進入背景時由權威端廣播，全房共同停在同一個 tick。 */
+let hostPauseActive = false;
 
 /**
  * 玩家點了技能按鈕、正在等他點地圖決定施放位置的狀態(null = 沒有在施放模式)。
@@ -265,6 +268,7 @@ populateMapSelect(soloMapSelect, soloMapHintEl);
 populateMapSelect(hostMapSelect, hostMapHintEl);
 
 function submitAction(action: Action): void {
+  if (hostPauseActive) return;
   if (localEngine) localEngine.submitCommand(action);
   else if (room?.getRole() === 'host') hostEngine?.submitLocalCommand(action);
   else clientEngine?.submitLocalCommand(action);
@@ -1888,11 +1892,41 @@ function resetResultBanner(): void {
   matchResultOverlayEl.classList.remove('show');
   matchResultShown = false;
   eliminatedBannerEl.hidden = true;
+  setHostPauseUi(false);
   wasEliminated = false;
   pendingBuilds = [];
   gameRenderer.setPendingBuilds(pendingBuilds);
   soundSnapshot = null;
 }
+
+function setHostPauseUi(paused: boolean): void {
+  hostPauseActive = paused;
+  hostPausedOverlayEl.hidden = !paused;
+  if (paused) {
+    setArmedSkill(null);
+    hideFloatingBuildMenu();
+    gameRenderer.setSelectedTower(null);
+  }
+}
+
+/**
+ * 背景分頁的 setInterval 會被瀏覽器大幅節流，房主不能繼續拿它當 50ms 權威時鐘。
+ * visibilitychange 當下先停 engine 再廣播暫停；回到前景則先通知客戶端，再恢復 tick。
+ */
+function syncHostVisibility(): void {
+  if (!matchActive || room?.getRole() !== 'host' || !hostEngine) return;
+  const paused = document.hidden;
+  setHostPauseUi(paused);
+  if (paused) {
+    hostEngine.stop();
+    room.setHostPaused(true);
+  } else {
+    room.setHostPaused(false);
+    hostEngine.start();
+  }
+}
+
+document.addEventListener('visibilitychange', syncHostVisibility);
 
 function showResult(text: string, variant: 'victory' | 'defeat'): void {
   resultBannerEl.textContent = text;
@@ -2279,7 +2313,7 @@ const roomHandlers: RoomHandlers = {
     };
     if (room.getRole() === 'host') {
       hostEngine = new HostLockstepEngine(room, lastMatchConfig, payload.seed, lockstepHandlers);
-      hostEngine.start();
+      syncHostVisibility();
     } else {
       clientEngine = new ClientLockstepEngine(
         room,
@@ -2331,7 +2365,7 @@ const roomHandlers: RoomHandlers = {
           const resume = clientEngine?.exportForPromotion();
           clientEngine = null;
           hostEngine = new HostLockstepEngine(room!, lastMatchConfig!, 0, lockstepHandlers, resume);
-          hostEngine.start();
+          syncHostVisibility();
           showToast('你已接手成為新房主,繼續遊戲!');
         } else if (outcome === 'reconnected') {
           // 還是客戶端,只是換了個房主連——場上進度不會馬上動,要等新房主回應 REJOIN 送來的
@@ -2345,6 +2379,9 @@ const roomHandlers: RoomHandlers = {
         rehostInProgress = false;
         endMatchAfterUnrecoverableDisconnect();
       });
+  },
+  onHostPausedChanged: (paused) => {
+    setHostPauseUi(paused);
   },
   onRejoinRequest: (playerId) => {
     // 只有真的是房主(換房主接手後的新房主,或原本就是房主)且有跑起來的 HostLockstepEngine

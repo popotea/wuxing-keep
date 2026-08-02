@@ -5,7 +5,7 @@ import { isElement, type Element } from '../sim/elements';
 import { isMapId } from '../sim/map';
 import type { SimulationState } from '../sim/simulation';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /**
  * 應用版本識別(build 時由 vite.config.ts 注入 git commit hash)。跟 PROTOCOL_VERSION
@@ -125,6 +125,15 @@ export interface TickMsg {
   commands: TimedCommand[];
 }
 
+/**
+ * 房主分頁進入背景時主動暫停權威 tick。客戶端收到 paused=true 後也暫停房主心跳逾時，
+ * 避免瀏覽器把背景 setInterval 節流後誤判房主斷線、另選新房主造成房間分裂。
+ */
+export interface HostPausedMsg {
+  type: 'HOST_PAUSED';
+  paused: boolean;
+}
+
 export interface PingMsg {
   type: 'PING';
   sentAt: number;
@@ -180,6 +189,7 @@ export type NetMessage =
   | RosterUpdatedMsg
   | CmdMsg
   | TickMsg
+  | HostPausedMsg
   | PingMsg
   | PongMsg
   | ChecksumMsg
@@ -349,6 +359,12 @@ export function parse(raw: unknown): NetMessage | null {
     case 'TICK':
       if (typeof o.tick === 'number' && isTimedCommandArray(o.commands)) {
         return { type: 'TICK', tick: o.tick, commands: o.commands };
+      }
+      return null;
+
+    case 'HOST_PAUSED':
+      if (typeof o.paused === 'boolean') {
+        return { type: 'HOST_PAUSED', paused: o.paused };
       }
       return null;
 

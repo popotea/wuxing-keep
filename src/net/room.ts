@@ -113,6 +113,8 @@ export interface RoomHandlers {
   onCommand?: (cmd: CmdMsg) => void;
   /** 客戶端:收到房主廣播的 tick,交給 lockstep 處理 */
   onTick?: (tick: TickMsg) => void;
+  /** 客戶端:房主把分頁切到背景而主動暫停／恢復權威 tick。 */
+  onHostPausedChanged?: (paused: boolean) => void;
   /** 房主端:收到客戶端定期回報的 checksum,交給 lockstep 比對(見 HostLockstepEngine.receiveChecksum)。 */
   onChecksum?: (msg: ChecksumMsg) => void;
   /** 所有人:房主廣播「偵測到跑飛」,呼叫端應中止對局並提示(playerId 是對不上的那個玩家)。 */
@@ -148,6 +150,8 @@ export class Room {
   private hostWatchdog: ReturnType<typeof setInterval> | null = null;
   /** 避免心跳逾時判定跟原生斷線事件(可能晚到)重複觸發同一次「房主斷線」處理。 */
   private hostConnectionLostFired = false;
+  /** 客戶端專用:房主已明確宣告暫停時不跑無訊息逾時，避免背景分頁節流造成錯誤換房主。 */
+  private hostPaused = false;
 
   private constructor(
     private handlers: RoomHandlers,
@@ -286,6 +290,13 @@ export class Room {
     this.net.broadcast(tick);
   }
 
+  /** 房主專用:通知所有客戶端權威模擬因房主分頁進入背景而暫停／恢復。 */
+  setHostPaused(paused: boolean): void {
+    if (this.role !== 'host' || !this.matchStarted || this.hostPaused === paused) return;
+    this.hostPaused = paused;
+    this.net.broadcast({ type: 'HOST_PAUSED', paused });
+  }
+
   /** 客戶端專用:定期把自己的模擬 checksum 回報給房主比對(ClientLockstepEngine 呼叫)。 */
   sendChecksum(tick: number, hash: string): void {
     if (this.role !== 'client' || !this.hostConn) return; // 對局中連線可能剛好斷掉,安靜跳過即可
@@ -309,6 +320,7 @@ export class Room {
     this.hostConnectionLostFired = false;
     this.stopHostWatchdog();
     this.hostWatchdog = setInterval(() => {
+      if (this.hostPaused) return;
       if (Date.now() - this.lastHostMessageAt > HOST_HEARTBEAT_TIMEOUT_MS) {
         this.stopHostWatchdog();
         this.triggerHostConnectionLost();
@@ -450,6 +462,15 @@ export class Room {
       case 'TICK':
         this.handlers.onTick?.(msg);
         return;
+      case 'HOST_PAUSED':
+        this.hostPaused = msg.paused;
+        if (msg.paused) {
+          this.stopHostWatchdog();
+        } else {
+          this.startHostWatchdog();
+        }
+        this.handlers.onHostPausedChanged?.(msg.paused);
+        return;
       case 'DESYNC':
         this.handlers.onDesync?.(msg.playerId, msg.tick);
         return;
@@ -495,6 +516,10 @@ export class Room {
   async attemptRehost(): Promise<'promoted' | 'reconnected' | 'failed'> {
     if (this.role !== 'client') return 'failed'; // 房主自己斷線是別人的事,不會走到這裡
     const deadHostId = this.hostConn?.peer ?? '';
+    if (this.hostPaused) {
+      this.hostPaused = false;
+      this.handlers.onHostPausedChanged?.(false);
+    }
     this.roster = this.roster.filter((p) => p.playerId !== deadHostId);
     this.handlers.onRosterChanged?.(this.roster);
 

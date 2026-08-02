@@ -768,6 +768,31 @@
         pointer-events: none;
       }
 
+      /* 房主把分頁切到背景時，全房同步暫停。遮罩會擋住操作，避免暫停期間累積指令。 */
+      .host-paused-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 34;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: rgba(5, 7, 10, 0.72);
+        backdrop-filter: blur(3px);
+      }
+      .host-paused-overlay[hidden] { display: none; }
+      .host-paused-panel {
+        max-width: 520px;
+        padding: 24px 28px;
+        border-radius: 14px;
+        border: 1px solid var(--accent);
+        background: rgba(24, 28, 36, 0.96);
+        color: var(--text);
+        text-align: center;
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.48);
+      }
+      .host-paused-panel h2 { margin: 0 0 10px; color: var(--accent); }
+      .host-paused-panel p { margin: 0; color: var(--muted); line-height: 1.65; }
+
       #resultBanner { font-size: 22px; font-weight: bold; min-height: 1.4em; }
       #resultBanner.result-victory {
         color: var(--accent);
@@ -1640,6 +1665,13 @@
       <!-- 個人生命模式:出局觀戰中的常駐提示(main.ts 依 isPlayerEliminated 切換顯示)。 -->
       <div id="eliminatedBanner" hidden>
         你負責的路徑已失守,觀戰中——任何人(包括你)花 400 金幣「緊急補命」可讓路徑復活;也可以在記分板送金幣支援隊友
+      </div>
+
+      <div id="hostPausedOverlay" class="host-paused-overlay" hidden>
+        <div class="host-paused-panel panel-frame">
+          <h2>房主暫時離開遊戲分頁</h2>
+          <p>為避免瀏覽器背景節流造成不同步，對局已安全暫停。房主切回遊戲分頁後會自動繼續。</p>
+        </div>
       </div>
 
       <!-- 對局結算彈窗:勝利/失敗都跳這個,比底部一行小字明顯得多(main.ts 的 showMatchResultOverlay)。 -->
