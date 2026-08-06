@@ -6,6 +6,14 @@ import { HostLockstepEngine, ClientLockstepEngine, type LockstepHandlers } from 
 import { Room, type MatchConfig, type RoomHandlers } from './net/room';
 import type { Action, PlayerInfo, RejectReason } from './net/protocol';
 import { createGameRenderer, type HoverInfo } from './game/PhaserGame';
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((error) => {
+      console.warn('[wuxing-keep] PWA service worker registration failed', error);
+    });
+  });
+}
 import { isMultiplayer, ownerColorCss } from './game/playerColors';
 import { isMuted, setMuted, sfx, unlockAudio } from './game/sound';
 import { ALL_ELEMENTS, ELEMENT_NAMES, type Element } from './sim/elements';
