@@ -683,6 +683,8 @@
            這裡不用再重複宣告。 */
         width: 100%;
         height: 100%;
+        display: block;
+        image-rendering: auto;
       }
       /* ---- 對局結算彈窗(2026-07-24 加的):原本只有畫面底部一行 #resultBanner 小字,
          勝敗當下玩家的體感是「畫面整個卡住」——改成全螢幕置中的明顯結算,附回到選單按鈕。 ---- */
@@ -748,6 +750,13 @@
       .zoom-btn:hover { border-color: var(--accent); color: var(--accent); }
       @media (pointer: coarse) {
         .zoom-btn { width: 46px; height: 46px; font-size: 21px; }
+      }
+
+      /* Phones can play in portrait; the camera shows a zoomed section of the map. */
+      @media (orientation: portrait) and (pointer: coarse) {
+        body.game-active:not(.rotate-hint-dismissed) #rotateHint { display: none; }
+        #gameCanvasWrap { border-width: 1px; border-radius: 0; }
+        #zoomControls { right: calc(8px + env(safe-area-inset-right, 0px)); }
       }
 
       /* 個人生命模式:自己的路徑全失守(出局觀戰中)的常駐提示,貼在 HUD 下方置中。 */

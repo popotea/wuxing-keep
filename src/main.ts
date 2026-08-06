@@ -1020,6 +1020,16 @@ function layoutGameCanvas(): void {
   if (availW <= 0 || availH <= 0) return; // display:none(還在選單畫面)時量到 0,先不動
   // 比例跟地圖一致(sim/map.ts 的 GRID_WIDTH:GRID_HEIGHT = 40:24),GameScene 的
   // applyViewportZoom 取保守軸縮放,畫布同比例時兩軸剛好貼合、不會有任何一軸留白。
+  // Mobile uses the full available area and a zoomed camera viewport.
+  const isMobileViewport = window.matchMedia('(pointer: coarse)').matches || Math.min(window.innerWidth, window.innerHeight) <= 700;
+  if (isMobileViewport) {
+    gameCanvasWrapEl.style.width = `${Math.floor(availW)}px`;
+    gameCanvasWrapEl.style.height = `${Math.floor(availH)}px`;
+    gameCanvasWrapEl.style.left = '0px';
+    gameCanvasWrapEl.style.top = '0px';
+    gameRenderer.refreshSize();
+    return;
+  }
   const RATIO = 40 / 24;
   let w = availW;
   let h = w / RATIO;

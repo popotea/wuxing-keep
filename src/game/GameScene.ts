@@ -36,13 +36,14 @@ const DECOR_SCALE = SCALE * 1.6;
 /** 滾輪每格的縮放倍率。 */
 const WHEEL_ZOOM_STEP = 1.15;
 /** 使用者縮放上限;下限固定 1(fit 全圖)——允許 <1 只會露出地圖外的空白,沒有意義。 */
-const MAX_USER_ZOOM = 3;
+const MAX_USER_ZOOM = 5;
 /**
  * 開局預設的使用者縮放(2026-07-24 加的,玩家反映 fit 全圖時內容太小,尤其大螢幕)。
  * 開局視野置中在地圖中央,玩家再用滾輪/雙指/縮放按鈕依自己的需求調整;
  * 按「全圖」按鈕(resetZoom)隨時可以回到 1 看整張地圖。
  */
 const DEFAULT_USER_ZOOM = 1.4;
+const MOBILE_DEFAULT_USER_ZOOM = 3.2;
 /** 按下後移動超過這個距離(畫布 px)就當作拖曳平移,放開時不再觸發點擊(建造/選取)。觸控手指容易微顫,門檻放寬。 */
 const DRAG_THRESHOLD_PX = 6;
 const DRAG_THRESHOLD_TOUCH_PX = 10;
@@ -308,6 +309,12 @@ export class GameScene extends Phaser.Scene {
   private fitZoom = 1;
   /** 使用者用滾輪/雙指調的縮放倍率,1 = 看全圖;跨對局要在 resetCamera() 歸 1。 */
   private userZoom = 1;
+  /** Keep tiles and units large enough to operate on a phone. */
+  private defaultUserZoom(): number {
+    const isCompactViewport =
+      window.matchMedia('(pointer: coarse)').matches || this.scale.width < 900 || this.scale.height < 600;
+    return isCompactViewport ? MOBILE_DEFAULT_USER_ZOOM : DEFAULT_USER_ZOOM;
+  }
   /**
    * 按下滑鼠/手指後的追蹤狀態:位移超過門檻就進入拖曳平移,放開時 dragging 為 true 的話
    * 不觸發點擊(建造/選取)。點擊判定因此從 pointerdown 移到 pointerup——不然每次拖曳
@@ -785,7 +792,7 @@ export class GameScene extends Phaser.Scene {
   resetCamera(): void {
     // 開局用預設拉近倍率、視野置中在地圖中央(玩家反映 fit 全圖時內容太小)——不沿用上一場
     // 調過的縮放(Phaser.Game 跨對局重複使用),每場都從同一個狀態開始,行為好預期。
-    this.userZoom = DEFAULT_USER_ZOOM;
+    this.userZoom = this.defaultUserZoom();
     this.applyViewportZoom();
     const cam = this.cameras.main;
     // scroll 的語意:midPoint = scroll + 畫布尺寸的一半(見 zoomAt 的說明);超界交給 bounds clamp。
