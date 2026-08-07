@@ -49,6 +49,15 @@
 
 對局中房主斷線,殘存玩家各自獨立算出同一個接手人選,不透過網路協商(房主已經斷線,協商也沒有管道)。
 
+### 房主背景分頁同步暫停(2026-08-02 加的)
+
+房主的權威 tick 是 `setInterval(50ms)`,瀏覽器會大幅節流背景分頁計時器;如果放任它繼續跑,
+所有客戶端會看起來卡住,甚至被 3 秒 watchdog 誤判成房主斷線而另選房主。`main.ts` 現在監聽
+`visibilitychange`:房主進入背景就先停止 `HostLockstepEngine`,再由 `Room.setHostPaused(true)`
+廣播 `HOST_PAUSED`。客戶端收到後顯示常駐暫停遮罩並停止 watchdog;房主回到前景則先廣播
+`HOST_PAUSED(false)`、重新啟動 watchdog,再恢復權威 tick。實際連線真的關閉時,PeerJS 的
+`close` 事件仍會走既有自動換房主流程,不會被這個暫停旗標吃掉。
+
 ### 偵測
 
 實測 PeerJS/WebRTC 原生的 `iceConnectionState` 從 `disconnected` 轉成 `failed`(PeerJS 只有轉成 `failed` 才會觸發 `DataConnection` 的 `close` 事件)在瀏覽器裡可能要等超過 2 分鐘,對這個功能完全不能接受。改成應用層自己的心跳:`room.ts` 的 `Room` 追蹤「多久沒收到房主任何訊息」(對局中 `TICK` 訊息固定每 `tickRateMs`——目前 50ms——就會送一次,是天然的心跳),超過 `HOST_HEARTBEAT_TIMEOUT_MS`(3 秒)就判定房主斷線,不等原生事件(原生事件還是有掛著當備援,只是通常會晚到,`triggerHostConnectionLost()` 內部用 `hostConnectionLostFired` 擋掉兩邊重複觸發)。

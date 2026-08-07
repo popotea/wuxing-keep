@@ -256,6 +256,30 @@ console.log('\n=== (C) 多人 2 玩家 checksum ===');
   await guest.click('#zoomResetBtn');
   await host.waitForTimeout(200);
 
+  // 房主切到背景時必須全房停在同一個 tick,不能靠被瀏覽器節流的 50ms setInterval 繼續跑。
+  // headless 瀏覽器不一定會把非前景 page 標成 hidden,這裡明確覆寫 document.hidden 並派送
+  // visibilitychange,測的是產品自己的暫停協定與 watchdog 行為。
+  const setHostHidden = (hidden) =>
+    host.evaluate((value) => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, hidden);
+  await setHostHidden(true);
+  await guest.waitForSelector('#hostPausedOverlay:not([hidden])', { timeout: 3000 });
+  const pausedAt = (await guest.evaluate(() => window.__wuxingDebug)).tick;
+  await guest.waitForTimeout(4200); // 超過原本 3 秒 watchdog,確認不會誤判斷線換房主
+  const stillPausedAt = (await guest.evaluate(() => window.__wuxingDebug)).tick;
+  check('房主分頁進入背景後全房停在同一個 tick', stillPausedAt === pausedAt, `${pausedAt} -> ${stillPausedAt}`);
+  check(
+    '房主主動暫停超過 watchdog 門檻不會中止對局',
+    !(await guest.locator('#matchResultOverlay').evaluate((el) => el.classList.contains('show'))),
+  );
+  await setHostHidden(false);
+  await guest.waitForSelector('#hostPausedOverlay[hidden]', { timeout: 3000 });
+  await guest.waitForTimeout(800);
+  const resumedAt = (await guest.evaluate(() => window.__wuxingDebug)).tick;
+  check('房主切回遊戲分頁後全房自動恢復', resumedAt > stillPausedAt, `${stillPausedAt} -> ${resumedAt}`);
+
   // 兩邊各放一次技能,製造「有指令」的狀況(不只是空心跳 tick)
   const castOn = async (page) => {
     const btn = page.locator('.skill-btn:not([disabled])').first();
