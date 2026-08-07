@@ -858,6 +858,197 @@
         0%, 100% { box-shadow: 0 0 0 rgba(224, 90, 43, 0); }
         50% { box-shadow: 0 0 10px 2px rgba(224, 90, 43, 0.7); }
       }
+      /* ---- Mobile game UI: full-screen battlefield and thumb-friendly controls ---- */
+      @media (pointer: coarse) {
+        body.game-active {
+          padding: 0;
+          background: #05070a;
+        }
+        body.game-active #gameScreen {
+          width: 100vw;
+          height: 100vh;
+          height: 100dvh;
+          gap: 0;
+        }
+        body.game-active #gameCanvasArea {
+          width: 100vw;
+        }
+        body.game-active #gameCanvasWrap {
+          border: 0;
+          border-radius: 0;
+          box-shadow: none;
+        }
+
+        #hud {
+          top: calc(8px + env(safe-area-inset-top, 0px));
+          left: 8px;
+          right: 8px;
+          width: auto;
+          max-width: none;
+          transform: none;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          align-items: stretch;
+          gap: 5px;
+          font-size: 12px;
+        }
+        #hud .hud-stat {
+          min-width: 0;
+          min-height: 38px;
+          padding: 6px 9px;
+          border-radius: 12px;
+          gap: 5px;
+          overflow: hidden;
+          background: rgba(10, 13, 18, 0.86);
+          backdrop-filter: blur(8px);
+        }
+        #hud .hud-stat-wave {
+          grid-column: 1 / -1;
+          justify-content: center;
+        }
+        #hud .hud-stat-wave .hud-action-btn {
+          margin-left: auto;
+        }
+        .lives-bar-outer { width: 72px; }
+        .hud-action-btn {
+          min-height: 32px;
+          padding: 5px 8px;
+          border-radius: 9px;
+          font-size: 11px;
+        }
+
+        #hudToggles {
+          top: calc(112px + env(safe-area-inset-top, 0px));
+          right: 8px;
+          bottom: auto;
+          gap: 4px;
+        }
+        .hud-compact-toggle {
+          min-width: 34px;
+          min-height: 32px;
+          padding: 5px 8px;
+          border-radius: 9px;
+          font-size: 11px;
+          background: rgba(10, 13, 18, 0.78);
+          backdrop-filter: blur(8px);
+        }
+
+        #skillBar {
+          left: 8px;
+          right: 8px;
+          bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+          width: auto;
+          transform: none;
+          gap: 6px;
+          justify-content: stretch;
+        }
+        .skill-btn {
+          flex: 1 1 0;
+          min-width: 0;
+          min-height: 64px;
+          padding: 8px 5px;
+          border-radius: 13px;
+          background: rgba(10, 13, 18, 0.9);
+          box-shadow: 0 5px 16px rgba(0, 0, 0, 0.35);
+          backdrop-filter: blur(8px);
+          font-size: 12px;
+        }
+        .skill-btn-icon .icon { width: 25px; height: 25px; }
+        #skillHint {
+          bottom: calc(82px + env(safe-area-inset-bottom, 0px));
+          max-width: calc(100vw - 24px);
+          padding: 7px 10px;
+          border-radius: 10px;
+          font-size: 12px;
+        }
+
+        #zoomControls {
+          top: auto;
+          right: 8px;
+          bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+          transform: none;
+          gap: 5px;
+        }
+        .zoom-btn {
+          width: 40px;
+          height: 40px;
+          border-radius: 11px;
+          background: rgba(10, 13, 18, 0.82);
+          backdrop-filter: blur(8px);
+        }
+
+        #floatingBuildMenu {
+          left: 8px !important;
+          right: 8px !important;
+          top: auto !important;
+          bottom: 0 !important;
+          width: auto;
+          max-height: min(48dvh, 390px);
+          overflow-y: auto;
+          padding: 12px;
+          gap: 8px;
+          border: 1px solid rgba(212, 175, 55, 0.45);
+          border-bottom: 0;
+          border-radius: 18px 18px 0 0;
+          background: rgba(15, 18, 24, 0.97);
+          box-shadow: 0 -12px 30px rgba(0, 0, 0, 0.5);
+        }
+        #floatingBuildMenu .floating-menu-header {
+          max-width: none;
+          padding: 4px 4px 10px;
+          font-size: 13px;
+        }
+        #floatingBuildMenu .choice-option {
+          min-width: 0;
+          min-height: 52px;
+          padding: 9px 11px;
+          border-radius: 11px;
+          font-size: 14px;
+        }
+        #floatingBuildMenu:not(:has(.floating-menu-header)) {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        #floatingBuildMenu:has(.floating-menu-header) .choice-option {
+          width: 100%;
+        }
+
+        .choice-modal-overlay {
+          align-items: flex-end;
+          padding: 0;
+        }
+        .choice-modal-panel {
+          width: 100%;
+          min-width: 0;
+          max-width: none;
+          padding: 20px 14px calc(16px + env(safe-area-inset-bottom, 0px));
+          border-radius: 18px 18px 0 0;
+        }
+        .choice-modal-panel .choice-row {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+        .choice-modal-panel .choice-row button.choice-option {
+          min-width: 0;
+          min-height: 58px;
+          padding: 10px 8px;
+        }
+        .scoreboard-overlay {
+          top: calc(8px + env(safe-area-inset-top, 0px));
+          width: calc(100vw - 16px);
+        }
+        .scoreboard-panel {
+          width: 100%;
+          min-width: 0;
+          padding: 12px 8px;
+          border-radius: 14px;
+          overflow-x: auto;
+        }
+        .scoreboard-panel th, .scoreboard-panel td { padding: 6px 5px; }
+        #objectTooltip { display: none; }
+      }
+
     </style>
   </head>
   <body>
